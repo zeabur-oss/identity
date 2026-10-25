@@ -39,8 +39,8 @@ hyper-util = { version = "0.1.21", default-features = false, features = ["client
 jsonwebtoken = { version = "11", default-features = false, features = ["aws_lc_rs"] }
 k8s-openapi = { version = "0.28", default-features = false, features = ["v1_34"] }
 kube = { version = "4.2", default-features = false, features = ["client", "runtime", "derive", "rustls-tls", "aws-lc-rs"] }
-passkey = "0.5"
-passkey-types = { version = "0.5", features = ["serialize_bytes_as_base64_string"] }
+passkey = "0.6"
+passkey-types = { version = "0.6", features = ["serialize_bytes_as_base64_string"] }
 proptest = "1"
 public-suffix = "0.1"
 rcgen = { version = "0.14.10", default-features = false, features = ["aws_lc_rs", "pem", "crypto"] }
