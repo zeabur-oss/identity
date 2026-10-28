@@ -233,10 +233,12 @@ publish() {
     cosign attest --yes --type cyclonedx --predicate "$dir/zeabur-identity-$version-linux-$arch.cdx.json" "$ref"
     printf '%s  %s\n' "$arch" "$ref" >>"$published/image-digests.txt"
   done
-  # The index lists only the platform images above, by digest (never rebuilt).
-  docker manifest create "$image:$version" "${refs[@]}"
-  docker manifest push "$image:$version"
-  digest="sha256:$(skopeo inspect --raw "${auth[@]}" "docker://$image:$version" | sha256sum | cut -d ' ' -f 1)"
+  # The index lists only the platform images above, by digest (never rebuilt). Its tag is the
+  # version without the v (0.1.1), as every zeabur-oss image and chart is tagged.
+  tag="${version#v}"
+  docker manifest create "$image:$tag" "${refs[@]}"
+  docker manifest push "$image:$tag"
+  digest="sha256:$(skopeo inspect --raw "${auth[@]}" "docker://$image:$tag" | sha256sum | cut -d ' ' -f 1)"
   ref="$image@$digest"
   digests+=("$digest")
   printf 'index  %s\n' "$ref" >>"$published/image-digests.txt"
