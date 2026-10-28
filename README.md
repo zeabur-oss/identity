@@ -12,7 +12,7 @@ every laptop, and cannot be revoked. Zeabur Identity replaces it
 with a passkey: `kubectl` opens your browser, you touch your fingerprint reader, and you get a
 token that lasts minutes, not years.
 
-> **Status: v0.1.0 alpha.** Expect breaking changes; no upgrade or rollback guarantees.
+> **Status: v0.1.1 alpha.** Expect breaking changes; no upgrade or rollback guarantees.
 > See the [release notes](CHANGELOG.md#v001) and [support policy](SECURITY.md).
 
 https://github.com/user-attachments/assets/4c6e29f2-341c-4622-8cc5-4337e13e53b5

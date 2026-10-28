@@ -1,8 +1,8 @@
 # Changelog
 
-## v0.1.0
+## [0.1.1] - 2026-10-28
 
-First alpha for evaluating passkey-based access to self-managed Kubernetes clusters.
+First published alpha, for evaluating passkey-based access to self-managed Kubernetes clusters.
 Use a disposable cluster and keep an independent cluster-admin kubeconfig.
 
 ### Added
@@ -52,6 +52,9 @@ Use a disposable cluster and keep an independent cluster-admin kubeconfig.
 Follow [Get started](https://github.com/zeabur-oss/identity/blob/main/docs/get-started/quickstart.mdx) for
 installation and signature verification. Pin the image by the digest in the release's
 `image-digests.txt` asset.
+Signatures and build provenance name the shared release workflow of
+[zeabur-oss/.github](https://github.com/zeabur-oss/.github), which this repository's release
+workflow calls, not a workflow of zeabur-oss/identity.
 
 | Surface | Scope |
 |---|---|
@@ -81,3 +84,8 @@ in [issue #43](https://github.com/zeabur-oss/identity/issues/43).
   [operations](https://github.com/zeabur-oss/identity/blob/main/docs/operations/emergency-access.mdx).
 - Only the latest published alpha is eligible for security fixes; older alphas receive no
   backports. See the [security policy](https://github.com/zeabur-oss/identity/blob/main/SECURITY.md).
+
+## [0.1.0] - 2026-10-28
+
+Withdrawn: the tag `v0.1.0` exists, but its release workflow failed and nothing was published
+(no GitHub release, image or signatures). Its changes are released as 0.1.1.

@@ -5,7 +5,7 @@ vulnerability reporting) on this repository. Do not open public issues for secur
 
 ## Alpha support
 
-Zeabur Identity v0.1.0 is an alpha intended for evaluation on disposable, self-managed clusters.
+Zeabur Identity v0.1.1 is an alpha intended for evaluation on disposable, self-managed clusters.
 Only the latest published alpha is eligible for security fixes. Fixes are delivered in a new
 release; older alpha versions are not backported. There is no guaranteed response or patch
 timeline. Upgrade to the latest alpha when a fix is published.
