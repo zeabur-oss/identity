@@ -40,20 +40,20 @@ below.
 
 ## Before you open a pull request
 
-Run what CI runs, inside `nix develop`:
+Run what CI runs. CI calls `scripts/ci.sh` once per job through the shared workflow of
+[zeabur-oss/.github](https://github.com/zeabur-oss/.github); the script enters `nix develop`
+itself, so a job runs the same on your machine:
 
 ```sh
-cargo fmt --all --check && nixfmt --check flake.nix && shellcheck scripts/*.sh && actionlint
-cargo lint                                   # clippy, all targets and features, -D warnings
-RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items
-cargo nextest run --workspace
-cargo deny --locked check
-./scripts/unsafe-report.sh
-(cd ui && bun ci && bun run fmt:check && bun run lint && bun run typecheck)
-./scripts/build-ui.sh && git diff --exit-code -- crates/zeabur-identity-ui/assets crates/zeabur-identity-ui/templates/ds.html
-./scripts/ui-budget.sh && python3 .claude/skills/zeabur-identity-ui/contrast.py
-(cd ui && bun run fallow dead-code --baseline fallow-baseline.json && bun run fallow audit --base main)
+./scripts/ci.sh --list          # format clippy docs test cargo-deny unsafe-report ui kubernetes
+./scripts/ci.sh format          # cargo fmt, nixfmt, shellcheck, actionlint, check-brand.sh
+./scripts/ci.sh clippy          # cargo lint: all targets and features, -D warnings
+./scripts/ci.sh test            # and docs, cargo-deny, unsafe-report, ui
+./scripts/ci.sh kubernetes      # k3s with Docker: see "Disposable k3d cluster" below
 ```
+
+The `ui` job's `fallow audit --base HEAD^` compares with the previous commit; on a branch, run
+`(cd ui && bun run fallow audit --base main)` inside `nix develop` instead.
 
 Design rationale lives next to the code, in rustdoc: state the decision and its reason, and
 cite the specification section, paper or prior art it rests on (the crates show the style).
@@ -82,7 +82,7 @@ The repository sets up no compiler cache. To share compiled crates between check
 worktrees on your machine, install [kache](https://ninja.kunobi.com/docs/kache/getting-started/c-cpp)
 and set `RUSTC_WRAPPER=kache` in your shell profile; `nix develop` keeps it. The C code that build
 scripts compile (aws-lc-sys) goes through kache too, with no further setup.
-`scripts/release-build.sh` unsets `RUSTC_WRAPPER`, so release binaries are always compiled.
+`scripts/release.sh build` unsets `RUSTC_WRAPPER`, so release binaries are always compiled.
 
 ## Lints and formatting
 
@@ -141,8 +141,8 @@ is a review signal, not an audit.
 
 - **Unit and integration tests** run anywhere: `cargo nextest run --workspace`.
 - **Cluster tests** and **end-to-end tests** are `#[ignore]`d and require a disposable cluster
-  where you are cluster admin. The setup below is shared with the `kubernetes` job in
-  `.github/workflows/ci.yml`.
+  where you are cluster admin. The setup below is what `./scripts/ci.sh kubernetes` runs, in CI and
+  locally.
 
 ### Disposable k3d cluster
 

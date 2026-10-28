@@ -1,10 +1,12 @@
 name: CI
 
+# Every job of `scripts/ci.sh --list`, each as `scripts/ci.sh <job>` through the shared workflow of
+# zeabur-oss/.github; the script enters the Nix dev shell itself, so a job runs the same locally.
 on:
   push:
     branches: [main]
   pull_request:
-  workflow_call:
+  workflow_call: # the release runs all of CI on the commit it releases
 
 permissions:
   contents: read
@@ -13,115 +15,12 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  CARGO_TERM_COLOR: always
-  RUSTDOCFLAGS: -D warnings
-
 jobs:
-  check:
-    name: ${{ matrix.name }}
-    runs-on: ubuntu-26.04-arm
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: format
-            run: cargo fmt --all --check && nixfmt --check flake.nix && shellcheck scripts/*.sh && actionlint && ./scripts/check-brand.sh
-          - name: clippy
-            run: cargo lint
-          - name: docs
-            run: cargo doc --workspace --no-deps --document-private-items --locked
-          - name: test
-            run: cargo nextest run --workspace --all-features --locked --no-tests=warn
-          - name: cargo-deny
-            run: cargo deny --locked check
-          - name: unsafe-report
-            run: ./scripts/unsafe-report.sh
-          # Sign-in pages: format, lint and typecheck; the committed assets and design-system classes
-          # must match the sources; budgets and contrast. fallow: unused code and boundaries, then new
-          # findings against HEAD^ (on a pull request, the base branch); health does not fail the job.
-          - name: ui
-            run: >-
-              (cd ui && bun ci && bun run fmt:check && bun run lint && bun run typecheck)
-              && ./scripts/build-ui.sh
-              && git diff --exit-code -- crates/zeabur-identity-ui/assets crates/zeabur-identity-ui/templates/ds.html
-              && ./scripts/ui-budget.sh && python3 .claude/skills/zeabur-identity-ui/contrast.py
-              && (cd ui && bun run fallow dead-code --baseline fallow-baseline.json && bun run fallow audit --base HEAD^
-              && bun run fallow health --report-only)
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          # `fallow audit` in the ui job compares HEAD with HEAD^.
-          fetch-depth: 2
-      - uses: DeterminateSystems/determinate-nix-action@f296148a827001a9a82d3685b53210c06e5d3b67 # v3.24.0
-      # rust-cache keys on `rustc -vV`: put the pinned toolchain from the dev shell on PATH first,
-      # otherwise it fails ("Command failed: rustc -vV") or keys on the image's rustc.
-      - run: dirname "$(nix develop --command bash -c 'command -v rustc')" >> "$GITHUB_PATH"
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          key: ${{ matrix.name }}
-      - run: nix develop --command bash -c '${{ matrix.run }}'
-      # act's artifact server (0.2.89) rejects upload-artifact v7 requests ("unknown field mime_type").
-      - if: matrix.name == 'unsafe-report' && always() && !env.ACT
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: unsafe-report
-          path: target/unsafe-report.md
-
-  kubernetes:
-    name: kubernetes (k3s ${{ matrix.k3s }})
-    runs-on: ubuntu-26.04-arm
-    strategy:
-      fail-fast: false
-      matrix:
-        k3s: [v1.36.5-k3s1]
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: DeterminateSystems/determinate-nix-action@f296148a827001a9a82d3685b53210c06e5d3b67 # v3.24.0
-      # rust-cache keys on `rustc -vV`: put the pinned toolchain from the dev shell on PATH first,
-      # otherwise it fails ("Command failed: rustc -vV") or keys on the image's rustc.
-      - run: dirname "$(nix develop --command bash -c 'command -v rustc')" >> "$GITHUB_PATH"
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          key: kubernetes
-      # kube-apiserver reads its AuthenticationConfiguration from a host directory, so the
-      # end-to-end test can install Zeabur Identity's (and remove it afterwards).
-      - name: Start k3s with cert-manager
-        run: |
-          K3S_IMAGE="rancher/k3s:${{ matrix.k3s }}" nix develop --command ./scripts/k3d-up.sh "$RUNNER_TEMP"
-          echo "KUBECONFIG=$RUNNER_TEMP/kubeconfig" >> "$GITHUB_ENV"
-      - name: Integration tests
-        run: nix develop --command cargo nextest run --locked --run-ignored only -E 'binary(kubernetes)'
-      - name: Build the image
-        run: |
-          nix develop --command ./scripts/build-image.sh zeabur-identity:e2e
-          nix develop --command k3d image import zeabur-identity:e2e --cluster zeabur-identity
-      - name: End-to-end test (passkey sign-in, kubectl auth whoami)
-        env:
-          ZEABUR_IDENTITY_E2E_IMAGE: zeabur-identity:e2e
-          ZEABUR_IDENTITY_E2E_AUTHN_DIR: ${{ runner.temp }}/authn
-          ZEABUR_IDENTITY_E2E_MEASUREMENTS: ${{ runner.temp }}/measurements.json
-        run: nix develop --command cargo nextest run --locked --run-ignored only -E 'binary(e2e)'
-      - name: Report image size and memory
-        if: always()
-        run: |
-          {
-            echo "### Image size and memory (k3s ${{ matrix.k3s }})"
-            echo "| Measure | Bytes |"
-            echo "|---|---|"
-            echo "| Image \`zeabur-identity:e2e\` | $(docker image inspect --format '{{.Size}}' zeabur-identity:e2e 2>/dev/null || echo n/a) |"
-            echo "| Pod working set after a sign-in | $(jq -r .pod_working_set_bytes "$RUNNER_TEMP/measurements.json" 2>/dev/null || echo n/a) |"
-          } >> "$GITHUB_STEP_SUMMARY"
-
+  ci:
+    uses: zeabur-oss/.github/.github/workflows/ci.yml@9d500376d4e7202c9343656fb6b85dc2eba26dd3 # main
+    with:
+      # `fallow audit` in the ui job compares HEAD with HEAD^.
+      fetch-depth: 2
+      rust-cache: true
   dco:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-slim
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - run: ./scripts/check-dco.sh "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}"
+    uses: zeabur-oss/.github/.github/workflows/dco.yml@9d500376d4e7202c9343656fb6b85dc2eba26dd3 # main

@@ -7,7 +7,7 @@
 //! Needs a k3s cluster with cert-manager whose kube-apiserver reads its
 //! `AuthenticationConfiguration` from a directory on this machine, and the image loaded into the
 //! cluster. CI sets this up (see the
-//! `kubernetes` job in `.github/workflows/ci.yml`):
+//! `kubernetes` job in `scripts/ci.sh`):
 //!
 //! - `KUBECONFIG`: the cluster admin;
 //! - `ZEABUR_IDENTITY_E2E_IMAGE`: the image name inside the cluster;

@@ -27,10 +27,10 @@ The scenario needs:
 - `KUBECONFIG` pointing at the disposable k3s cluster as cluster admin;
 - kube-apiserver reading its `AuthenticationConfiguration` from the mounted host directory;
 - `ZEABUR_IDENTITY_E2E_IMAGE` naming the image already imported into that cluster;
-- `ZEABUR_IDENTITY_E2E_AUTHN_DIR` naming the same host directory (CI uses `$RUNNER_TEMP/authn`);
+- `ZEABUR_IDENTITY_E2E_AUTHN_DIR` naming the same host directory (`scripts/ci.sh kubernetes` uses `authn` in its temporary directory);
 - optionally, `ZEABUR_IDENTITY_E2E_MEASUREMENTS` naming a file to receive the measured working set.
 
-The `kubernetes` job in `.github/workflows/ci.yml` runs this setup on every change.
+`scripts/ci.sh kubernetes` runs this setup, in CI on every change.
 kube-apiserver re-reads the file about once a minute and then fetches discovery, so the test
 waits up to three minutes for it.
 
