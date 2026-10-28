@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # The release stages that zeabur-oss/.github's shared release workflow calls, one per job
 # (.github/workflows/release.yml). Each enters the Nix dev shell itself: the flake of the current
-# directory (the checkout being released), else this script's repository.
+# directory (the checkout being released), else this script's repository. zeabur-oss-release
+# (zeabur-oss/.github, release/) pushes, signs and verifies; this script keeps what is Zeabur
+# Identity's own.
 #
 #   scripts/release.sh check   <version>                            versions and CHANGELOG section
 #   scripts/release.sh build   <version> <os> <arch> <dist>         build and smoke one platform
@@ -17,7 +19,7 @@
 # Signatures name the shared workflow, not this repository's. verify reads the expected signer from
 # RELEASE_CERT_IDENTITY_REGEXP, RELEASE_SIGNER_WORKFLOW, RELEASE_SOURCE_REPOSITORY and
 # RELEASE_SOURCE_REF; unset, they default to zeabur-oss/.github's release workflow, run for
-# zeabur-oss/identity at refs/tags/<version>.
+# zeabur-oss/identity at refs/tags/<version> (zeabur-oss-release and the cosign calls below alike).
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -53,14 +55,12 @@ fi
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
-# The lines of the CHANGELOG.md section `## [X.Y.Z]` (optionally ` - <date>`), without its heading.
-changelog_section() {
-  awk -v heading="## [${version#v}]" '
-    $0 == heading || index($0, heading " ") == 1 { found = 1; next }
-    found && /^## / { exit }
-    found { print; if (NF) text = 1 }
-    END { if (!text) exit 1 }
-  ' "$root/CHANGELOG.md"
+# The one reference digests.txt records for a kind, such as `index` or `linux/amd64`.
+recorded() { # <digests.txt> <kind>
+  local ref
+  ref="$(awk -v kind="$2" '{ ref = $NF; $NF = ""; sub(/ +$/, "") } $0 == kind { print ref }' "$1")"
+  [[ "$ref" =~ ^[^[:space:]@]+@sha256:[0-9a-f]{64}$ ]] || { echo "error: $1 has no single $2" >&2; return 1; }
+  echo "$ref"
 }
 
 native_arch() {
@@ -98,10 +98,7 @@ check() {
     echo "error: ui/package.json is not at $number" >&2
     exit 1
   fi
-  if ! changelog_section >/dev/null; then
-    echo "error: CHANGELOG.md has no section '## [$number]'" >&2
-    exit 1
-  fi
+  zeabur-oss-release notes "$root/CHANGELOG.md" "$version" >/dev/null
   echo "$version: crates, Cargo.lock, ui/package.json and CHANGELOG.md agree"
 }
 
@@ -191,70 +188,49 @@ build() {
 }
 
 # Pushes each platform's smoked image by digest, then the multi-platform index as the tag
-# <version>. Signs each and attests its CycloneDX SBOM; the shared workflow adds build provenance
-# for every subject in <published>/subjects.json. Never compiles.
+# <version> without its v, and signs each (zeabur-oss-release push-image). Then attests the
+# CycloneDX SBOMs; the shared workflow adds build provenance for every subject in
+# <published>/subjects.json. Never compiles.
 publish() {
   local artifacts published
   artifacts="$(cd "$1" && pwd)"
   mkdir -p "$2"
   published="$(cd "$2" && pwd)"
-  : "${GITHUB_REPOSITORY:?}" "${GITHUB_RUN_ID:?}" "${GITHUB_RUN_ATTEMPT:?}" "${GITHUB_ACTOR:?}" "${GH_TOKEN:?}"
+  : "${GITHUB_REPOSITORY:?}" "${GITHUB_ACTOR:?}" "${GH_TOKEN:?}"
   local image="ghcr.io/${GITHUB_REPOSITORY,,}"
-  changelog_section >/dev/null || { echo "error: CHANGELOG.md has no section for $version" >&2; exit 1; }
   # Refuse overwriting a release (including a previous failed draft). Recovery is manual.
   if gh release view "$version" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
     echo "error: release $version already exists; inspect it before retrying" >&2
     exit 1
   fi
-  local arch dir
+  local arch dir platforms=()
   for arch in "${archs[@]}"; do
     dir="$artifacts/candidate-linux-$arch"
     [[ -f "$dir/image.tar" && -f "$dir/zeabur-identity-$version-linux-$arch.cdx.json" ]] ||
       { echo "error: $dir has no image.tar or image SBOM" >&2; exit 1; }
+    platforms+=("linux/$arch=$dir/image.tar")
   done
 
   export DOCKER_CONFIG="$work/docker"
   mkdir -p "$DOCKER_CONFIG"
-  local auth=(--authfile "$DOCKER_CONFIG/config.json")
   printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
-  local refs=() digests=() candidate digest ref
-  : >"$published/image-digests.txt"
+  rm -f "$published/digests.txt" "$published/subjects.json"
+  zeabur-oss-release push-image --repository "$image" --tag "${version#v}" --attest-platforms \
+    --digests "$published/digests.txt" --subjects "$published/subjects.json" "${platforms[@]}"
+
+  # Each platform image carries its own SBOM; the index carries both.
+  local index sbom
+  index="$(recorded "$published/digests.txt" index)"
   for arch in "${archs[@]}"; do
-    dir="$artifacts/candidate-linux-$arch"
-    candidate="$image:candidate-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$arch"
-    # The input is our own smoked build; signatures are added below. Do not depend on a host-wide
-    # containers/policy.json.
-    skopeo --insecure-policy copy "${auth[@]}" "docker-archive:$dir/image.tar" "docker://$candidate"
-    digest="$(skopeo inspect "${auth[@]}" --format '{{.Digest}}' "docker://$candidate")"
-    ref="$image@$digest"
-    refs+=("$ref")
-    digests+=("$digest")
-    cosign sign --yes "$ref"
-    cosign attest --yes --type cyclonedx --predicate "$dir/zeabur-identity-$version-linux-$arch.cdx.json" "$ref"
-    printf '%s  %s\n' "$arch" "$ref" >>"$published/image-digests.txt"
+    sbom="$artifacts/candidate-linux-$arch/zeabur-identity-$version-linux-$arch.cdx.json"
+    cosign attest --yes --type cyclonedx --predicate "$sbom" "$(recorded "$published/digests.txt" "linux/$arch")"
+    cosign attest --yes --type cyclonedx --predicate "$sbom" "$index"
   done
-  # The index lists only the platform images above, by digest (never rebuilt). Its tag is the
-  # version without the v (0.1.1), as every zeabur-oss image and chart is tagged.
-  tag="${version#v}"
-  docker manifest create "$image:$tag" "${refs[@]}"
-  docker manifest push "$image:$tag"
-  digest="sha256:$(skopeo inspect --raw "${auth[@]}" "docker://$image:$tag" | sha256sum | cut -d ' ' -f 1)"
-  ref="$image@$digest"
-  digests+=("$digest")
-  printf 'index  %s\n' "$ref" >>"$published/image-digests.txt"
-  cosign sign --yes "$ref"
-  # Both platform SBOMs on the index too, as well as on each platform image.
-  for arch in "${archs[@]}"; do
-    cosign attest --yes --type cyclonedx \
-      --predicate "$artifacts/candidate-linux-$arch/zeabur-identity-$version-linux-$arch.cdx.json" "$ref"
-  done
-  printf '%s\n' "${digests[@]}" |
-    jq -R --arg name "$image" '{name: $name, digest: .}' | jq -s . >"$published/subjects.json"
-  cat "$published/image-digests.txt"
+  cat "$published/subjects.json" "$published/digests.txt"
 }
 
-# The draft release's files: both CLI archives and every SBOM, the image digests, a provenance
-# summary, SHA256SUMS over them and its Sigstore bundle; and the notes, from CHANGELOG.md.
+# The draft release's files: both CLI archives and every SBOM, digests.txt, a provenance summary,
+# SHA256SUMS over them and its Sigstore bundle; and the notes, from CHANGELOG.md.
 assets() {
   local artifacts release
   artifacts="$(cd "$1" && pwd)"
@@ -268,75 +244,46 @@ assets() {
       "$dir/zeabur-identityctl-$version-linux-$arch.cdx.json" \
       "$dir/zeabur-identity-$version-linux-$arch.cdx.json" "$out/"
   done
-  grep -q '^index ' "$artifacts/published/image-digests.txt" ||
-    { echo "error: $artifacts/published/image-digests.txt has no index" >&2; exit 1; }
-  cp "$artifacts/published/image-digests.txt" "$out/"
+  cp "$artifacts/published/digests.txt" "$out/"
+  recorded "$out/digests.txt" index >/dev/null
   local server="${GITHUB_SERVER_URL:-https://github.com}"
   jq -n --arg commit "$GITHUB_SHA" --arg repository "$server/$GITHUB_REPOSITORY" --arg version "$version" \
     --arg run "$server/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT" \
     '{source: $repository, commit: $commit, version: $version, workflowRun: $run,
       build: "Pinned flake.lock; cargo auditable build --release --locked; native Linux musl"}' \
     >"$out/provenance.json"
-  (
-    cd "$out"
-    sha256sum zeabur-identityctl-*.tar.gz zeabur-identity*.cdx.json image-digests.txt provenance.json >SHA256SUMS
-    cosign sign-blob --yes --bundle SHA256SUMS.sigstore.json SHA256SUMS
-  )
-  {
-    changelog_section
-    printf '\nSource commit: %s\n\n' "$GITHUB_SHA"
-    printf 'Linux amd64 and arm64 static CLI archives and container image.\n\n'
-    printf '## Image digests\n\n```text\n'
-    cat "$out/image-digests.txt"
-    printf '```\n\nVerify signatures, checksums and SBOMs with [the release instructions](%s/%s/blob/%s/docs/reference/releases.mdx).\n' \
-      "$server" "$GITHUB_REPOSITORY" "$GITHUB_SHA"
-  } >"$release/notes.md"
+  zeabur-oss-release checksums "$out"
+  zeabur-oss-release notes "$root/CHANGELOG.md" "$version" --docs https://oss.zeabur.com/docs/identity/ \
+    >"$release/notes.md"
 }
 
-# What a user does with the draft's files: the signed SHA256SUMS covers them and they match it,
-# their build provenance names the shared release workflow, the image is the signed index, its
-# signature and SBOM attestation verify; then the archive and image run on a disposable k3s.
+# What a user does with the draft's files: the signed SHA256SUMS covers exactly them, each has build
+# provenance, and the image is the signed index of the recorded platform images
+# (zeabur-oss-release). Then its SBOM attestation, and the archive and image on a disposable k3s.
 verify() {
   local os="$1" arch="$2" directory
   platform "$os" "$arch"
   directory="$(cd "$3" && pwd)"
   local identity_regexp="${RELEASE_CERT_IDENTITY_REGEXP:-^https://github\.com/zeabur-oss/\.github/\.github/workflows/release\.yml@}"
-  local signer_workflow="${RELEASE_SIGNER_WORKFLOW:-zeabur-oss/.github/.github/workflows/release.yml}"
   local repository="${RELEASE_SOURCE_REPOSITORY:-zeabur-oss/identity}"
   local source_ref="${RELEASE_SOURCE_REF:-refs/tags/$version}"
   local certificate=(--certificate-identity-regexp "$identity_regexp" --certificate-oidc-issuer "$oidc_issuer"
     --certificate-github-workflow-repository "$repository" --certificate-github-workflow-ref "$source_ref")
-  local archive="zeabur-identityctl-$version-linux-$arch.tar.gz"
+  local release=(--repository zeabur-oss/identity --version "$version")
+  local archive="zeabur-identityctl-$version-linux-$arch.tar.gz" assets=(digests.txt provenance.json) a
+  for a in "${archs[@]}"; do
+    assets+=("zeabur-identityctl-$version-linux-$a.tar.gz" "zeabur-identityctl-$version-linux-$a.cdx.json"
+      "zeabur-identity-$version-linux-$a.cdx.json")
+  done
   # Do not inherit the publisher's Docker login: this must work for a public consumer.
   export DOCKER_CONFIG="$work/docker"
   mkdir -p "$DOCKER_CONFIG"
 
-  cosign verify-blob "${certificate[@]}" --bundle "$directory/SHA256SUMS.sigstore.json" "$directory/SHA256SUMS"
-  (
-    cd "$directory"
-    # The signed manifest must cover every file used below, not just an unrelated one.
-    local asset
-    for asset in "$archive" "zeabur-identityctl-$version-linux-$arch.cdx.json" \
-      "zeabur-identity-$version-linux-$arch.cdx.json" image-digests.txt provenance.json; do
-      awk -v asset="$asset" '$1 ~ /^[0-9a-f]{64}$/ && substr($0, 67) == asset { found = 1 }
-        END { exit !found }' SHA256SUMS ||
-        { echo "error: signed SHA256SUMS does not cover $asset" >&2; exit 1; }
-    done
-    sha256sum --check --strict SHA256SUMS
-  )
-  # Build provenance (GitHub artifact attestations), for the archive here and the image below.
-  local attestation=(--repo "$repository" --signer-workflow "$signer_workflow" --source-ref "$source_ref")
-  gh attestation verify "$directory/$archive" "${attestation[@]}" >/dev/null
+  zeabur-oss-release verify-assets "${release[@]}" "$directory" "${assets[@]}"
+  zeabur-oss-release verify-image "${release[@]}" --digests "$directory/digests.txt" "${archs[@]/#/linux/}"
 
-  # The image is the index recorded in the signed image-digests.txt.
   local image
-  image="$(awk '$1 == "index" { print $2; n++ } END { if (n != 1) exit 1 }' "$directory/image-digests.txt")" ||
-    { echo "error: image-digests.txt must name exactly one index" >&2; exit 1; }
-  if [[ ! "$image" =~ ^[^[:space:]@]+@sha256:[0-9a-f]{64}$ ]]; then
-    echo "error: the index $image is not <repository>@sha256:<digest>" >&2
-    exit 1
-  fi
-  cosign verify "${certificate[@]}" "$image" >"$work/image-signature.json"
+  image="$(recorded "$directory/digests.txt" index)"
   # --type checks the in-toto predicate type, and claim checking binds its subject to the image.
   cosign verify-attestation "${certificate[@]}" --type cyclonedx "$image" >"$work/attestations.json"
   # An actual CycloneDX document inside the verified envelope, this platform's, not only its label.
@@ -350,7 +297,6 @@ verify() {
       ($statement.predicate.components | type == "array")
     )
   ' "$work/attestations.json" >/dev/null
-  gh attestation verify "oci://$image" "${attestation[@]}" >/dev/null
 
   docker pull --platform "linux/$arch" "$image"
   "$root/scripts/release-smoke.sh" "$directory/$archive" "$image"

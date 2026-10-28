@@ -1,7 +1,7 @@
 ---
 title: 發行檔與驗證
 description: 選擇適合平台的 Zeabur Identity 發行檔，下載並驗證簽章與 checksum 後再執行。
-source: "a269e0cd4af4"
+source: "7eea754d04e2"
 ---
 
 到 [GitHub Releases](https://github.com/zeabur-oss/identity/releases) 下載 Zeabur Identity，先驗證簽章與 checksum 再執行。Zeabur Identity 在 alpha 階段的所有版本都會標記為預先發行版。
@@ -16,6 +16,18 @@ source: "a269e0cd4af4"
 如果使用 macOS、Windows 或其他架構，需要從原始程式碼建置 CLI。
 
 每個發行版本都包含 checksum、簽章與 SBOM。SBOM 列出發行檔包含的相依套件。供下載的 SBOM 檔名以 `.cdx.json` 結尾。
+
+## 映像檔 digest
+
+發行檔 `digests.txt` 用 digest 列出容器映像檔：每個平台的映像檔一行，多平台 index 一行。部署時請固定使用 `index` 那行的 digest。
+
+```text
+linux/amd64  ghcr.io/zeabur-oss/identity@sha256:...
+linux/arm64  ghcr.io/zeabur-oss/identity@sha256:...
+index  ghcr.io/zeabur-oss/identity@sha256:...
+```
+
+`SHA256SUMS` 涵蓋 `digests.txt` 和其他所有發行檔，`SHA256SUMS.sigstore.json` 是它的簽章。以下步驟會先驗證這兩個檔案，再讀取 digest。
 
 ## 下載並驗證
 
@@ -78,10 +90,10 @@ tar -xzf "downloaded/zeabur-identityctl-$version-linux-$arch.tar.gz"
 
 ### 驗證並拉取容器映像檔
 
-從已通過檢查的 `image-digests.txt` 讀取映像檔 digest。
+從已通過檢查的 `digests.txt` 讀取映像檔 digest。
 
 ```sh
-image=$(awk '$1 == "index" {print $2}' downloaded/image-digests.txt)
+image=$(awk '$1 == "index" {print $2}' downloaded/digests.txt)
 cosign verify --certificate-identity-regexp "$identity" \
   --certificate-github-workflow-repository zeabur-oss/identity \
   --certificate-github-workflow-ref "refs/tags/$version" \

@@ -84,7 +84,7 @@ Download the CLI, signed checksums, and image digests. These commands verify the
   cd ~/zeabur-identity-download
   url="https://github.com/zeabur-oss/identity/releases/download/$version"
   archive="zeabur-identityctl-$version-linux-$arch.tar.gz"
-  for file in "$archive" SHA256SUMS SHA256SUMS.sigstore.json image-digests.txt; do
+  for file in "$archive" SHA256SUMS SHA256SUMS.sigstore.json digests.txt; do
     curl --fail --location "$url/$file" --output "$file"
   done
   identity='^https://github\.com/zeabur-oss/\.github/\.github/workflows/release\.yml@'
@@ -103,7 +103,7 @@ Download the CLI, signed checksums, and image digests. These commands verify the
 Next, verify the image and its SBOM, the list of dependencies in the image. `ZEABUR_IDENTITY_IMAGE` stores the exact image digest for this version for use during installation:
 
 ```sh
-ZEABUR_IDENTITY_IMAGE=$(awk '$1 == "index" {print $2}' ~/zeabur-identity-download/image-digests.txt)
+ZEABUR_IDENTITY_IMAGE=$(awk '$1 == "index" {print $2}' ~/zeabur-identity-download/digests.txt)
 export ZEABUR_IDENTITY_IMAGE
 identity='^https://github\.com/zeabur-oss/\.github/\.github/workflows/release\.yml@'
 cosign verify --certificate-identity-regexp "$identity" \

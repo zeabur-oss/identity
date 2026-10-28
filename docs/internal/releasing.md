@@ -3,15 +3,18 @@
 `.github/workflows/release.yml` calls the shared release workflow of
 [zeabur-oss/.github](https://github.com/zeabur-oss/.github), pinned by commit. That workflow runs
 this repository's `scripts/release.sh`, one stage per job, each in the dev shell of the commit
-being released:
+being released. The steps every zeabur-oss release shares (pushing by digest, signing,
+`SHA256SUMS`, the notes and most of verification) are `zeabur-oss-release` from
+[zeabur-oss/.github](https://github.com/zeabur-oss/.github/tree/main/release), pinned in
+`flake.lock`:
 
 | Stage | Does |
 |---|---|
 | `check` | Every workspace crate (including `zeabur-identityctl`), `Cargo.lock` and `ui/package.json` carry the version, and `CHANGELOG.md` has its `## [X.Y.Z]` section. |
 | `build` | Per platform (Linux amd64 and arm64, each natively): static musl binaries, the CLI archive, CycloneDX SBOMs and the image, then `scripts/release-smoke.sh` runs that archive and image on a disposable k3s cluster. |
-| `publish` | Pushes each smoked image to `ghcr.io/zeabur-oss/identity` by digest and the multi-platform index as the version tag, signs them and attests their SBOMs with cosign; the shared workflow adds build provenance. |
-| `assets` | The release files, `SHA256SUMS` with its Sigstore bundle, and the notes from the version's `CHANGELOG.md` section. |
-| `verify` | On fresh amd64 and arm64 runners: checks the draft's files, their signatures and provenance, the image's signature and SBOM, then runs the downloaded CLI and the image on k3s. |
+| `publish` | Pushes each smoked image to `ghcr.io/zeabur-oss/identity` by digest and the multi-platform index as the version tag, signs them and records them in `digests.txt`, then attests their SBOMs with cosign; the shared workflow adds build provenance. |
+| `assets` | The release files, `SHA256SUMS` with its Sigstore bundle, and the notes: the version's `CHANGELOG.md` section and a link to the documentation. |
+| `verify` | On fresh amd64 and arm64 runners: checks the draft's files, their signatures and provenance, the image's index, signatures and SBOM, then runs the downloaded CLI and the image on k3s. |
 
 The signatures name the shared workflow, not this repository's: see
 [Release files and verification](../reference/releases.mdx).
@@ -70,8 +73,8 @@ public repository. It does not publish or edit the release; making it public rem
 maintainer action.
 
 Image tags are public while the GitHub release is still a draft. Do not treat an image tag or
-a successful build as installation acceptance. Use the digest in the release notes when pinning
-a deployment.
+a successful build as installation acceptance. Use the `index` digest in the release's
+`digests.txt` when pinning a deployment.
 
 If publication succeeds but download verification fails, preserve the draft, tag and signed
 artifacts. Fix `scripts/release.sh` on `main`, then run **Release → Run workflow** from `main`
@@ -85,7 +88,7 @@ This mode skips build and publication. It uses the existing tag's pinned Nix env
 the scripts of the commit the run was started from, and reruns native amd64/arm64 signature,
 checksum and Kubernetes smoke verification against the existing assets, allowing verification
 fixes without changing the release tag or artifacts. It reads the image digest from the signed
-`image-digests.txt` and binds the image to it before pulling. It does not rebuild, re-sign,
+`digests.txt` and binds the image to it before pulling. It does not rebuild, re-sign,
 overwrite or publish anything.
 
 If publication itself fails, inspect the logs and any partial draft or registry uploads before

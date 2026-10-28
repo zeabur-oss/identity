@@ -1,7 +1,7 @@
 ---
 title: 在 Ubuntu 的 k3s 上安裝，用通行密鑰登入 kubectl
 description: 在 Ubuntu 伺服器安裝 Zeabur Identity、設定 HTTPS 與管理員帳號，再從你的電腦用通行密鑰登入 k3s 叢集。
-source: "c487b4061365"
+source: "ecd681a0ec59"
 ---
 
 在 Ubuntu 伺服器安裝 Zeabur Identity，設定 HTTPS 和第一個管理員帳號後，你就能從自己的電腦用通行密鑰登入 k3s 叢集，執行 `kubectl`。伺服器使用 k3s 內建的 Traefik 處理 Ingress。
@@ -85,7 +85,7 @@ mkdir -p ~/zeabur-identity-download
   cd ~/zeabur-identity-download
   url="https://github.com/zeabur-oss/identity/releases/download/$version"
   archive="zeabur-identityctl-$version-linux-$arch.tar.gz"
-  for file in "$archive" SHA256SUMS SHA256SUMS.sigstore.json image-digests.txt; do
+  for file in "$archive" SHA256SUMS SHA256SUMS.sigstore.json digests.txt; do
     curl --fail --location "$url/$file" --output "$file"
   done
   identity='^https://github\.com/zeabur-oss/\.github/\.github/workflows/release\.yml@'
@@ -104,7 +104,7 @@ mkdir -p ~/zeabur-identity-download
 接著驗證映像檔和 SBOM，也就是映像檔內的相依套件清單。`ZEABUR_IDENTITY_IMAGE` 會儲存這個版本的確切映像檔摘要，安裝時會用到：
 
 ```sh
-ZEABUR_IDENTITY_IMAGE=$(awk '$1 == "index" {print $2}' ~/zeabur-identity-download/image-digests.txt)
+ZEABUR_IDENTITY_IMAGE=$(awk '$1 == "index" {print $2}' ~/zeabur-identity-download/digests.txt)
 export ZEABUR_IDENTITY_IMAGE
 identity='^https://github\.com/zeabur-oss/\.github/\.github/workflows/release\.yml@'
 cosign verify --certificate-identity-regexp "$identity" \

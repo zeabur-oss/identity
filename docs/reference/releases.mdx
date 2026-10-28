@@ -16,6 +16,18 @@ For macOS, Windows, or other architectures, build the CLI from source.
 
 Each release includes checksums, signatures, and SBOMs. An SBOM lists the dependencies included in a release file. Downloadable SBOM filenames end in `.cdx.json`.
 
+## Image digests
+
+The release file `digests.txt` lists the container image by digest: one line for each platform image and one for the multi-platform index. Pin a deployment to the `index` digest.
+
+```text
+linux/amd64  ghcr.io/zeabur-oss/identity@sha256:...
+linux/arm64  ghcr.io/zeabur-oss/identity@sha256:...
+index  ghcr.io/zeabur-oss/identity@sha256:...
+```
+
+`SHA256SUMS` covers `digests.txt` and every other release file, and `SHA256SUMS.sigstore.json` is its signature. The steps below verify both before reading a digest.
+
 ## Download and verify
 
 Releases are signed in GitHub Actions by the shared release workflow of [zeabur-oss/.github](https://github.com/zeabur-oss/.github), which this repository's release workflow calls. The signing certificate therefore names `zeabur-oss/.github/.github/workflows/release.yml` as its identity, and `zeabur-oss/identity` with the release tag as the repository and ref it ran for. The commands below check all three.
@@ -77,10 +89,10 @@ tar -xzf "downloaded/zeabur-identityctl-$version-linux-$arch.tar.gz"
 
 ### Verify and pull the container image
 
-Read the image digest from the verified `image-digests.txt` file.
+Read the image digest from the verified `digests.txt` file.
 
 ```sh
-image=$(awk '$1 == "index" {print $2}' downloaded/image-digests.txt)
+image=$(awk '$1 == "index" {print $2}' downloaded/digests.txt)
 cosign verify --certificate-identity-regexp "$identity" \
   --certificate-github-workflow-repository zeabur-oss/identity \
   --certificate-github-workflow-ref "refs/tags/$version" \
