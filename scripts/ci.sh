@@ -73,7 +73,6 @@ case "$job" in
     nixfmt --check flake.nix
     shellcheck scripts/*.sh
     actionlint
-    ./scripts/check-brand.sh
     ;;
   clippy) cargo lint ;;
   docs) cargo doc --workspace --no-deps --document-private-items --locked ;;

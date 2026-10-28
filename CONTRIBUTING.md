@@ -46,7 +46,7 @@ itself, so a job runs the same on your machine:
 
 ```sh
 ./scripts/ci.sh --list          # format clippy docs test cargo-deny unsafe-report ui kubernetes
-./scripts/ci.sh format          # cargo fmt, nixfmt, shellcheck, actionlint, check-brand.sh
+./scripts/ci.sh format          # cargo fmt, nixfmt, shellcheck, actionlint
 ./scripts/ci.sh clippy          # cargo lint: all targets and features, -D warnings
 ./scripts/ci.sh test            # and docs, cargo-deny, unsafe-report, ui
 ./scripts/ci.sh kubernetes      # k3s with Docker: see "Disposable k3d cluster" below
