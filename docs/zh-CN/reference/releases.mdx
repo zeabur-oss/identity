@@ -19,6 +19,8 @@ macOS、Windows 或其他架构需要从源码构建 CLI。
 
 ## 下载并验证
 
+发行文件由 [zeabur-oss/.github](https://github.com/zeabur-oss/.github) 的共享发行 workflow 在 GitHub Actions 中签名，本仓库的发行 workflow 会调用它。因此签名证书的身份是 `zeabur-oss/.github/.github/workflows/release.yml`，运行对象的仓库和 ref 则是 `zeabur-oss/identity` 与发行标签。以下命令会检查这三项。
+
 你需要 GitHub CLI（`gh`）、`cosign` `3.x` 和 GNU `sha256sum`。拉取镜像还需要 Docker。除 Docker 外，这些命令行工具都可以在仓库的 `nix develop` shell 中使用。
 
 <Steps>
@@ -30,9 +32,9 @@ macOS、Windows 或其他架构需要从源码构建 CLI。
 设置发行版本与架构，再下载该版本的文件：
 
 ```sh
-version=v0.1.0
+version=v0.1.1
 arch=arm64 # use amd64 for x86_64
-identity="https://github.com/zeabur-oss/identity/.github/workflows/release.yml@refs/tags/$version"
+identity='^https://github\.com/zeabur-oss/\.github/\.github/workflows/release\.yml@'
 gh release download "$version" --repo zeabur-oss/identity --dir downloaded
 ```
 
@@ -49,7 +51,9 @@ gh release download "$version" --repo zeabur-oss/identity --dir downloaded
   set -e
   cd downloaded
   cosign verify-blob --bundle SHA256SUMS.sigstore.json \
-    --certificate-identity "$identity" \
+    --certificate-identity-regexp "$identity" \
+    --certificate-github-workflow-repository zeabur-oss/identity \
+    --certificate-github-workflow-ref "refs/tags/$version" \
     --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS
   sha256sum --check --strict SHA256SUMS
 )
@@ -78,11 +82,32 @@ tar -xzf "downloaded/zeabur-identityctl-$version-linux-$arch.tar.gz"
 
 ```sh
 image=$(awk '$1 == "index" {print $2}' downloaded/image-digests.txt)
-cosign verify --certificate-identity "$identity" \
+cosign verify --certificate-identity-regexp "$identity" \
+  --certificate-github-workflow-repository zeabur-oss/identity \
+  --certificate-github-workflow-ref "refs/tags/$version" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com "$image"
-cosign verify-attestation --type cyclonedx --certificate-identity "$identity" \
+cosign verify-attestation --type cyclonedx --certificate-identity-regexp "$identity" \
+  --certificate-github-workflow-repository zeabur-oss/identity \
+  --certificate-github-workflow-ref "refs/tags/$version" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com "$image"
 docker pull --platform "linux/$arch" "$image"
+```
+
+</Step>
+
+<Step>
+
+### 验证构建来源（可选）
+
+GitHub 还为每个发行文件和镜像记录构建来源（build provenance）。使用已登录的 `gh`：
+
+```sh
+gh attestation verify "downloaded/zeabur-identityctl-$version-linux-$arch.tar.gz" \
+  --repo zeabur-oss/identity --source-ref "refs/tags/$version" \
+  --signer-workflow zeabur-oss/.github/.github/workflows/release.yml
+gh attestation verify "oci://$image" \
+  --repo zeabur-oss/identity --source-ref "refs/tags/$version" \
+  --signer-workflow zeabur-oss/.github/.github/workflows/release.yml
 ```
 
 </Step>

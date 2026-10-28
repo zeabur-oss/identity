@@ -1,16 +1,19 @@
 name: Release
 
+# A tag vX.Y.Z reruns CI on its commit, then the shared release workflow of zeabur-oss/.github runs
+# `scripts/release.sh` stage by stage and leaves a draft prerelease. By hand, it rehearses a version
+# (builds and smoke tests, nothing published) or, with verify_only, checks an existing draft again.
+# docs/internal/releasing.md has the procedure.
 on:
   push:
-    tags: ['v[0-9]*']
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
   workflow_dispatch:
     inputs:
       version:
-        description: 'Candidate version (must match Cargo.toml); rehearsal never publishes'
+        description: 'Version to rehearse or verify (v0.1.1); a rehearsal never publishes'
         required: true
-        default: v0.1.0
       verify_only:
-        description: 'Verify existing signed release assets without rebuilding or publishing'
+        description: 'Verify the existing draft release of this version; build and publish nothing'
         type: boolean
         default: false
 
@@ -21,146 +24,20 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
-env:
-  CARGO_TERM_COLOR: always
-
 jobs:
-  # Re-run the entire CI suite on THIS commit, including Kubernetes and UI checks.
   checks:
     if: ${{ !inputs.verify_only }}
     uses: ./.github/workflows/ci.yml
-
-  prepare:
-    runs-on: ubuntu-26.04-arm
-    outputs:
-      version: ${{ steps.version.outputs.version }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ inputs.verify_only && format('refs/tags/{0}', inputs.version) || github.ref }}
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: DeterminateSystems/determinate-nix-action@f296148a827001a9a82d3685b53210c06e5d3b67 # v3.24.0
-      - id: version
-        name: Validate release commit and version
-        env:
-          VERSION: ${{ inputs.version || github.ref_name }}
-          VERIFY_ONLY: ${{ inputs.verify_only }}
-        run: |
-          [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          actual=$(nix develop -c cargo metadata --locked --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "zeabur-identityctl") | .version')
-          test "$VERSION" = "v$actual"
-          if [[ "$GITHUB_EVENT_NAME" == push || "$VERIFY_ONLY" == true ]]; then
-            git merge-base --is-ancestor HEAD origin/main
-          fi
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-
-  build:
-    needs: [prepare, checks]
-    if: ${{ !inputs.verify_only }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: amd64
-            runner: ubuntu-26.04
-          - arch: arm64
-            runner: ubuntu-26.04-arm
-    runs-on: ${{ matrix.runner }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: DeterminateSystems/determinate-nix-action@f296148a827001a9a82d3685b53210c06e5d3b67 # v3.24.0
-      - name: Build immutable candidates
-        env:
-          VERSION: ${{ needs.prepare.outputs.version }}
-          ARCH: ${{ matrix.arch }}
-        run: |
-          SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)
-          # mkShell supplies its own epoch; set the commit epoch after entering it.
-          nix develop -c env SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" bash scripts/release-build.sh "$VERSION" "$ARCH" dist
-      - name: Smoke the exact archive and image
-        env:
-          VERSION: ${{ needs.prepare.outputs.version }}
-          ARCH: ${{ matrix.arch }}
-        run: nix develop -c bash scripts/release-smoke.sh "dist/zeabur-identityctl-$VERSION-linux-$ARCH.tar.gz" "zeabur-identity:release-$ARCH"
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: release-${{ matrix.arch }}
-          path: dist/
-          if-no-files-found: error
-          retention-days: 7
-
-  publish:
-    if: github.event_name == 'push'
-    needs: [prepare, build]
-    runs-on: ubuntu-26.04-arm
+  release:
+    needs: checks
+    if: ${{ !cancelled() && (needs.checks.result == 'success' || inputs.verify_only) }}
+    uses: zeabur-oss/.github/.github/workflows/release.yml@9d500376d4e7202c9343656fb6b85dc2eba26dd3 # main
     permissions:
       contents: write
       packages: write
       id-token: write
-    outputs:
-      image: ${{ steps.publish.outputs.image }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: DeterminateSystems/determinate-nix-action@f296148a827001a9a82d3685b53210c06e5d3b67 # v3.24.0
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          pattern: release-*
-          path: candidates
-      - id: publish
-        name: Publish candidates by digest, sign and stage draft assets
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ needs.prepare.outputs.version }}
-        run: nix develop -c bash scripts/release-publish.sh "$VERSION" candidates
-
-  rehearse:
-    if: >-
-      ${{ !cancelled() && needs.prepare.result == 'success' &&
-          (needs.publish.result == 'success' ||
-           (github.event_name == 'workflow_dispatch' && inputs.verify_only)) }}
-    needs: [prepare, publish]
-    # GitHub draft releases are visible only to tokens with push access.
-    permissions:
-      contents: write
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: amd64
-            runner: ubuntu-26.04
-          - arch: arm64
-            runner: ubuntu-26.04-arm
-    runs-on: ${{ matrix.runner }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ inputs.verify_only && format('refs/tags/{0}', inputs.version) || github.ref }}
-          persist-credentials: false
-      - name: Check out corrected verification scripts
-        if: inputs.verify_only
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-          path: verification
-          sparse-checkout: scripts
-          persist-credentials: false
-      - uses: DeterminateSystems/determinate-nix-action@f296148a827001a9a82d3685b53210c06e5d3b67 # v3.24.0
-      - name: Download draft assets, verify and execute
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ needs.prepare.outputs.version }}
-          ARCH: ${{ matrix.arch }}
-          IMAGE: ${{ needs.publish.outputs.image }}
-          VERIFY_SCRIPT: ${{ inputs.verify_only && 'verification/scripts/release-verify.sh' || 'scripts/release-verify.sh' }}
-        run: |
-          nix develop -c gh release download "$VERSION" --repo "$GITHUB_REPOSITORY" --dir downloaded
-          if [[ -z "$IMAGE" ]]; then
-            IMAGE=$(awk '$1 == "index" { print $2 }' downloaded/image-digests.txt)
-          fi
-          nix develop -c bash "$VERIFY_SCRIPT" "$VERSION" "$ARCH" downloaded "$IMAGE" \
-            "https://github.com/$GITHUB_REPOSITORY/.github/workflows/release.yml@refs/tags/$VERSION"
+      attestations: write
+    with:
+      name: Zeabur Identity
+      version: ${{ inputs.version }}
+      verify-only: ${{ inputs.verify_only == true }}

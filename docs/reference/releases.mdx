@@ -18,6 +18,8 @@ Each release includes checksums, signatures, and SBOMs. An SBOM lists the depend
 
 ## Download and verify
 
+Releases are signed in GitHub Actions by the shared release workflow of [zeabur-oss/.github](https://github.com/zeabur-oss/.github), which this repository's release workflow calls. The signing certificate therefore names `zeabur-oss/.github/.github/workflows/release.yml` as its identity, and `zeabur-oss/identity` with the release tag as the repository and ref it ran for. The commands below check all three.
+
 You need the GitHub CLI (`gh`), `cosign` `3.x`, and GNU `sha256sum`. You also need Docker to pull images. Except for Docker, these command-line tools are available in the repository's `nix develop` shell.
 
 <Steps>
@@ -29,9 +31,9 @@ You need the GitHub CLI (`gh`), `cosign` `3.x`, and GNU `sha256sum`. You also ne
 Set the release version and architecture, then download the files for that version:
 
 ```sh
-version=v0.1.0
+version=v0.1.1
 arch=arm64 # use amd64 for x86_64
-identity="https://github.com/zeabur-oss/identity/.github/workflows/release.yml@refs/tags/$version"
+identity='^https://github\.com/zeabur-oss/\.github/\.github/workflows/release\.yml@'
 gh release download "$version" --repo zeabur-oss/identity --dir downloaded
 ```
 
@@ -48,7 +50,9 @@ Verify the signature on `SHA256SUMS` first, then use it to check the downloaded 
   set -e
   cd downloaded
   cosign verify-blob --bundle SHA256SUMS.sigstore.json \
-    --certificate-identity "$identity" \
+    --certificate-identity-regexp "$identity" \
+    --certificate-github-workflow-repository zeabur-oss/identity \
+    --certificate-github-workflow-ref "refs/tags/$version" \
     --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS
   sha256sum --check --strict SHA256SUMS
 )
@@ -77,11 +81,32 @@ Read the image digest from the verified `image-digests.txt` file.
 
 ```sh
 image=$(awk '$1 == "index" {print $2}' downloaded/image-digests.txt)
-cosign verify --certificate-identity "$identity" \
+cosign verify --certificate-identity-regexp "$identity" \
+  --certificate-github-workflow-repository zeabur-oss/identity \
+  --certificate-github-workflow-ref "refs/tags/$version" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com "$image"
-cosign verify-attestation --type cyclonedx --certificate-identity "$identity" \
+cosign verify-attestation --type cyclonedx --certificate-identity-regexp "$identity" \
+  --certificate-github-workflow-repository zeabur-oss/identity \
+  --certificate-github-workflow-ref "refs/tags/$version" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com "$image"
 docker pull --platform "linux/$arch" "$image"
+```
+
+</Step>
+
+<Step>
+
+### Verify build provenance (optional)
+
+GitHub also records build provenance for every release file and image. With an authenticated `gh`:
+
+```sh
+gh attestation verify "downloaded/zeabur-identityctl-$version-linux-$arch.tar.gz" \
+  --repo zeabur-oss/identity --source-ref "refs/tags/$version" \
+  --signer-workflow zeabur-oss/.github/.github/workflows/release.yml
+gh attestation verify "oci://$image" \
+  --repo zeabur-oss/identity --source-ref "refs/tags/$version" \
+  --signer-workflow zeabur-oss/.github/.github/workflows/release.yml
 ```
 
 </Step>
