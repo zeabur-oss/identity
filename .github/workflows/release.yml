@@ -1,6 +1,6 @@
 name: Release
 
-# A tag vX.Y.Z, on a commit whose CI passed on main, runs the shared release workflow of
+# A tag vX.Y.Z on a commit of main runs the shared release workflow of
 # zeabur-oss/.github: `scripts/release.sh` stage by stage, leaving a draft prerelease. By hand, it rehearses a version
 # (builds and smoke tests, nothing published) or, with verify_only, checks an existing draft again.
 # docs/internal/releasing.md has the procedure.
@@ -28,7 +28,6 @@ jobs:
   release:
     uses: zeabur-oss/.github/.github/workflows/release.yml@0badbf68744c7690d1b5b613071044bc12b002be # main
     permissions:
-      actions: read
       contents: write
       packages: write
       id-token: write

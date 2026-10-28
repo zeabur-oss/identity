@@ -29,8 +29,7 @@ The signatures name the shared workflow, not this repository's: see
    restrict release-tag changes to maintainers.
    Enable GitHub private vulnerability reporting and confirm the reporting link in `SECURITY.md`
    works before making the release public.
-4. Wait for **CI** on `main` to pass for the release commit: the release checks it and stops
-   otherwise. Tag the commit and push the tag. Replace `YOUR_RELEASE_COMMIT` with its commit hash:
+4. Check that **CI** passed on `main` for the release commit, then tag it and push the tag. Replace `YOUR_RELEASE_COMMIT` with its commit hash:
 
    ```sh
    git tag v0.1.1 YOUR_RELEASE_COMMIT
@@ -61,7 +60,7 @@ The signatures name the shared workflow, not this repository's: see
    Repeat the guide's unauthenticated downloads and signature/checksum verification against
    the public URLs. Announce the release only after those checks succeed.
 
-The tag must match the versions, and the commit must be on `main` with CI passed there. The
+The tag must match the versions, and the commit must be on `main`. The
 workflow builds both platforms using the pinned Rust/Nix toolchain and locked dependencies, and tests the
 CLI archives and images it will publish. It then signs and uploads the artifacts, downloads them
 on fresh runners, and verifies and runs them while the release stays a draft. Signing uses
