@@ -1,7 +1,7 @@
 ---
 title: 規格符合度
 description: 查閱 Zeabur Identity 各項規格要求對應的程式碼、測試與符合狀態。
-source: "cb1a3510c242"
+source: "686b7ca0fb82"
 ---
 
 這裡列出 Zeabur Identity 實作的每項 MUST 與 SHOULD 要求，以及對應的程式碼與測試。這份對照表不代表 Zeabur Identity 已取得 OpenID 認證。
@@ -64,7 +64,7 @@ cargo doc --workspace --open
 | `unsafe_code = "forbid"` | `Cargo.toml [workspace.lints.rust]`; `#![forbid(unsafe_code)]` in both binaries | CI `clippy`, `unsafe-report` | Met |
 | Only OSI-approved licenses | `deny.toml [licenses]` | CI `cargo-deny` | Met |
 | Known vulnerabilities rejected | `deny.toml [advisories]` | CI `cargo-deny` | Met |
-| Dependency `unsafe`/native code listed for approval | `scripts/unsafe-report.sh`, `supply-chain/unsafe-allowlist.toml` | CI `unsafe-report` | Met |
+| Dependency `unsafe`/native code listed for approval | `zeabur-oss-unsafe-report` (zeabur-oss/.github), `supply-chain/unsafe-allowlist.toml` | CI `unsafe-report` | Met |
 | clippy pedantic + restriction set, rustfmt | `Cargo.toml [workspace.lints]`, `clippy.toml`, `rustfmt.toml` | CI `clippy`, `format`, `docs` | Met |
 | DCO sign-off | `CONTRIBUTING.md`, zeabur-oss/.github `dco.yml` | CI `dco` | Met |
 | One pinned Rust toolchain | `flake.nix`, `flake.lock` | CI `clippy`, `format` in `nix develop` | Met |

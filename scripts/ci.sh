@@ -80,7 +80,7 @@ case "$job" in
   cargo-deny) cargo deny --locked check ;;
   unsafe-report)
     status=0
-    ./scripts/unsafe-report.sh || status=$?
+    zeabur-oss-unsafe-report zeabur-identity zeabur-identityctl || status=$?
     if [[ -n "${CI_ARTIFACTS:-}" && -f target/unsafe-report.md ]]; then
       mkdir -p "$CI_ARTIFACTS"
       cp target/unsafe-report.md "$CI_ARTIFACTS/"
