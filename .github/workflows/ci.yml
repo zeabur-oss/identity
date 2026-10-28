@@ -6,7 +6,6 @@ on:
   push:
     branches: [main]
   pull_request:
-  workflow_call: # the release runs all of CI on the commit it releases
 
 permissions:
   contents: read

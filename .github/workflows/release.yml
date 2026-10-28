@@ -1,7 +1,7 @@
 name: Release
 
-# A tag vX.Y.Z reruns CI on its commit, then the shared release workflow of zeabur-oss/.github runs
-# `scripts/release.sh` stage by stage and leaves a draft prerelease. By hand, it rehearses a version
+# A tag vX.Y.Z, on a commit whose CI passed on main, runs the shared release workflow of
+# zeabur-oss/.github: `scripts/release.sh` stage by stage, leaving a draft prerelease. By hand, it rehearses a version
 # (builds and smoke tests, nothing published) or, with verify_only, checks an existing draft again.
 # docs/internal/releasing.md has the procedure.
 on:
@@ -25,14 +25,10 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  checks:
-    if: ${{ !inputs.verify_only }}
-    uses: ./.github/workflows/ci.yml
   release:
-    needs: checks
-    if: ${{ !cancelled() && (needs.checks.result == 'success' || inputs.verify_only) }}
     uses: zeabur-oss/.github/.github/workflows/release.yml@0badbf68744c7690d1b5b613071044bc12b002be # main
     permissions:
+      actions: read
       contents: write
       packages: write
       id-token: write

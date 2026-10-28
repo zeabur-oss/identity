@@ -21,15 +21,16 @@ The signatures name the shared workflow, not this repository's: see
    known limitations. Use level-three headings within each version; the release notes include only
    the matching version section. Merge the release commit to `main`.
 2. In GitHub Actions, select **Release → Run workflow**, choose that commit's branch and enter
-   the matching version, such as `v0.1.1`. This runs CI and builds and smokes both platforms
-   without publishing.
+   the matching version, such as `v0.1.1`. This builds and smokes both platforms without
+   publishing.
 3. Make sure the GHCR package `zeabur-oss/identity` is public and this repository's Actions token
    can write to it. If the package is new, the first publishing run creates it; change its
    visibility before the download checks run. Set repository rulesets to protect `main` and
    restrict release-tag changes to maintainers.
    Enable GitHub private vulnerability reporting and confirm the reporting link in `SECURITY.md`
    works before making the release public.
-4. Tag the release commit and push the tag. Replace `YOUR_RELEASE_COMMIT` with its commit hash:
+4. Wait for **CI** on `main` to pass for the release commit: the release checks it and stops
+   otherwise. Tag the commit and push the tag. Replace `YOUR_RELEASE_COMMIT` with its commit hash:
 
    ```sh
    git tag v0.1.1 YOUR_RELEASE_COMMIT
@@ -60,8 +61,8 @@ The signatures name the shared workflow, not this repository's: see
    Repeat the guide's unauthenticated downloads and signature/checksum verification against
    the public URLs. Announce the release only after those checks succeed.
 
-The tag must match the versions, and the commit must be on `main`. The workflow reruns CI,
-builds both platforms using the pinned Rust/Nix toolchain and locked dependencies, and tests the
+The tag must match the versions, and the commit must be on `main` with CI passed there. The
+workflow builds both platforms using the pinned Rust/Nix toolchain and locked dependencies, and tests the
 CLI archives and images it will publish. It then signs and uploads the artifacts, downloads them
 on fresh runners, and verifies and runs them while the release stays a draft. Signing uses
 GitHub's short-lived identity token through Sigstore. The download verification job needs
@@ -81,7 +82,7 @@ with the existing version and `verify_only` enabled:
 gh workflow run release.yml --ref main -f version=v0.1.1 -F verify_only=true
 ```
 
-This mode skips CI, build and publication. It uses the existing tag's pinned Nix environment with
+This mode skips build and publication. It uses the existing tag's pinned Nix environment with
 the scripts of the commit the run was started from, and reruns native amd64/arm64 signature,
 checksum and Kubernetes smoke verification against the existing assets, allowing verification
 fixes without changing the release tag or artifacts. It reads the image digest from the signed
