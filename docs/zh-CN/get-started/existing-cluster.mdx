@@ -1,7 +1,7 @@
 ---
 title: 将 Zeabur Identity 安装到现有集群
 description: 在现有 Kubernetes 集群安装 Zeabur Identity，配置 kube-apiserver 认证，并用第一位管理员的通行密钥登录。
-source: "f336adad2664"
+source: "3514d493873c"
 ---
 
 使用集群管理员的 kubeconfig 安装 Zeabur Identity，再将认证配置交给 kube-apiserver。完成后，你就能用通行密钥登录，让 `kubectl` 获取短期令牌。
@@ -9,7 +9,7 @@ source: "f336adad2664"
 ## 开始前
 
 - 准备具有 `cluster-admin` 权限的 kubeconfig。
-- 安装 [cert-manager](https://cert-manager.io/docs/installation/kubectl/)。`kube-config` 用它签发内部证书，供 kube-apiserver 连接 Zeabur Identity。未安装时命令会失败，除非加上 `--discovery public`。
+- 安装 [cert-manager](https://cert-manager.io/docs/installation/kubectl/)。`kube-config` 用它签发内部证书，供 kube-apiserver 连接 Zeabur Identity。未安装 cert-manager 时要加上 `--discovery public`，否则命令会失败。
 - 准备可访问的 HTTPS Issuer 地址。浏览器必须信任这个地址的 HTTPS 证书，才能创建通行密钥。
 - 确认你保留了[不经过 Zeabur Identity 的入口](../operations/emergency-access.mdx)：使用客户端证书的管理员 kubeconfig，以及每台控制平面节点的 SSH 或控制台访问权限。
 - 记录 kube-apiserver 当前的启动方式和认证配置，并备份配置文件。使用 `generic` 时，还要先确认如何在无法访问 Kubernetes API 的情况下恢复配置。
@@ -74,7 +74,7 @@ zeabur-identityctl kube-config --distro k3s > authn.yaml
 zeabur-identityctl kube-config --distro generic > authn.yaml
 ```
 
-`generic` 只输出认证配置文件。你需要根据集群启动 kube-apiserver 的方式，将配置文件交给 `--authentication-config`。托管 Kubernetes 集群需使用供应商支持的认证配置方式。
+`generic` 只输出认证配置文件。你需要根据集群启动 kube-apiserver 的方式，将配置文件交给 `--authentication-config`。托管 Kubernetes 集群则要用供应商支持的方式配置认证。
 
 #### 应用前检查
 

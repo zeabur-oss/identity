@@ -8,7 +8,7 @@ Use a cluster admin's kubeconfig to install Zeabur Identity, then configure kube
 ## Before you begin
 
 - Prepare a kubeconfig with `cluster-admin` permissions.
-- Install [cert-manager](https://cert-manager.io/docs/installation/kubectl/). `kube-config` uses it to issue the internal certificate that kube-apiserver uses to reach Zeabur Identity. Without it, the command fails unless you pass `--discovery public`.
+- Install [cert-manager](https://cert-manager.io/docs/installation/kubectl/). `kube-config` uses it to issue the internal certificate that kube-apiserver uses to reach Zeabur Identity. Without cert-manager, pass `--discovery public`, or the command fails.
 - Prepare a reachable HTTPS Issuer URL. Your browser must trust the URL's HTTPS certificate to create a passkey.
 - Confirm that you retain [access without Zeabur Identity](../operations/emergency-access.mdx): an admin kubeconfig that uses client certificates, and SSH or console access to every control plane node.
 - Record how kube-apiserver currently starts and its authentication settings, and back up the configuration files. When using `generic`, also confirm how to restore the configuration without access to the Kubernetes API.

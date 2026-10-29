@@ -1,7 +1,7 @@
 ---
 title: 把 Zeabur Identity 安裝到既有叢集
 description: 在既有 Kubernetes 叢集安裝 Zeabur Identity，設定 kube-apiserver 驗證，再用第一位管理員的通行密鑰登入。
-source: "f336adad2664"
+source: "3514d493873c"
 ---
 
 用叢集管理員的 kubeconfig 安裝 Zeabur Identity，再為 kube-apiserver 設定驗證。完成後，你就能用通行密鑰登入，讓 `kubectl` 取得短效權杖。
@@ -9,7 +9,7 @@ source: "f336adad2664"
 ## 開始前
 
 - 準備有 `cluster-admin` 權限的 kubeconfig。
-- 安裝 [cert-manager](https://cert-manager.io/docs/installation/kubectl/)。`kube-config` 用它簽發內部憑證，讓 kube-apiserver 連到 Zeabur Identity。沒有安裝時，指令會失敗，除非加上 `--discovery public`。
+- 安裝 [cert-manager](https://cert-manager.io/docs/installation/kubectl/)。`kube-config` 用它簽發內部憑證，讓 kube-apiserver 連到 Zeabur Identity。沒有安裝 cert-manager 時要加上 `--discovery public`，否則指令會失敗。
 - 準備可連線的 HTTPS Issuer 網址。瀏覽器必須信任這個網址的 HTTPS 憑證，才能建立通行密鑰。
 - 確認你仍可使用[不經過 Zeabur Identity 的入口](../operations/emergency-access.mdx)：使用用戶端憑證的管理員 kubeconfig，以及每台控制平面節點的 SSH 或主控台存取權。
 - 記錄 kube-apiserver 目前的啟動方式與驗證設定，並備份設定檔。如果使用 `generic`，也要先確認如何在無法存取 Kubernetes API 時還原設定。
@@ -62,9 +62,9 @@ zeabur-identityctl manifests --image "$ZEABUR_IDENTITY_IMAGE" --serve-arg=--invi
 zeabur-identityctl kube-config --distro k3s > authn.yaml
 ```
 
-指令會印出安裝步驟。按照指示安裝設定，並重啟一次 `k3s` 或 `rke2-server`。之後只要修改有效的 `authn.yaml`，kube-apiserver 就會在約一分鐘內重新載入。
+指令會印出安裝步驟。按照指示安裝設定，並重新啟動一次 `k3s` 或 `rke2-server`。之後只要修改有效的 `authn.yaml`，kube-apiserver 就會在約一分鐘內重新載入。
 
-在 RKE2 上，重啟 `rke2-server` 前，先在每台伺服器建立 `/etc/rancher/rke2/zeabur-identity/` 並存入 `authn.yaml`。RKE2 只會掛載已存在的檔案。
+在 RKE2 上，重新啟動 `rke2-server` 前，先在每台伺服器建立 `/etc/rancher/rke2/zeabur-identity/` 並存入 `authn.yaml`。RKE2 只會掛載已存在的檔案。
 
 #### 其他叢集
 
@@ -74,7 +74,7 @@ zeabur-identityctl kube-config --distro k3s > authn.yaml
 zeabur-identityctl kube-config --distro generic > authn.yaml
 ```
 
-`generic` 只會輸出驗證設定檔。你需要依叢集啟動 kube-apiserver 的方式，用 `--authentication-config` 指定設定檔。如果使用受管 Kubernetes 叢集，則需採用供應商支援的驗證設定方式。
+`generic` 只會輸出驗證設定檔。你需要依叢集啟動 kube-apiserver 的方式，用 `--authentication-config` 指定設定檔。受管 Kubernetes 叢集則要用供應商支援的方式設定驗證。
 
 #### 套用前檢查
 
@@ -134,6 +134,6 @@ kubectl auth can-i '*' '*' --all-namespaces
 | 畫面或結果 | 接著處理 |
 |---|---|
 | 瀏覽器無法建立通行密鑰 | 確認 Issuer 網址可連線，且瀏覽器信任這個網址的 HTTPS 憑證。 |
-| kube-apiserver 剛重啟，登入時出現 `oidc: authenticator not initialized` | 等幾分鐘，讓 kube-apiserver 取得 Zeabur Identity 的金鑰。如果仍然失敗，請檢查 kube-apiserver 日誌、`zeabur-identity` Service 的端點與內部憑證。不要關閉憑證驗證。 |
+| kube-apiserver 剛重新啟動，登入時出現 `oidc: authenticator not initialized` | 等幾分鐘，讓 kube-apiserver 取得 Zeabur Identity 的金鑰。如果仍然失敗，請檢查 kube-apiserver 日誌、`zeabur-identity` Service 的端點與內部憑證。不要關閉憑證驗證。 |
 | kube-apiserver 無法啟動 | 使用[不經過 Zeabur Identity 的入口](../operations/emergency-access.mdx)，在控制平面節點還原先前的驗證與匿名存取設定。 |
 | 邀請連結無法兌換 | 確認伺服器啟動時已加入 `--invitations`。 |

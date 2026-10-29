@@ -1,16 +1,16 @@
 ---
 title: Zeabur Identity 的架構
 description: 了解 Zeabur Identity 如何在 Kubernetes 叢集中運作、安全性質、元件關係與 crate 分工。
-source: "4721387d99da"
+source: "b17d0c8d9b6d"
 ---
 
-Zeabur Identity 是一個 OpenID Connect Issuer，以通行密鑰作為主要登入方式，在自管 Kubernetes 叢集中執行。kube-apiserver 使用 [Structured Authentication Configuration][kep-3331]，自行驗證 Zeabur Identity 簽發的權杖。你可以用通行密鑰登入，不必持有無法撤銷的長效管理員 kubeconfig。其他 OpenID Connect 用戶端，例如 Argo CD、Grafana 和 Headlamp，也能使用同一個 Issuer。
+Zeabur Identity 是在自管 Kubernetes 叢集中執行的 OpenID Connect Issuer，主要登入方式是通行密鑰。kube-apiserver 使用 [Structured Authentication Configuration][kep-3331]，自行驗證 Zeabur Identity 簽發的權杖。你可以用通行密鑰登入，不必持有無法撤銷的長效管理員 kubeconfig。其他 OpenID Connect 用戶端，例如 Argo CD、Grafana 和 Headlamp，也能使用同一個 Issuer。
 
 k3s 與 RKE2 使用相同設定。CI 測試涵蓋 k3s。
 
 ## 安全性質
 
-- **不使用密碼。** 通行密鑰是主要認證資訊，使用 WebAuthn，且必須完成使用者驗證。一般存取也可以連結 GitHub 或 Google 帳號，作為替代登入方式。
+- **不使用密碼。** 通行密鑰是主要認證資訊，使用 WebAuthn，且必須完成使用者驗證。日常存取也可以改用連結的 GitHub 或 Google 帳號登入。
 - **只有管理員帳號能取得管理員權限。** 只有 `accountType: Admin` 的 `User` 會取得 `zeabur:admins` 群組，這個群組綁定 `cluster-admin`。管理員帳號只能用通行密鑰登入，權杖預設有效期限為五分鐘。工作階段也可能因閒置而提早結束。如果安裝設定啟用 AAL3，管理員帳號還必須使用綁定裝置的通行密鑰。一般帳號只會取得所屬群組綁定的權限。所有工作階段都會在登入 12 小時後結束。
 - **權杖有效期限短。** 權杖綁定目標對象（audience），簽章金鑰會定期輪替。
 - **使用者自行管理登入方式。** 不論是新增或移除通行密鑰，還是連結或解除連結 GitHub 或 Google 帳號，使用者都需要再次用通行密鑰完成驗證。使用者無法移除最後一把通行密鑰，也無法解除連結最後一種登入方式。
@@ -60,7 +60,7 @@ kubelogin 開啟瀏覽器，前往 Zeabur Identity 的登入頁面。
 
 ### 驗證權杖
 
-kube-apiserver 使用 Zeabur Identity 公開的金鑰驗證權杖簽章。它會經由內部 TLS 連線取得金鑰，Zeabur Identity 不參與這次請求本身。
+kube-apiserver 使用 Zeabur Identity 公開的金鑰驗證權杖簽章。金鑰經由內部 TLS 連線取得，Zeabur Identity 不參與這次請求本身。
 
 </Step>
 
@@ -74,7 +74,7 @@ kube-apiserver 使用 Zeabur Identity 公開的金鑰驗證權杖簽章。它會
 
 </Steps>
 
-管理工具 `zeabur-identityctl` 在管理員的電腦上執行，使用管理員自己的 kubeconfig。它會輸出安裝清單，並依 Kubernetes 發行版產生適用的 kube-apiserver `AuthenticationConfiguration`。它也會簽發一次性連結，讓使用者註冊通行密鑰。
+管理工具 `zeabur-identityctl` 在管理員的電腦上執行，使用管理員自己的 kubeconfig，負責輸出安裝清單、依 Kubernetes 發行版產生適用的 kube-apiserver `AuthenticationConfiguration`，以及簽發讓使用者註冊通行密鑰的一次性連結。
 
 ## Crate 分工
 
@@ -82,10 +82,10 @@ kube-apiserver 使用 Zeabur Identity 公開的金鑰驗證權杖簽章。它會
 
 - **相依關係只向下，不形成循環。** 參考 [Kladov][matklad-workspaces]，以及下方參考文獻中的 Lakos 和 Martin。
 - **每個 crate 用窄介面封裝一項設計決策。** 參考 [Parnas][parnas]。
-- **儲存層由一組 trait 定義。** 記憶體與 Kubernetes 各有一套實作，因此多數測試不需要叢集。這裡採用 ports and adapters 架構，參考 [Cockburn][cockburn]。
+- **儲存層由一組 trait 定義。** 記憶體與 Kubernetes 各有一套實作，所以多數測試不需要叢集。這裡採用 ports and adapters 架構，參考 [Cockburn][cockburn]。
 - **伺服器與管理 CLI 使用不同的執行檔。** Kanidm（`kanidmd`／`kanidm`）、etcd（`etcd`／`etcdctl`）和 cert-manager（`cmctl`）也採用這種分工。只有管理員需要執行的程式碼，不會放進伺服器映像檔。
 
-每個 crate 都有 README，也會用這份 README 作為 crate 層級文件，可用 `cargo doc --open` 開啟。
+每個 crate 的 README 同時是該 crate 的 crate 層級文件，可用 `cargo doc --open` 開啟。
 
 | Crate | What it holds | Depends on |
 |---|---|---|

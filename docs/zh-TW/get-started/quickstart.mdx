@@ -1,7 +1,7 @@
 ---
 title: 在 Ubuntu 的 k3s 上安裝，用通行密鑰登入 kubectl
 description: 在 Ubuntu 伺服器安裝 Zeabur Identity、設定 HTTPS 與管理員帳號，再從你的電腦用通行密鑰登入 k3s 叢集。
-source: "ecd681a0ec59"
+source: "c4f83ce51f48"
 ---
 
 在 Ubuntu 伺服器安裝 Zeabur Identity，設定 HTTPS 和第一個管理員帳號後，你就能從自己的電腦用通行密鑰登入 k3s 叢集，執行 `kubectl`。伺服器使用 k3s 內建的 Traefik 處理 Ingress。
@@ -342,7 +342,7 @@ done | sort | uniq -c
 這些數值是起始設定，需要依使用情境調整：
 
 - 同一個 NAT 後方的使用者共用 IP 位址，也共用限額。如果辦公室成員每天早上同時登入，請調高限額。
-- 如果 Traefik 前方還有其他代理伺服器，只信任該代理伺服器送來的轉送標頭。否則所有人會共用同一個限額，或有人能偽造標頭繞過限制。
+- 如果 Traefik 前方還有其他代理伺服器，只信任該代理伺服器送來的轉送標頭，否則所有人會共用同一個限額，或有人能偽造標頭繞過限制。
 
 詳細設定見 Traefik 的 [RateLimit 選項](https://doc.traefik.io/traefik/reference/routing-configuration/http/middlewares/ratelimit/)。
 
@@ -361,7 +361,7 @@ sudo k3s kubectl --kubeconfig=/etc/rancher/k3s/k3s.yaml get --raw=/readyz
 
 任一指令失敗就先停止，修好後再繼續。如果還沒另存離線加密副本，現在先完成備份。
 
-kube-apiserver 會自行驗證 Zeabur Identity 的權杖，並用內部 HTTPS 連線取得簽章金鑰。`zeabur-identityctl kube-config` 會請 cert-manager 簽發這條連線使用的憑證，再輸出 kube-apiserver 所需的設定。它也會輸出 k3s 設定指示，其中需要重新啟動一次。步驟 2 已完成這部分，可以略過這些指示。
+kube-apiserver 會自行驗證 Zeabur Identity 的權杖，並用內部 HTTPS 連線取得簽章金鑰。`zeabur-identityctl kube-config` 會請 cert-manager 簽發這條連線使用的憑證，再輸出 kube-apiserver 所需的設定。指令也會輸出 k3s 的設定指示，包括重新啟動一次；步驟 2 已經做完這部分，可以略過。
 
 kube-apiserver 約每分鐘檢查一次設定檔。比較修改前後成功重新載入的次數，就能確認新設定是否生效。在伺服器 shell 定義以下兩個輔助函式：
 
@@ -429,7 +429,7 @@ zeabur-identityctl setup-link --username admin
 CA=$(ssh "$SERVER" "grep certificate-authority-data ~/.kube/config | awk '{print \$2}'")
 ```
 
-接著寫入 kubeconfig。登入後，kubelogin 會使用更新權杖自動更新權杖，直到工作階段結束：
+接著寫入 kubeconfig。登入後，工作階段結束前 kubelogin 都會用更新權杖自動換發權杖：
 
 ```sh
 mkdir -p ~/.kube
@@ -502,7 +502,7 @@ kubectl -n default delete configmap zeabur-identity-permission-check
 
 - **管理員權杖會自動更新**：權杖有效期為 5 分鐘，更新時不需要你操作。首次登入 12 小時後，或停止使用 `kubectl` 達 1 小時後，需要重新登入。多團隊共用叢集時，閒置期限為 15 分鐘。一般帳號的權杖有效期為 10 分鐘。詳見[管理員帳號與工作階段](../users/admin-sessions.mdx)。
 - **管理員帳號只用於管理工作**：日常操作請邀請自己建立一般帳號，再依需求替群組綁定權限。詳見[管理使用者](../users/manage-users.mdx)。
-- **使用者、通行密鑰和工作階段都是 Kubernetes 物件**：它們位於 `zeabur-identity` Namespace。通行密鑰是 `Credential`，登入後的工作階段是 `Grant`。在伺服器執行 `kubectl -n zeabur-identity get users,credentials,grants` 可列出這些物件，操作方式見[管理使用者](../users/manage-users.mdx)。
+- **使用者、通行密鑰和工作階段都是 Kubernetes 物件**：都放在 `zeabur-identity` Namespace。通行密鑰是 `Credential`，登入後的工作階段是 `Grant`。在伺服器執行 `kubectl -n zeabur-identity get users,credentials,grants` 可列出這些物件，操作方式見[管理使用者](../users/manage-users.mdx)。
 
 接著設定[備份與還原](../operations/backup-restore.mdx)、[升級與回滾](../operations/upgrade.mdx)，並[保留不經過 Zeabur Identity 的入口](../operations/emergency-access.mdx)。日常使用可從[管理使用者](../users/manage-users.mdx)開始，設定[用 GitHub 登入](../users/github-sign-in.mdx)或[用 Google 登入](../users/google-sign-in.mdx)，也能[註冊用戶端](../users/clients.mdx)，讓 Grafana 或 Argo CD 等應用程式使用 Zeabur Identity 登入。
 
@@ -511,7 +511,7 @@ kubectl -n default delete configmap zeabur-identity-permission-check
 | 畫面或結果 | 接著處理 |
 |---|---|
 | 瀏覽器顯示憑證錯誤，或沒有通行密鑰選項 | 在執行瀏覽器的環境執行 `mkcert -install`，確認該環境信任 mkcert 的 CA。檢查憑證名稱是否符合 Issuer 的主機名稱。 |
-| `kubectl` 顯示 `Unauthorized` | 檢查步驟 5 的設定是否成功載入。kube-apiserver 遇到設定檔錯誤時，會忽略該檔案，直到檔案再次變更。在 k3s 伺服器執行 `sudo journalctl -u k3s \| grep -i "authentication config"` 檢視原因。 |
+| `kubectl` 顯示 `Unauthorized` | 檢查步驟 5 的設定是否成功載入。設定檔有錯時，kube-apiserver 會忽略這個檔案，檔案再次變更後才會重新讀取。在 k3s 伺服器執行 `sudo journalctl -u k3s \| grep -i "authentication config"` 檢視原因。 |
 | 連接埠 8000 已占用 | kubelogin 會用這個連接埠接收瀏覽器重新導向的請求。請同時修改 `--listen-address` 和 `--oidc-redirect-url`，改用其他連接埠。已註冊的重新導向 URI 在 127.0.0.1 上可以用任何連接埠。 |
 
 ## 清理

@@ -3,7 +3,7 @@ title: Zeabur Identity architecture
 description: Learn how Zeabur Identity works in a Kubernetes cluster, its security properties, how its components interact, and how its crates divide responsibilities.
 ---
 
-Zeabur Identity is an OpenID Connect Issuer that runs in a self-managed Kubernetes cluster and uses passkeys as its primary sign-in method. kube-apiserver uses [Structured Authentication Configuration][kep-3331] to verify tokens issued by Zeabur Identity itself. You can sign in with a passkey without holding a long-lived admin kubeconfig that can't be revoked. Other OpenID Connect clients, such as Argo CD, Grafana, and Headlamp, can use the same Issuer.
+Zeabur Identity is an OpenID Connect Issuer that runs in a self-managed Kubernetes cluster and uses passkeys as its primary sign-in method. kube-apiserver uses [Structured Authentication Configuration][kep-3331] to verify Zeabur Identity's tokens itself. You can sign in with a passkey without holding a long-lived admin kubeconfig that can't be revoked. Other OpenID Connect clients, such as Argo CD, Grafana, and Headlamp, can use the same Issuer.
 
 k3s and RKE2 use the same configuration. CI tests cover k3s.
 
@@ -84,7 +84,7 @@ The code is split into small crates, all at the same level in the `crates/` dire
 - **A set of traits defines the storage layer.** Separate in-memory and Kubernetes implementations mean most tests don't need a cluster. This follows the ports and adapters architecture; see [Cockburn][cockburn].
 - **The server and admin CLI use separate executables.** Kanidm (`kanidmd`/`kanidm`), etcd (`etcd`/`etcdctl`), and cert-manager (`cmctl`) use the same division of responsibilities. Code that only administrators need to run stays out of the server image.
 
-Each crate has a README that also serves as its crate-level documentation. Open it with `cargo doc --open`.
+Each crate's README is also its crate-level documentation. Open it with `cargo doc --open`.
 
 | Crate | What it holds | Depends on |
 |---|---|---|

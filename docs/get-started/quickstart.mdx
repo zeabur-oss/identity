@@ -510,7 +510,7 @@ Next, configure [Backup and restore](../operations/backup-restore.mdx), [Upgrade
 | Symptom or result | What to do next |
 |---|---|
 | The browser shows a certificate error or no passkey option | Run `mkcert -install` in the environment where the browser runs to confirm that it trusts mkcert's CA. Check that the certificate name matches the Issuer's hostname. |
-| `kubectl` reports `Unauthorized` | Check that the configuration in step 5 loaded successfully. If kube-apiserver encounters an error in the configuration file, it ignores the file until the file changes again. Run `sudo journalctl -u k3s \| grep -i "authentication config"` on the k3s server to find the cause. |
+| `kubectl` reports `Unauthorized` | Check that the configuration in step 5 loaded successfully. kube-apiserver ignores a configuration file with an error until the file changes again. Run `sudo journalctl -u k3s \| grep -i "authentication config"` on the k3s server to find the cause. |
 | Port 8000 is already in use | kubelogin uses this port to receive the browser redirect. Change both `--listen-address` and `--oidc-redirect-url`. The registered redirect URI accepts any port on 127.0.0.1. |
 
 ## Clean up
