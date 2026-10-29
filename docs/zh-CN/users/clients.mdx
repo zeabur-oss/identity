@@ -1,7 +1,7 @@
 ---
 title: 注册客户端
 description: 注册公开或机密客户端，让 Grafana、Argo CD 这类应用通过 Zeabur Identity 登录。
-source: "29f86b6d975f"
+source: "b110b78f2342"
 ---
 
 将应用注册为 Zeabur Identity 客户端后，就能通过 Zeabur Identity 登录。每个客户端都是 Zeabur Identity 所在 Namespace 中的一个 `OAuthClient` 对象，对象名称就是应用的 `client_id`。
@@ -95,7 +95,7 @@ zeabur-identityctl client create grafana --type confidential --display-name Graf
 
 <Callout type="warn">
 
-密钥只会显示一次。集群只保留它的 SHA-256 哈希值，请立即将密钥交给应用。
+密钥只会显示一次。集群只保留密钥的 SHA-256 哈希值，请立即将密钥交给应用。
 
 </Callout>
 
@@ -181,7 +181,7 @@ zeabur-identityctl client create grafana --type confidential --display-name Graf
   | kubectl create --dry-run=client -o yaml -f - > grafana-client.yaml
 ```
 
-使用 `kubectl create --dry-run=client`，不要改成 `kubectl apply --dry-run=client`。`apply` 会加入 `last-applied-configuration` 注解；如果客户端已存在，还会加入 `resourceVersion`，导致文件之后无法应用。
+使用 `kubectl create --dry-run=client`，不要改成 `kubectl apply --dry-run=client`。`apply` 会加入 `last-applied-configuration` 注解；客户端已存在时还会加入 `resourceVersion`，文件之后就无法应用。
 
 </Step>
 

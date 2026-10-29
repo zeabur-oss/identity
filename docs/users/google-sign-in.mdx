@@ -120,7 +120,7 @@ Select **Continue with Google** on the sign-in page, sign in with a linked regul
 
 ### Remove a user's access
 
-A linked Google account is a `Credential`, just like a passkey. Remove that credential as described in [Manage users](./manage-users.mdx) to prevent the user from signing in again with that Google account.
+A linked Google account is a `Credential`, like a passkey. Remove that credential as described in [Manage users](./manage-users.mdx) to prevent the user from signing in again with that Google account.
 
 To end existing sessions, you also need to sign the user out. To revoke all access, disable or remove the user. See [Sign out, recover, and remove users](./offboarding.mdx).
 
@@ -145,7 +145,7 @@ Disabling Google sign-in doesn't remove linked accounts or end existing sessions
 | --- | --- |
 | `redirect_uri_mismatch` | Check the client ID and authorized redirect URI. The scheme, hostname, and `/upstream/google/callback` must match exactly. Local names such as `identity.example.test` don't meet Google's domain rules. |
 | `org_internal` or a Google access policy error | Check the application's **Audience** and the policies of the account's organization. See [Google's audience rules](https://support.google.com/cloud/answer/15549945). |
-| **This account is not linked to any user here** | Use an invitation to link the selected Google account to a user. A matching email address or name doesn't mean the account is linked. |
+| **This account is not linked to any user here** | Use an invitation to link the selected Google account to a user. Zeabur Identity doesn't match accounts by email address or name. |
 | **Use a passkey for this account** | The Google account maps to an admin account. Admins can only sign in with passkeys. |
 | No Google button on the sign-in page, or the Pod can't read the secret | Check the two `--google-*` options, `--config-secret zeabur-identity-config`, the `google-client-secret` key in the Secret, and the file path. If you customized the Pod's security context, keep the generated `fsGroup`. |
 | Sign-in fails after returning from Google | Run `kubectl -n zeabur-identity logs deploy/zeabur-identity` to view the logs, and check whether the Pod can reach the token and signing key hosts over HTTPS: `oauth2.googleapis.com` and `www.googleapis.com`. |

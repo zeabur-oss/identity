@@ -1,7 +1,7 @@
 ---
 title: 让用户用 Google 登录
 description: 配置 Google OAuth 客户端并关联用户账号，让普通账号使用 Google 登录 Zeabur Identity。
-source: "b297dce33371"
+source: "fbfb872646a8"
 ---
 
 配置 Google OAuth 客户端，再将 Google 账号关联到 Zeabur Identity 用户，用户就能在登录页选择 **Continue with Google**。管理员账号只能用通行密钥登录，不能关联 Google 账号。
@@ -136,7 +136,7 @@ kubectl -n zeabur-identity rollout status deploy/zeabur-identity
 
 ### 关闭 Google 登录
 
-重新生成 Deployment 时，移除两个 `--google-*` 选项，并保留其他选项。如果不再需要该 OAuth 客户端，也在 Google Cloud Console 删除它。
+重新生成 Deployment 时，移除两个 `--google-*` 选项，并保留其他选项。如果不再需要该 OAuth 客户端，也在 Google Cloud Console 删除这个客户端。
 
 关闭 Google 登录不会移除已关联的账号，也不会结束现有会话。需要撤销访问权限时，按上方流程移除凭据并让用户退出登录。
 
@@ -146,7 +146,7 @@ kubectl -n zeabur-identity rollout status deploy/zeabur-identity
 | --- | --- |
 | `redirect_uri_mismatch` | 检查客户端 ID 和授权的重定向 URI。协议、主机名及 `/upstream/google/callback` 都必须完全匹配。`identity.example.test` 这类本地名称不符合 Google 的域名规则。 |
 | `org_internal` 或 Google 访问政策错误 | 检查应用的 **Audience** 和账号所属组织的政策，详见 [Google 的受众规则](https://support.google.com/cloud/answer/15549945)。 |
-| **This account is not linked to any user here** | 使用邀请将选定的 Google 账号关联到用户。电子邮件地址或姓名相同，不代表账号已关联。 |
+| **This account is not linked to any user here** | 使用邀请将选定的 Google 账号关联到用户。Zeabur Identity 不按电子邮件地址或姓名匹配账号。 |
 | **Use a passkey for this account** | 该 Google 账号对应管理员账号。管理员只能使用通行密钥登录。 |
 | 登录页没有 Google 按钮，或 Pod 无法读取密钥 | 检查两个 `--google-*` 选项、`--config-secret zeabur-identity-config`、Secret 中的 `google-client-secret` 键和文件路径。如果你自定义了 Pod 的安全上下文，请保留生成的 `fsGroup`。 |
 | 从 Google 返回后登录失败 | 执行 `kubectl -n zeabur-identity logs deploy/zeabur-identity` 查看日志，并检查 Pod 能否通过 HTTPS 连接令牌和签名密钥主机：`oauth2.googleapis.com` 和 `www.googleapis.com`。 |

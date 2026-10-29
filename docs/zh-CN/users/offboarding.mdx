@@ -13,9 +13,9 @@ kubectl -n zeabur-identity get zbgrant -l identity.zeabur.com/user=alice
 kubectl -n zeabur-identity delete zbgrant -l identity.zeabur.com/user=alice
 ```
 
-每个已登录的会话都是一个 `Grant`。上述命令会列出并删除 `alice` 的所有会话。
+每个已登录的会话都是一个 `Grant`。上面的命令会列出并删除 `alice` 的所有会话。
 
-删除后，这些会话无法再刷新令牌。用户持有的令牌仍可使用，直到过期，最长为 10 分钟。
+删除后，这些会话无法再刷新令牌。用户持有的令牌在过期前仍可使用，最长 10 分钟。
 
 ## 通行密钥丢失时找回账号
 
@@ -71,7 +71,7 @@ kubectl -n zeabur-identity delete zbuser alice
 
 这些对象都绑定原有 `User` 的 UID。即使创建同名的 `User`，新对象也会获得新的 UID。
 
-用户持有的令牌仍可使用，直到过期，最长为 10 分钟。
+用户持有的令牌在过期前仍可使用，最长 10 分钟。
 
 Kubernetes 垃圾回收机制会在稍后删除相关对象。若要立即删除，可以在删除 `User` 前或后执行：
 

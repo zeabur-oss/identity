@@ -1,14 +1,14 @@
 ---
 title: 讓使用者用 GitHub 登入
 description: 啟用 GitHub 登入，將 GitHub 帳號連結到一般帳號，讓使用者用 GitHub 帳號存取叢集。
-source: "9b9993029cc0"
+source: "9f57e1bad11c"
 ---
 
-在 Zeabur Identity 啟用 GitHub 登入，再將 GitHub 帳號連結到一般帳號。使用者就能在登入頁面選擇 **Continue with GitHub**，用 GitHub 帳號登入。
+在 Zeabur Identity 啟用 GitHub 登入，再將 GitHub 帳號連結到一般帳號，使用者就能在登入頁面選擇 **Continue with GitHub**，用 GitHub 帳號登入。
 
 ![登入頁面，有通行密鑰按鈕和 Continue with GitHub](../../images/sign-in-light.avif)
 
-你可以決定哪些人能登入。未連結的 GitHub 帳號無法登入，Zeabur Identity 也不會為它建立使用者。GitHub 組織與團隊不影響存取權限，使用者所屬的群組仍由 `User` 決定。Zeabur Identity 會記錄 GitHub 的數字帳號 ID。即使登入名稱或電子郵件轉給其他人，也不會影響帳號識別。
+你可以決定哪些人能登入。未連結的 GitHub 帳號無法登入，Zeabur Identity 也不會為這些帳號建立使用者。GitHub 組織與團隊不影響存取權限，使用者所屬的群組仍由 `User` 決定。Zeabur Identity 會記錄 GitHub 的數字帳號 ID。即使登入名稱或電子郵件轉給其他人，也不會影響帳號識別。
 
 ## 開始前
 
@@ -182,7 +182,7 @@ kubectl auth whoami          # choose "Continue with GitHub"; the user is zeabur
 - 將使用者登出，結束已建立的工作階段。操作步驟請見[登出、救援與移除使用者](./offboarding.mdx)。
 - 停用或移除使用者，撤銷所有存取權限。操作步驟請見[登出、救援與移除使用者](./offboarding.mdx)。
 
-若要關閉 GitHub 登入，請重新產生部署設定，移除兩個 `--github-*` 選項，保留其他選項，再到 GitHub 刪除 OAuth 應用程式。已連結的帳號與現有工作階段仍會保留，需要依上述步驟移除。
+若要關閉 GitHub 登入，請重新產生部署設定，移除兩個 `--github-*` 選項，保留其他選項，再到 GitHub 刪除 OAuth 應用程式。已連結的帳號與現有工作階段仍會保留，需要依上面的步驟移除。
 
 ## 遇到問題
 

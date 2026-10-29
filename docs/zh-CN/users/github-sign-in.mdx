@@ -1,7 +1,7 @@
 ---
 title: 让用户用 GitHub 登录
 description: 启用 GitHub 登录并关联普通账号，让用户通过 GitHub 账号访问集群。
-source: "9b9993029cc0"
+source: "9f57e1bad11c"
 ---
 
 在 Zeabur Identity 启用 GitHub 登录，并将 GitHub 账号关联到普通账号后，用户就能在登录页面选择 **Continue with GitHub**，用 GitHub 账号登录。
@@ -179,10 +179,10 @@ kubectl auth whoami          # choose "Continue with GitHub"; the user is zeabur
 已关联的 GitHub 账号和通行密钥一样，都是 `Credential`：
 
 - 移除已关联的账号，阻止该账号发起新的登录。操作见[管理用户](./manage-users.mdx)。
-- 让用户退出登录，结束已建立的会话。操作见[退出登录、恢复与移除用户](./offboarding.mdx)。
+- 让用户退出登录，结束已创建的会话。操作见[退出登录、恢复与移除用户](./offboarding.mdx)。
 - 停用或移除用户，撤销所有访问权限。操作见[退出登录、恢复与移除用户](./offboarding.mdx)。
 
-要关闭 GitHub 登录，重新生成部署配置时移除两个 `--github-*` 选项，保留其他选项，再到 GitHub 删除 OAuth 应用。已关联的账号和现有会话仍会保留，需要按上述方式移除。
+要关闭 GitHub 登录，重新生成部署配置时移除两个 `--github-*` 选项，保留其他选项，再到 GitHub 删除 OAuth 应用。已关联的账号和现有会话仍会保留，需要按上面的方式移除。
 
 ## 遇到问题
 

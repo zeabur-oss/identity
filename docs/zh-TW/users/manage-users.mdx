@@ -67,7 +67,7 @@ zeabur-identityctl invite --username alice --display-name "Alice Chen" --group d
 
 <Callout type="warn">
 
-連結沒用過、也沒到期前，誰拿到連結，誰就能當 Alice。請只把連結交給她本人。
+連結用過或到期之前，拿到連結的人都能以 Alice 的身分登入。請只把連結交給她本人。
 
 </Callout>
 
@@ -142,9 +142,9 @@ kubectl -n zeabur-identity patch zbuser alice --type=merge -p '{"spec":{"disable
 kubectl -n zeabur-identity patch zbuser alice --type=merge -p '{"spec":{"groups":["dev","oncall"]}}'
 ```
 
-Zeabur Identity 下次簽發權杖時，才會加入新的群組設定。已簽發的權杖會保留舊群組，直到到期。`kubectl` 使用的權杖會在 10 分鐘內到期。
+Zeabur Identity 下次簽發權杖時，才會加入新的群組設定。已簽發的權杖到期前會保留舊群組，`kubectl` 使用的權杖會在 10 分鐘內到期。
 
-請先讀取群組設定，再請使用者於下次登入後，用自己的 kubeconfig 確認 kube-apiserver 看到的身分：
+請先讀取群組設定，再請使用者在下次登入後，用自己的 kubeconfig 確認 kube-apiserver 看到的身分：
 
 ```sh
 kubectl -n zeabur-identity get zbuser alice -o jsonpath='{.spec.groups}'
@@ -155,7 +155,7 @@ kubectl auth whoami          # Groups lists zeabur:dev and zeabur:oncall
 
 `groups` 不接受 `admins` 群組。是否屬於這個群組，只由帳號類型決定，詳見[管理員帳號與工作階段](./admin-sessions.mdx)。
 
-使用者名稱無法修改，因為 RBAC 綁定與稽核紀錄都會參照它。要更換使用者名稱，請先建立新使用者，再[移除舊使用者](./offboarding.mdx)。
+使用者名稱無法修改，RBAC 綁定與稽核紀錄都會參照使用者名稱。要更換使用者名稱，請先建立新使用者，再[移除舊使用者](./offboarding.mdx)。
 
 ## 使用者自己管理帳號
 

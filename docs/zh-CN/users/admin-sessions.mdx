@@ -12,7 +12,7 @@ source: "55e2a5c129fb"
 
 只有管理员账号的令牌带有 `admins` 组，Kubernetes 将这个组识别为 `zeabur:admins`。安装程序会通过 ClusterRoleBinding `zeabur-identity-cluster-admins`，将 `zeabur:admins` 绑定到 `cluster-admin`。管理员登录后立即拥有完整的集群权限，无需再次登录。
 
-普通账号只有你绑定到其组的权限，默认没有任何权限绑定。
+普通账号只有你为所属组绑定的权限，默认没有任何权限。
 
 <Callout type="warn">
 
@@ -69,7 +69,7 @@ kubectl -n zeabur-identity get zbuser            # the Type column shows the acc
 
 12 小时从使用通行密钥、GitHub 或 Google 登录时开始计算，刷新令牌不会重置这个时限。
 
-Zeabur Identity 不保留单点登录会话，因此每次授权请求都会显示登录页面。令牌响应中的 `refresh_expires_in` 表示刷新令牌距离空闲超时还剩多少秒。
+Zeabur Identity 不保留单点登录会话，所以每次授权请求都会显示登录页面。令牌响应中的 `refresh_expires_in` 表示刷新令牌距离空闲超时还剩多少秒。
 
 将以下选项传给 `zeabur-identity`，即可调整限制。生成安装清单时，使用 `--serve-arg` 传入。
 
@@ -135,7 +135,7 @@ kubectl -n zeabur-identity get zbcred \
 
 每位管理员都必须至少有一把 `BE` 为 `false` 的通行密钥。
 
-没有这类通行密钥的管理员将无法登录，直到你运行以下命令，并由管理员使用新的设置链接注册安全密钥：
+没有这类通行密钥的管理员会无法登录。要恢复登录，先运行以下命令，再请管理员用新的设置链接注册安全密钥：
 
 ```sh
 zeabur-identityctl setup-link --username <admin> --reset

@@ -67,7 +67,7 @@ zeabur-identityctl invite --username alice --display-name "Alice Chen" --group d
 
 <Callout type="warn">
 
-在链接使用或到期之前，任何持有链接的人都能成为 Alice。只将链接交给她本人。
+在链接使用或到期之前，任何持有链接的人都能以 Alice 的身份登录。只将链接交给她本人。
 
 </Callout>
 
@@ -142,7 +142,7 @@ kubectl -n zeabur-identity patch zbuser alice --type=merge -p '{"spec":{"disable
 kubectl -n zeabur-identity patch zbuser alice --type=merge -p '{"spec":{"groups":["dev","oncall"]}}'
 ```
 
-群组变更会出现在 Zeabur Identity 下一次签发的令牌中。已签发的令牌会保留旧群组，直到到期；`kubectl` 使用的令牌会在 10 分钟内到期。
+群组变更会出现在 Zeabur Identity 下一次签发的令牌中。已签发的令牌在到期前会保留旧群组，`kubectl` 使用的令牌会在 10 分钟内到期。
 
 先读取群组，再请用户在下次登录后，用自己的 kubeconfig 确认 kube-apiserver 看到的身份：
 
@@ -155,7 +155,7 @@ kubectl auth whoami          # Groups lists zeabur:dev and zeabur:oncall
 
 `groups` 不接受 `admins` 群组。这个群组只由账号类型决定，详见[管理员账号与会话](./admin-sessions.mdx)。
 
-用户名无法修改，因为 RBAC 绑定和审计记录都会引用它。要更换用户名，创建新用户后，再[移除旧用户](./offboarding.mdx)。
+用户名无法修改，RBAC 绑定和审计记录都会引用用户名。要更换用户名，创建新用户后，再[移除旧用户](./offboarding.mdx)。
 
 ## 用户自行管理账号
 
@@ -192,4 +192,4 @@ kubectl -n zeabur-identity get zbcred -l identity.zeabur.com/user=alice
 kubectl -n zeabur-identity delete zbcred <name>
 ```
 
-删除后，该凭据无法再次用于登录。直接删除 `Credential` 不会结束它之前创建的会话，这些会话仍可继续使用；请按照[退出登录、恢复账号与移除用户](./offboarding.mdx)中的说明让用户退出登录。在账号页面移除凭据则会一并结束相关会话。
+删除后，该凭据无法再次用于登录。直接删除 `Credential` 不会结束之前用这个凭据创建的会话，这些会话仍可继续使用；请按照[退出登录、恢复账号与移除用户](./offboarding.mdx)中的说明让用户退出登录。在账号页面移除凭据则会一并结束相关会话。

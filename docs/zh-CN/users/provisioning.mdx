@@ -159,11 +159,11 @@ Kubernetes 以 `zeabur:<username>` 识别每个 `User`。如果两个对象的�
 
 `zeabur-identityctl invite` 和 `zeabur-identityctl setup-link` 也会检查相同规则。
 
-如果目录以电子邮件地址识别人员，请从地址生成符合规则的短名称，例如将 `alice.chen@example.com` 转成 `alice.chen`。不同人员会生成相同的短名称，因此同步程序更新用户前，仍须检查目录 ID。
+如果目录以电子邮件地址识别人员，请从地址生成符合规则的短名称，例如将 `alice.chen@example.com` 转成 `alice.chen`。不同人员可能生成相同的短名称，因此同步程序更新用户前，仍须检查目录 ID。
 
 #### 测试策略
 
-使用策略前，先确认它会拒绝不允许的写入。以下两个命令都必须失败：
+使用策略前，先确认策略会拒绝不允许的写入。以下两个命令都必须失败：
 
 ```sh
 as=(--as=system:serviceaccount:zeabur-identity:user-sync)

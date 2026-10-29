@@ -12,7 +12,7 @@ source: "55e2a5c129fb"
 
 只有管理員帳號的權杖帶有 `admins` 群組，Kubernetes 會將這個群組識別為 `zeabur:admins`。安裝程式會用 ClusterRoleBinding `zeabur-identity-cluster-admins`，將 `zeabur:admins` 綁定至 `cluster-admin`。管理員登入後就有完整的叢集權限，不需要再次登入。
 
-一般帳號只有你為其群組綁定的權限，預設沒有綁定任何權限。
+一般帳號只有你為所屬群組綁定的權限，預設沒有任何權限。
 
 <Callout type="warn">
 
@@ -69,7 +69,7 @@ kubectl -n zeabur-identity get zbuser            # the Type column shows the acc
 
 這 12 小時從使用通行密鑰、GitHub 或 Google 登入時起算，更新權杖不會重設這個時限。
 
-Zeabur Identity 不保留單一登入工作階段，因此每次授權請求都會顯示登入頁面。權杖回應中的 `refresh_expires_in` 表示更新權杖還有多少秒會閒置逾時。
+Zeabur Identity 不保留單一登入工作階段，所以每次授權請求都會顯示登入頁面。權杖回應中的 `refresh_expires_in` 是更新權杖距離閒置逾時還剩的秒數。
 
 將下列選項傳給 `zeabur-identity`，就能調整限制。產生安裝資訊清單時，使用 `--serve-arg` 傳入。
 
@@ -85,7 +85,7 @@ Zeabur Identity 不保留單一登入工作階段，因此每次授權請求都�
 
 ## 全站設定
 
-下列設定存放在 ConfigMap `zeabur-identity-settings` 中。這個 ConfigMap 與 Zeabur Identity 位於同一個 Namespace：
+下列設定存放在 ConfigMap `zeabur-identity-settings`，這個 ConfigMap 和 Zeabur Identity 在同一個 Namespace：
 
 | 鍵 | 可用值 | 預設值 | 用途 |
 |---|---|---|---|
@@ -135,7 +135,7 @@ kubectl -n zeabur-identity get zbcred \
 
 每位管理員都必須至少有一把 `BE` 為 `false` 的通行密鑰。
 
-如果管理員沒有這類通行密鑰，就會無法登入。你必須先執行下列指令，再請管理員使用新的設定連結註冊安全金鑰，才能還原登入：
+沒有這類通行密鑰的管理員會無法登入。要恢復登入，先執行下列指令，再請管理員用新的設定連結註冊安全金鑰：
 
 ```sh
 zeabur-identityctl setup-link --username <admin> --reset

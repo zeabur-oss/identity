@@ -1,10 +1,10 @@
 ---
 title: 註冊用戶端
 description: 註冊公開或機密用戶端，讓 Grafana、Argo CD 這類應用程式用 Zeabur Identity 登入。
-source: "29f86b6d975f"
+source: "b110b78f2342"
 ---
 
-將應用程式註冊為 Zeabur Identity 用戶端後，就能用 Zeabur Identity 登入。每個用戶端都是一個 `OAuthClient` 物件，放在 Zeabur Identity 所在的 Namespace 中。物件名稱就是應用程式的 `client_id`。
+將應用程式註冊為 Zeabur Identity 用戶端後，就能用 Zeabur Identity 登入。每個用戶端都是一個 `OAuthClient` 物件，放在 Zeabur Identity 所在的 Namespace，物件名稱就是應用程式的 `client_id`。
 
 `kubectl` 也是用戶端。[在 k3s 上安裝並登入](../get-started/quickstart.mdx)的步驟已註冊這個用戶端。
 
@@ -139,7 +139,7 @@ unset CLIENT_SECRET
 
 使用 `zeabur-identityctl client create` 產生密鑰，不要自行挑選密碼作為密鑰。
 
-只要能讀取 `OAuthClient` 物件或 Git 儲存庫，就能看到密鑰的雜湊值。計算雜湊值時沒有加鹽，因此密鑰適合使用較長的隨機值。自己想的密碼很容易被離線猜出來，Zeabur Identity 也發現不了。
+只要能讀取 `OAuthClient` 物件或 Git 儲存庫，就能看到密鑰的雜湊值。計算雜湊值時沒有加鹽，因此密鑰適合使用較長的隨機值。自己想的密碼很容易遭人離線猜出，Zeabur Identity 也無法察覺。
 
 若不使用 `zeabur-identityctl`，請自行產生 32 個隨機位元組，再計算雜湊值：
 
@@ -181,7 +181,7 @@ zeabur-identityctl client create grafana --type confidential --display-name Graf
   | kubectl create --dry-run=client -o yaml -f - > grafana-client.yaml
 ```
 
-使用 `kubectl create --dry-run=client`，不要改成 `kubectl apply --dry-run=client`。`apply` 會加入 `last-applied-configuration` 註解。如果用戶端已存在，還會加入 `resourceVersion`，導致檔案之後無法套用。
+使用 `kubectl create --dry-run=client`，不要改成 `kubectl apply --dry-run=client`。`apply` 會加入 `last-applied-configuration` 註解；用戶端已存在時還會加入 `resourceVersion`，檔案之後就無法套用。
 
 </Step>
 

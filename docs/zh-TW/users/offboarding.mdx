@@ -4,7 +4,7 @@ description: 登出使用者、重設遺失通行密鑰的帳號、停用或移�
 source: "10772266ee5e"
 ---
 
-刪除工作階段就能登出使用者。重設帳號則能讓使用者重新取得存取權。要停止使用者存取，先停用帳號，確定不再需要後再移除。你也可以把 `User` 設定存進 Git，交給 GitOps 管理。
+刪除工作階段就能登出使用者，重設帳號能讓使用者重新取得存取權。要停止使用者存取，先停用帳號，確定不再需要後再移除。你也可以把 `User` 設定存進 Git，交給 GitOps 管理。
 
 ## 登出使用者
 
@@ -13,9 +13,9 @@ kubectl -n zeabur-identity get zbgrant -l identity.zeabur.com/user=alice
 kubectl -n zeabur-identity delete zbgrant -l identity.zeabur.com/user=alice
 ```
 
-每個已登入的工作階段都對應一個 `Grant`。上述指令會列出並刪除 `alice` 的所有工作階段。
+每個已登入的工作階段都對應一個 `Grant`。上面的指令會列出並刪除 `alice` 的所有工作階段。
 
-刪除後，這些工作階段就無法再更新權杖。使用者手上的權杖仍可使用，直到到期，最長為 10 分鐘。
+刪除後，這些工作階段就無法再更新權杖。使用者手上的權杖到期前仍可使用，最長 10 分鐘。
 
 ## 通行密鑰遺失時救援帳號
 
@@ -49,7 +49,7 @@ zeabur-identityctl invite --username alice --reset
 kubectl -n zeabur-identity patch zbuser alice --type=merge -p '{"spec":{"disabled":true}}'
 ```
 
-移除使用者前，先停用帳號。停用後，使用者無法登入，工作階段也無法再更新權杖。設定連結與邀請也會失效。
+移除使用者前，先停用帳號。停用後，使用者無法登入，工作階段也無法再更新權杖，設定連結與邀請也會失效。
 
 停用帳號不會刪除任何資料。把 `disabled` 改回 `false` 就能還原帳號。
 
@@ -71,7 +71,7 @@ kubectl -n zeabur-identity delete zbuser alice
 
 這些物件都綁定原本 `User` 的 UID。即使建立同名的 `User`，新物件也會取得新的 UID。
 
-使用者手上的權杖仍可使用，直到到期，最長為 10 分鐘。
+使用者手上的權杖到期前仍可使用，最長 10 分鐘。
 
 Kubernetes 垃圾回收機制稍後會刪除相關物件。如果要立即刪除，可以在刪除 `User` 前或後執行：
 

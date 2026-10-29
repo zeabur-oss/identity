@@ -1,7 +1,7 @@
 ---
 title: 讓使用者用 Google 登入
 description: 設定 Google OAuth 用戶端並連結使用者帳號，讓一般帳號使用 Google 登入 Zeabur Identity。
-source: "b297dce33371"
+source: "fbfb872646a8"
 ---
 
 設定 Google OAuth 用戶端，再把 Google 帳號連結到 Zeabur Identity 使用者。使用者就能在登入頁選擇 **Continue with Google**。管理員帳號只能用通行密鑰登入，不能連結 Google 帳號。
@@ -34,7 +34,7 @@ Google 帳號必須先連結到 Zeabur Identity 使用者，才能登入。Zeabu
 依照 Google 的 [OpenID Connect 設定文件](https://developers.google.com/identity/openid-connect/openid-connect) 和[同意畫面設定指南](https://developers.google.com/workspace/guides/configure-oauth-consent)，在 Google Cloud Console 完成以下設定：
 
 1. 選取或建立專案。在 **Google Auth platform → Branding** 設定應用程式名稱、支援電子郵件和聯絡資料。
-2. 在 **Audience** 選擇 **Internal**，只允許你的 Google Workspace 組織使用。若要允許任何 Google 帳號使用，則選擇 **External**。不論選哪一種，使用者都必須先連結 Zeabur Identity 帳號。依照 [Google 的發布規則](https://support.google.com/cloud/answer/15549945)，應用程式在測試模式下會有使用限制。不過，只要求 `openid` 的應用程式不受這項限制，Zeabur Identity 就屬於這種情況。
+2. 在 **Audience** 選擇 **Internal**，只允許你的 Google Workspace 組織使用。若要允許任何 Google 帳號使用，則選擇 **External**。不論選哪一種，使用者都必須先連結 Zeabur Identity 帳號。依照 [Google 的發布規則](https://support.google.com/cloud/answer/15549945)，應用程式在測試模式下會有使用限制。只要求 `openid` 的應用程式不受這項限制，Zeabur Identity 就是這種應用程式。
 3. 在 **Data Access** 只宣告 `openid` 範圍，不需要 Google API 資料存取權。
 4. 在 **Clients → Create Client** 選擇 **Web application**，設定名稱，並在 **Authorized redirect URI** 加入以下 URI。將網域替換成你的 Issuer：
 
@@ -136,7 +136,7 @@ kubectl -n zeabur-identity rollout status deploy/zeabur-identity
 
 ### 關閉 Google 登入
 
-重新產生 Deployment 時，移除兩個 `--google-*` 選項，並保留其他選項。如果不再需要該 OAuth 用戶端，也到 Google Cloud Console 刪除它。
+重新產生 Deployment 時，移除兩個 `--google-*` 選項，並保留其他選項。如果不再需要該 OAuth 用戶端，也到 Google Cloud Console 刪除這個用戶端。
 
 關閉 Google 登入不會移除已連結的帳號，也不會結束現有工作階段。需要撤銷存取權時，依上方流程移除認證資訊並將使用者登出。
 
@@ -146,7 +146,7 @@ kubectl -n zeabur-identity rollout status deploy/zeabur-identity
 | --- | --- |
 | `redirect_uri_mismatch` | 檢查用戶端 ID 和授權的重新導向 URI。通訊協定、主機名稱及 `/upstream/google/callback` 都必須完全相符。`identity.example.test` 這類本機名稱不符合 Google 的網域規則。 |
 | `org_internal` 或 Google 存取政策錯誤 | 確認應用程式的 **Audience** 設定是否允許這個帳號登入，也確認帳號所屬組織的政策是否允許存取，詳見 [Google 的對象規則](https://support.google.com/cloud/answer/15549945)。 |
-| **This account is not linked to any user here** | 用邀請將選取的 Google 帳號連結到使用者。電子郵件地址或姓名相同，不代表帳號已連結。 |
+| **This account is not linked to any user here** | 用邀請將選取的 Google 帳號連結到使用者。Zeabur Identity 不依電子郵件地址或姓名配對帳號。 |
 | **Use a passkey for this account** | 該 Google 帳號對應到管理員帳號。管理員只能使用通行密鑰登入。 |
 | 登入頁沒有 Google 按鈕，或 Pod 無法讀取密鑰 | 檢查兩個 `--google-*` 選項、`--config-secret zeabur-identity-config`、Secret 中的 `google-client-secret` 鍵和檔案路徑。如果你自訂了 Pod 的安全性內容，請保留產生的 `fsGroup`。 |
 | 從 Google 返回後登入失敗 | 執行 `kubectl -n zeabur-identity logs deploy/zeabur-identity` 檢視日誌，並檢查 Pod 能否用 HTTPS 連到權杖和簽署金鑰主機：`oauth2.googleapis.com` 與 `www.googleapis.com`。 |
