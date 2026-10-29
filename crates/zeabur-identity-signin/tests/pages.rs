@@ -193,6 +193,7 @@ mod tests {
             "<div id=\"request\"",
         );
         assert!(ended.contains("This sign-in expired"));
+        assert!(ended.contains("another browser. Open an app below."));
         assert!(ended.contains("Open Cluster Dashboard"));
         assert!(
             !page
@@ -238,6 +239,22 @@ mod tests {
             page.body.contains("&#34;&#62;&#60;script&#62;")
                 || page.body.contains("&quot;&gt;&lt;script&gt;")
         );
+    }
+
+    #[tokio::test]
+    async fn chinese_sentences_join_without_a_space() {
+        let app = app().await;
+        let cookie = pending_request(&app).await;
+        for (lang, joined) in [("zh-TW", "開始的。開啟下方"), ("zh-CN", "发起的。打开下方")]
+        {
+            let page = get(&app, &format!("/login?lang={lang}"), &[("cookie", &cookie)]).await;
+            let ended = section(
+                &page.body,
+                "<div id=\"ended\" hidden",
+                "<div id=\"request\"",
+            );
+            assert!(ended.contains(joined), "{lang}");
+        }
     }
 
     #[tokio::test]

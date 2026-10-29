@@ -1,6 +1,6 @@
 //! Interface languages: English, Traditional Chinese (Taiwan), Simplified Chinese.
 //!
-//! Wording and terms follow `docs/wording.md` in the Zeabur repository.
+//! Wording and terms follow `docs/internal/wording.md` in the Zeabur repository.
 
 /// A supported interface language.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -151,6 +151,8 @@ pub struct Messages {
     pub error_title: &'static str,
     pub error_body: &'static str,
     pub error_detail_label: &'static str,
+    /// Between two sentences joined in one paragraph: a space in English, nothing after 。.
+    pub sentence_gap: &'static str,
     /// `%provider%` is replaced with the provider's name, for example GitHub.
     pub continue_with: &'static str,
     pub upstream_or: &'static str,
@@ -274,6 +276,7 @@ pub const EN: Messages = Messages {
     error_title: "Unable to continue sign-in",
     error_body: "Go back to the app and start again. If this keeps happening, contact your administrator.",
     error_detail_label: "Details",
+    sentence_gap: " ",
     continue_with: "Continue with %provider%",
     upstream_or: "or",
     upstream_linked_title: "Account linked",
@@ -447,6 +450,7 @@ pub const ZH_TW: Messages = Messages {
     error_title: "無法繼續登入",
     error_body: "回到應用程式重新開始。如果一直發生，請聯絡管理員。",
     error_detail_label: "詳細資訊",
+    sentence_gap: "",
     continue_with: "使用 %provider% 繼續",
     upstream_or: "或",
     upstream_linked_title: "已連結帳號",
@@ -620,6 +624,7 @@ pub const ZH_CN: Messages = Messages {
     error_title: "无法继续登录",
     error_body: "返回应用重新开始。如果一直出现，请联系管理员。",
     error_detail_label: "详细信息",
+    sentence_gap: "",
     continue_with: "使用 %provider% 继续",
     upstream_or: "或",
     upstream_linked_title: "已关联账号",

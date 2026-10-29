@@ -22,7 +22,7 @@
     {#- Shown by the script once the request has ended: signing in can then only fail. -#}
     <div id="ended" hidden tabindex="-1" class="flex flex-col gap-5 outline-none">
       {% call ui::alert(m.err_request_expired.title, "default", "WarningCircle", live = "") -%}
-      {{ m.err_request_expired.cause }} {% if apps.is_empty() %}{{ m.err_request_expired.next }}{% else %}{{ m.no_request_apps_body }}{% endif %}
+      {{ m.err_request_expired.cause }}{{ m.sentence_gap }}{% if apps.is_empty() %}{{ m.err_request_expired.next }}{% else %}{{ m.no_request_apps_body }}{% endif %}
       {%- endcall %}
       {{ ui::app_links(apps, m) }}
     </div>
