@@ -79,7 +79,7 @@ sudo $KUBECTL get --raw=/readyz
 
 ### Safeguard emergency credentials
 
-- Don't keep the admin kubeconfig on your everyday computer. It has `cluster-admin` privileges.
+- The admin kubeconfig has `cluster-admin` privileges. Don't keep it on your everyday computer.
 - Keep an encrypted copy offline, outside the cluster, and store the decryption key separately. If the only copy is on the server, you'll lose it when you lose the server.
 - Track certificate expiration dates, and renew certificates according to your distribution's procedure. A kubeconfig that works on installation day will still expire.
 
@@ -240,7 +240,7 @@ kubectl auth can-i '*' '*' --all-namespaces   # yes for an admin account
 
 Verify that the username is `zeabur:<username>`. The permission check should return `yes` for an admin account.
 
-Right after kube-apiserver restarts, login attempts briefly return `oidc: authenticator not initialized` because it hasn't fetched Zeabur Identity's keys yet. Wait a few minutes and try again. If the error persists, check the kube-apiserver logs, the `zeabur-identity` Service's endpoints, and the internal certificate. Don't disable certificate verification.
+Right after kube-apiserver restarts, login attempts briefly return `oidc: authenticator not initialized` because kube-apiserver hasn't fetched Zeabur Identity's keys yet. Wait a few minutes and try again. If the error persists, check the kube-apiserver logs, the `zeabur-identity` Service's endpoints, and the internal certificate. Don't disable certificate verification.
 
 ### Verify that kube-apiserver has recovered
 

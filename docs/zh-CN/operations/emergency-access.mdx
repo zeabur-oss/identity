@@ -1,7 +1,7 @@
 ---
 title: 保留不经过 Zeabur Identity 的入口
 description: 准备好管理员 kubeconfig 和控制平面主机的访问方式，在 Zeabur Identity 或 kube-apiserver 故障时恢复集群访问。
-source: "549eb2754155"
+source: "39f00a7f124a"
 ---
 
 先记录 kube-apiserver 的现有配置，并确认使用客户端证书的管理员 kubeconfig 可用。保留这份 kubeconfig，以及每台控制平面主机的 SSH 或控制台入口。Zeabur Identity 或登录页故障时，你仍能访问集群；kube-apiserver 无法启动时，你也能直接在主机上修复配置。
@@ -47,7 +47,7 @@ sudo cp -a /etc/rancher/k3s "$RECOVERY/k3s"           # K3s
 sudo cp -a /etc/rancher/rke2 "$RECOVERY/rke2"         # RKE2
 ```
 
-这些副本会包含私钥。另存一份加密副本到主机以外的位置。
+这些副本包含私钥。另外加密一份，存到主机以外的位置。
 
 如果集群现有的认证配置文件已包含其他 Issuer，保留原文件，将 Zeabur Identity 的 `jwt` 项加入其中。不要直接用 Zeabur Identity 生成的文件覆盖。
 
@@ -80,7 +80,7 @@ sudo $KUBECTL get --raw=/readyz
 
 ### 保管紧急凭证
 
-- 不要把管理员 kubeconfig 放在日常使用的电脑上。它具有 `cluster-admin` 权限。
+- 管理员 kubeconfig 具有 `cluster-admin` 权限，不要放在日常使用的电脑上。
 - 将加密副本离线保存到集群以外的位置，解密密钥分开存放。只留在服务器上的副本会随服务器一起丢失。
 - 留意证书到期日，并按发行版的流程更新证书。安装当天能用的 kubeconfig 仍会到期。
 
@@ -128,7 +128,7 @@ sudo k3s kubectl -n zeabur-identity logs deploy/zeabur-identity --tail=100
 
 ### 修复故障组件
 
-如果 Zeabur Identity 的副本数降为零，将它调回平常的副本数。标准安装使用 1 个副本：
+如果 Zeabur Identity 的副本数降为零，调回平常的副本数。标准安装使用 1 个副本：
 
 ```sh
 sudo k3s kubectl -n zeabur-identity scale deploy/zeabur-identity --replicas=1
@@ -241,7 +241,7 @@ kubectl auth can-i '*' '*' --all-namespaces   # yes for an admin account
 
 确认用户名为 `zeabur:<username>`。管理员账号执行权限检查时，应返回 `yes`。
 
-kube-apiserver 刚重启时，登录会短暂出现 `oidc: authenticator not initialized`，因为它尚未获取 Zeabur Identity 的密钥。等几分钟后再试。如果错误持续，检查 kube-apiserver 日志、`zeabur-identity` Service 的端点和内部证书。不要关闭证书检查。
+kube-apiserver 刚重启时，登录会短暂出现 `oidc: authenticator not initialized`，因为 kube-apiserver 尚未获取 Zeabur Identity 的密钥，等几分钟后再试。如果错误持续，检查 kube-apiserver 日志、`zeabur-identity` Service 的端点和内部证书。不要关闭证书检查。
 
 ### 确认 kube-apiserver 已恢复
 
@@ -250,6 +250,6 @@ kube-apiserver 刚重启时，登录会短暂出现 `oidc: authenticator not ini
 - `/readyz`、节点状态和认证配置。
 - 匿名访问和健康检查是否与更改前一致。
 
-如果你决定停止信任 Zeabur Identity，另用只包含 Zeabur Identity 令牌的 kubeconfig，确认该令牌已无法使用。不要用管理员 kubeconfig 测试这件事，它的客户端证书会独立完成认证，掩盖令牌的检查结果。
+如果你决定停止信任 Zeabur Identity，另用只包含 Zeabur Identity 令牌的 kubeconfig，确认该令牌已无法使用。管理员 kubeconfig 的客户端证书会单独完成认证，掩盖令牌的检查结果，所以不要用它测试。
 
 保留 Zeabur Identity 的 Namespace、对象和 Secret。删除它们无法撤销 kube-apiserver 的认证配置，只会丢失数据。

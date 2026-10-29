@@ -1,16 +1,16 @@
 ---
 title: 升級與回復 Zeabur Identity
 description: 備份並記錄目前的部署，檢查版本差異後升級 Zeabur Identity，再依資料相容性切回舊版或還原備份。
-source: "59a539cb61a1"
+source: "eacab4b4631b"
 ---
 
 先備份並記錄目前的部署，再檢查版本差異、套用新版設定，確認登入與權限正常。需要回復到舊版時，依資料相容性選擇切回舊映像檔或還原升級前的備份。
 
-### 目前不保證的事
+### 升級的風險
 
-Zeabur Identity 目前是 alpha，不保證能順利升級或回復。資源版本仍是 `v1alpha1`，版本之間沒有轉換機制。發行說明明確承諾前，不要假設升級或降版都能成功。記錄實際執行的完整 commit 與映像檔，不要只記錄會重複使用的 tag，例如 `zeabur-identity:dev`。
+Zeabur Identity 目前是 alpha，資源版本仍是 `v1alpha1`，版本之間沒有轉換機制，升級或回復都可能失敗。發行說明明確承諾相容之前，升級和降版都要先做好失敗的準備。記錄實際執行的完整 commit 與映像檔，不要只記錄會重複使用的 tag，例如 `zeabur-identity:dev`。
 
-`kubectl rollout undo` 只會回復 Pod 範本，不會回復 CRD、使用者、簽署金鑰、Secret、RBAC、Service、Ingress 或 kube-apiserver 的檔案。新版 Zeabur Identity 寫入資料後，不保證舊版能讀取。
+`kubectl rollout undo` 只會回復 Pod 範本，不會回復 CRD、使用者、簽署金鑰、Secret、RBAC、Service、Ingress 或 kube-apiserver 的檔案。新版 Zeabur Identity 寫入的資料，舊版可能無法讀取。
 
 Zeabur Identity 只執行一個副本，更新時會替換這個副本，不採滾動更新。升級會短暫中斷服務，當時正在登入的使用者必須重新登入。不要增加副本來掩蓋中斷。
 
@@ -73,7 +73,7 @@ kubectl -n "$NS" rollout history deployment/zeabur-identity > upgrade-record/rol
 
 閱讀兩個版本之間的變更，包括 CRD schema、儲存格式、選項與權杖宣告。
 
-先用備份還原出一份副本，在副本上完整試跑同一套升級流程，也要用既有通行密鑰登入。
+先用備份還原出一份複本，在複本上完整試跑同一套升級流程，也要用既有通行密鑰登入。
 
 </Step>
 
@@ -129,7 +129,7 @@ kubectl -n "$NS" rollout status deployment/zeabur-identity --timeout=5m
 kubectl -n "$NS" logs deployment/zeabur-identity --tail=200
 ```
 
-保留 `zeabur-identity` Service、`zeabur-identity-internal-ca` 與 `zeabur-identity-signing-keys`，不要替換。新 Service 不保證沿用原本的 IP，但每個 kube-apiserver 的驗證檔案都固定使用舊 IP。
+保留 `zeabur-identity` Service、`zeabur-identity-internal-ca` 與 `zeabur-identity-signing-keys`，不要替換。重建的 Service 可能拿到新的 IP，但每個 kube-apiserver 的驗證檔案都固定使用舊 IP。
 
 不要在升級時替換根 CA、變更 Issuer 或刪除工作階段。如果新版確實需要不同的 kube-apiserver 設定，請另外處理這項變更，一次處理一台機器。
 
@@ -145,7 +145,7 @@ kubectl -n "$NS" logs deployment/zeabur-identity --tail=200
 - 分別試做一項你有權限執行的操作，以及一項你沒有權限執行的操作。
 - 確認管理員能正常存取。
 
-Pod 就緒不代表登入功能正常。
+Pod 就緒後，登入仍可能失敗，所以上面的驗證都要做完。
 
 </Step>
 
@@ -159,7 +159,7 @@ Pod 就緒不代表登入功能正常。
 
 ### 停止不確定的資料寫入
 
-如果無法確認新版寫入了哪些資料，先停止 Zeabur Identity，避免它繼續寫入：
+如果無法確認新版寫入了哪些資料，先停止 Zeabur Identity，不讓新版繼續寫入：
 
 ```sh
 kubectl -n zeabur-identity scale deployment/zeabur-identity --replicas=0

@@ -1,7 +1,7 @@
 ---
 title: 备份与恢复 Zeabur Identity
 description: 备份 Zeabur Identity 的数据与密钥，按备份类型恢复服务，并演练身份、通行密钥与访问权限的恢复。
-source: "f7e8aa792e91"
+source: "11952ef751f7"
 ---
 
 备份集群的数据存储、Zeabur Identity 资源、私钥与相关配置。恢复数据存储可以保留所有人的身份与通行密钥；从导出文件重建资源会生成新身份，所有人都要重新注册通行密钥、关联 GitHub 或 Google 账号，应用也要迁移用户映射。
@@ -28,7 +28,7 @@ Zeabur Identity 用 `User` 对象的 UID 识别每个人。每个令牌的 `sub`
 
 <Callout type="warn">
 
-不要同时运行两份使用相同 Issuer 与签名密钥的 Zeabur Identity。切换前，让恢复副本远离生产环境的 DNS、上游登录回调与用户。
+不要同时运行两份使用相同 Issuer 与签名密钥的 Zeabur Identity。切换前，让恢复出的这一份远离生产环境的 DNS、上游登录回调与用户。
 
 </Callout>
 
@@ -220,7 +220,7 @@ cd "$RESTORE"
 
 ### 在启动前隔离恢复环境
 
-快照会将 Zeabur Identity 恢复到备份时的状态。如果备份时服务正在运行，它会随集群启动，并带回旧会话。
+快照会将 Zeabur Identity 恢复到备份时的状态。如果备份时服务正在运行，Zeabur Identity 会随集群启动，并带回旧会话。
 
 启动恢复后的集群前，先确保没有人能连到 Issuer 的公网地址。你可以使用独立网络，或在防火墙、负载均衡器上封锁该地址。上游登录回调也不能连到恢复环境。
 
@@ -260,7 +260,7 @@ kubectl -n zeabur-identity scale deploy/zeabur-identity --replicas=0
 
 重新应用备份后的权限变更，包括停用用户、撤销管理员权限、通行密钥或客户端密钥。完成后才能开放登录。
 
-如果你无法确认某人是否仍应保有访问权限，先保持停用，等负责人决定。通行密钥仍能使用，不代表持有人仍应保有权限。
+如果你无法确认某人是否仍应保有访问权限，先保持停用，等负责人决定；即使此人的通行密钥还能用，也一样。
 
 </Step>
 
@@ -440,7 +440,7 @@ zeabur-identityctl setup-link --namespace "$NS" --issuer "$ZEABUR_IDENTITY_ISSUE
 
 公开 JWKS、客户端密钥哈希值与通行密钥都无法重建签名私钥。密钥丢失且没有备份时，Zeabur Identity 必须使用新密钥启动。这会重置签名密钥，无法恢复旧密钥。
 
-- 旧密钥签名的令牌会失效。部分应用会继续接受它们，直到更新密钥缓存或令牌到期。
+- 旧密钥签名的令牌会失效。部分应用在更新密钥缓存或令牌到期前，仍会继续接受这些令牌。
 - 删除所有授权与邀请，让所有人重新登录。
 - 用户与通行密钥不受影响。
 
@@ -556,7 +556,7 @@ sudo k3s kubectl get --raw=/readyz
 
 不要混用不同备份的数据库与令牌。如果你在备份后修改过认证文件，启动 k3s 前要先放回匹配的版本。
 
-按前面的流程，在 Zeabur Identity 停止时获取快照，恢复后服务也会保持停止。若快照中的服务仍在运行，它就会随 k3s 启动。这时必须在启动 k3s 前封锁 Issuer 的公网地址，并在 `/readyz` 开始响应后，立即将 Zeabur Identity 的副本数降为 0。
+按前面的流程，在 Zeabur Identity 停止时获取快照，恢复后服务也会保持停止。若快照中的服务仍在运行，就会随 k3s 启动。这时必须在启动 k3s 前封锁 Issuer 的公网地址，并在 `/readyz` 开始响应后，立即将 Zeabur Identity 的副本数降为 0。
 
 重新增加副本数前，完成“恢复并保留所有人的身份”中的步骤 3 到 5：停止服务并比对 UID、重新检查访问权限，以及删除会话与一次性链接。
 
@@ -573,7 +573,7 @@ sudo k3s kubectl get --raw=/readyz
 | Zeabur Identity 停机 | 将 Zeabur Identity 的副本数降为 0，使用管理员 kubeconfig，再恢复副本数。 | 管理员 kubeconfig 全程可用。服务恢复后，通行密钥登录恢复正常。 |
 | Ingress 停机 | 停止 Ingress 控制器，使用管理员 kubeconfig，再启动控制器。 | 停机期间无法访问 Zeabur Identity 的公网 URL，管理员 kubeconfig 不受影响。控制器恢复后，一切正常。 |
 | kube-apiserver 无法启动 | 安装损坏的认证文件，再到机器上恢复配置。 | 恢复配置后，管理员 kubeconfig 可用。移除 Zeabur Identity 认证配置期间，kube-apiserver 拒绝 Zeabur Identity 令牌。 |
-| 恢复数据存储 | 备份、删除一位用户，再恢复。 | UID 相同，旧通行密钥仍可使用。备份后撤销的会话会恢复，直到你删除授权。已签发的令牌在到期前仍然有效。 |
+| 恢复数据存储 | 备份、删除一位用户，再恢复。 | UID 相同，旧通行密钥仍可使用。备份后撤销的会话会恢复，删除授权后才会失效。已签发的令牌在到期前仍然有效。 |
 | 从导出文件重建 | 删除一位用户，再从导出文件重建。 | 用户获得新 UID。即使修复 `Credential`，旧通行密钥仍无法使用。用户可以重新注册。 |
 | 签名密钥丢失 | 删除签名密钥 Secret，再重建为空的 Secret。 | 旧令牌与会话遭到拒绝。用户与通行密钥仍可使用。 |
 | 内部证书丢失 | 删除 `zeabur-identity-internal-tls`。 | cert-manager 使用相同 CA 重新签发证书。登录持续可用，认证文件不变。 |

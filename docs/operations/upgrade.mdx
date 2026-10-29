@@ -5,11 +5,11 @@ description: Back up and record your current deployment, review version differen
 
 Back up and record your current deployment, then review version differences, apply the new configuration, and verify sign-in and permissions. If you need to roll back, use data compatibility to decide whether to switch to the old image or restore the pre-upgrade backup.
 
-### Current limitations
+### Upgrade risks
 
-Zeabur Identity is currently in alpha and provides no upgrade or rollback guarantees. Resource versions are still `v1alpha1`, and there's no conversion mechanism between versions. Until the release notes explicitly guarantee compatibility, don't assume that switching versions in either direction will succeed. Record the full commit and image that's actually running. Don't record only a reusable tag such as `zeabur-identity:dev`.
+Zeabur Identity is in alpha. Resource versions are still `v1alpha1`, and there's no conversion mechanism between versions, so an upgrade or a rollback can fail. Until the release notes explicitly guarantee compatibility, prepare for a version switch in either direction to fail. Record the full commit and image that's actually running. Don't record only a reusable tag such as `zeabur-identity:dev`.
 
-`kubectl rollout undo` only restores the Pod template. It doesn't restore CRDs, users, signing keys, Secrets, RBAC, Services, Ingresses, or kube-apiserver files. After a newer version of Zeabur Identity writes data, there's no guarantee that an older version can read it.
+`kubectl rollout undo` only restores the Pod template. It doesn't restore CRDs, users, signing keys, Secrets, RBAC, Services, Ingresses, or kube-apiserver files. An older version may be unable to read data that a newer version of Zeabur Identity wrote.
 
 Zeabur Identity runs a single replica. Updates replace that replica rather than perform a rolling update. An upgrade briefly interrupts service, and users who are signing in at that time must sign in again. Don't add replicas to hide the interruption.
 
@@ -128,7 +128,7 @@ kubectl -n "$NS" rollout status deployment/zeabur-identity --timeout=5m
 kubectl -n "$NS" logs deployment/zeabur-identity --tail=200
 ```
 
-Keep the `zeabur-identity` Service, `zeabur-identity-internal-ca`, and `zeabur-identity-signing-keys`. Don't replace them. A new Service isn't guaranteed to retain the original IP, and every kube-apiserver's authentication file uses the old IP as a fixed value.
+Keep the `zeabur-identity` Service, `zeabur-identity-internal-ca`, and `zeabur-identity-signing-keys`. Don't replace them. A new Service can get a different IP, and every kube-apiserver's authentication file has the old IP written in.
 
 Don't replace the root CA, change the Issuer, or delete sessions during an upgrade. If the new version requires different kube-apiserver settings, treat that as a separate change and handle one machine at a time.
 
@@ -144,7 +144,7 @@ Check the image that's actually running, readiness, and logs, then complete thes
 - Attempt one operation you have permission to perform and one you don't.
 - Confirm that admin access works.
 
-A ready Pod doesn't mean sign-in works.
+Sign-in can still fail after the Pod is ready, so complete every check above.
 
 </Step>
 

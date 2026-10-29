@@ -1,10 +1,10 @@
 ---
 title: 保留不經過 Zeabur Identity 的入口
 description: 備妥管理員 kubeconfig 與每台控制平面主機的 SSH 或主控台入口，在 Zeabur Identity 或 kube-apiserver 故障時還原叢集存取。
-source: "549eb2754155"
+source: "39f00a7f124a"
 ---
 
-先記下 kube-apiserver 的現有設定，並確認使用用戶端憑證的管理員 kubeconfig 可用。保留這份 kubeconfig，以及每台控制平面主機的 SSH 或主控台入口。Zeabur Identity 或登入頁掛掉時，你仍能存取叢集。kube-apiserver 無法啟動時，你也能直接在主機上修復設定。
+先記下 kube-apiserver 的現有設定，並確認使用用戶端憑證的管理員 kubeconfig 可用。保留這份 kubeconfig，以及每台控制平面主機的 SSH 或主控台入口。Zeabur Identity 或登入頁故障時，你仍能存取叢集。kube-apiserver 無法啟動時，你也能直接在主機上修復設定。
 
 ## 開始前
 
@@ -16,7 +16,7 @@ source: "549eb2754155"
 
 <Callout type="warn">
 
-日常工作可以改用通行密鑰，不必使用管理員 kubeconfig，但緊急救援仍需要這份 kubeconfig。保留離線副本，並實際演練重新進入叢集。完成演練前，不要刪除唯一的叢集入口。
+日常工作可以改用通行密鑰，不必使用管理員 kubeconfig，但緊急救援仍需要這份 kubeconfig。保留離線複本，並實際演練重新進入叢集。完成演練前，不要刪除唯一的叢集入口。
 
 </Callout>
 
@@ -47,7 +47,7 @@ sudo cp -a /etc/rancher/k3s "$RECOVERY/k3s"           # K3s
 sudo cp -a /etc/rancher/rke2 "$RECOVERY/rke2"         # RKE2
 ```
 
-這些副本會包含私密金鑰。請另外加密一份副本，存到主機以外的位置。
+這些複本含有私密金鑰。另外加密一份，存到主機以外的位置。
 
 如果叢集現有的驗證設定檔已包含其他 Issuer，請保留原檔，再把 Zeabur Identity 的 `jwt` 項目加入其中。不要直接用 Zeabur Identity 產生的檔案覆寫。
 
@@ -80,8 +80,8 @@ sudo $KUBECTL get --raw=/readyz
 
 ### 保管緊急憑證
 
-- 不要把管理員 kubeconfig 放在日常使用的電腦上。它具有 `cluster-admin` 權限。
-- 把加密副本離線存放在叢集以外的位置，解密金鑰則分開存放。若副本只留在伺服器上，伺服器遺失時，副本也會一起遺失。
+- 管理員 kubeconfig 具有 `cluster-admin` 權限，不要放在日常使用的電腦上。
+- 把加密複本離線存放在叢集以外的位置，解密金鑰則分開存放。如果複本只留在伺服器上，伺服器遺失時，複本也會一起遺失。
 - 留意憑證到期日，並依發行版的程式更新憑證。即使 kubeconfig 在安裝當天能用，憑證仍會到期。
 
 </Step>
@@ -102,7 +102,7 @@ Zeabur Identity 產生的設定依發行版而異：
 
 kube-apiserver 啟動後，會自動重新載入有效的驗證設定檔。不要為了停用 Zeabur Identity 而刪除或破壞檔案，這樣會讓你無法確定 kube-apiserver 的狀態。
 
-## Zeabur Identity 掛掉時
+## Zeabur Identity 故障時
 
 使用管理員 kubeconfig 直接連到 kube-apiserver。不要只靠快取中的 Zeabur Identity 權杖，或瀏覽器裡已登入的工作階段。已核發的權杖在到期前仍有效，有效期限以分鐘計。Zeabur Identity 停止運作時，使用者無法登入或更新權杖。
 
@@ -128,7 +128,7 @@ sudo k3s kubectl -n zeabur-identity logs deploy/zeabur-identity --tail=100
 
 ### 修復故障的元件
 
-若 Zeabur Identity 的副本數降為零，將它調回平常的副本數。標準安裝使用 1 個副本：
+若 Zeabur Identity 的副本數降為零，調回平常的副本數。標準安裝使用 1 個副本：
 
 ```sh
 sudo k3s kubectl -n zeabur-identity scale deploy/zeabur-identity --replicas=1
@@ -139,7 +139,7 @@ sudo k3s kubectl -n zeabur-identity rollout status deploy/zeabur-identity --time
 
 | 畫面或結果 | 接著處理 |
 | --- | --- |
-| Zeabur Identity 已啟動，但持續出錯 | 檢視日誌，修正映像檔、設定或資源問題。反覆重啟通常無法解決根本原因。 |
+| Zeabur Identity 已啟動，但持續出錯 | 檢視日誌，修正映像檔、設定或資源問題。反覆重新啟動通常無法解決根本原因。 |
 | Zeabur Identity 正常，但公開網址無法存取 | 檢查 Ingress 控制器、路由、DNS 與公開憑證。Kubernetes 使用內部位址取得 Zeabur Identity 的金鑰，瀏覽器與 `kubectl` 登入則使用公開位址。 |
 
 </Step>
@@ -181,7 +181,7 @@ Zeabur Identity 的設定程式會加入以下檔案。K3s 使用路徑中的 `k
 
 在 RKE2 上，drop-in 也會將 `/etc/rancher/rke2/zeabur-identity` 掛載到 kube-apiserver Pod。Zeabur 安裝程式會在 RKE2 上設定這些檔案。
 
-K3s／RKE2 會按字母順序讀取 drop-in。鍵名不是以 `+` 結尾時，後讀到的檔案會整個取代前面的清單。所以，`50-zeabur-identity.yaml` 會蓋過較早讀取檔案中的 `kube-apiserver-arg` 設定。移除前，先確認哪些設定會重新生效。
+K3s／RKE2 會按字母順序讀取 drop-in。鍵名不是以 `+` 結尾時，後讀到的檔案會整個取代前面的清單，所以 `50-zeabur-identity.yaml` 會蓋過較早讀取檔案中的 `kube-apiserver-arg` 設定。移除前，先確認哪些設定會重新生效。
 
 </Step>
 
@@ -241,7 +241,7 @@ kubectl auth can-i '*' '*' --all-namespaces   # yes for an admin account
 
 確認使用者名稱為 `zeabur:<username>`。管理員帳號執行權限檢查時，應取得 `yes`。
 
-kube-apiserver 剛重新啟動時，登入會短暫出現 `oidc: authenticator not initialized`，因為它還沒取得 Zeabur Identity 的金鑰。等幾分鐘後再試。若錯誤持續，請檢查 kube-apiserver 日誌、`zeabur-identity` Service 的端點與內部憑證。不要關閉憑證檢查。
+kube-apiserver 剛重新啟動時，登入會短暫出現 `oidc: authenticator not initialized`，因為 kube-apiserver 還沒取得 Zeabur Identity 的金鑰，等幾分鐘後再試。若錯誤持續，請檢查 kube-apiserver 日誌、`zeabur-identity` Service 的端點與內部憑證。不要關閉憑證檢查。
 
 ### 確認 kube-apiserver 已還原
 
@@ -250,6 +250,6 @@ kube-apiserver 剛重新啟動時，登入會短暫出現 `oidc: authenticator n
 - `/readyz`、節點狀態與驗證設定。
 - 匿名存取與健康檢查是否和變更前一致。
 
-若你決定停止信任 Zeabur Identity，請另外使用只包含 Zeabur Identity 權杖的 kubeconfig，確認該權杖已無法使用。不要用管理員 kubeconfig 測試這件事。它會直接使用用戶端憑證完成驗證，讓你無法判斷權杖是否仍然有效。
+若你決定停止信任 Zeabur Identity，請另外使用只包含 Zeabur Identity 權杖的 kubeconfig，確認該權杖已無法使用。管理員 kubeconfig 直接用用戶端憑證完成驗證，無法判斷權杖是否仍然有效，所以不要用它測試。
 
 保留 Zeabur Identity 的 Namespace、物件與 Secret。刪除它們無法撤銷 kube-apiserver 的驗證設定，只會讓資料遺失。
