@@ -764,7 +764,7 @@ approved = "2026-10-28"
 name = "cmov"
 kind = "unsafe"
 reason = "WebAuthn relying party"
-approved = "pending"
+approved = "2026-10-29"
 
 [[crate]]
 name = "cpufeatures"
@@ -782,7 +782,7 @@ approved = "2026-10-28"
 name = "ctutils"
 kind = "unsafe"
 reason = "WebAuthn relying party"
-approved = "pending"
+approved = "2026-10-29"
 
 [[crate]]
 name = "data-encoding"
