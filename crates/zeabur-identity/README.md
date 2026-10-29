@@ -6,8 +6,8 @@ whose kube-apiserver accepts its tokens. This crate is the `zeabur-identity` bin
 
 ## Contents
 
-- [`cli`](crate::cli): the flags. Every flag also has a `ZEABUR_IDENTITY_*` environment variable, which is
-  what a Deployment sets most easily; a configuration file is not needed for this few values.
+- [`cli`](crate::cli): the flags. Every flag also has a `ZEABUR_IDENTITY_*` environment variable, the
+  form a Deployment sets; with this few values, no configuration file is needed.
 - [`config`](crate::config): the validated configuration, checked before the runtime starts
   (exit code 2 on error).
 - [`serve`](crate::serve): starts the background tasks and the public listener.

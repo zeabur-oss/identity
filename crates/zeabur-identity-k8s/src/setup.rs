@@ -233,7 +233,7 @@ pub enum LinkError {
     Kubernetes(#[from] kube::Error),
     /// The user can already sign in; a link would let its holder add another passkey.
     #[error(
-        "user {user} already has {count} passkey(s) or linked account(s); pass --reset to remove them, their sessions, and pending invitations"
+        "user {user} can already sign in (passkeys and linked accounts: {count}); pass --reset to remove them, their sessions, and pending invitations"
     )]
     HasCredentials {
         /// User object name.

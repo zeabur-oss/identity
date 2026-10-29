@@ -67,7 +67,7 @@ fn client_create(args: ClientCreateArgs) -> ExitCode {
     let code = print_json(serde_json::to_string_pretty(&registration.client));
     if let Some(secret) = registration.secret {
         output::stderr(
-            "Client secret (shown only once; the cluster keeps only its hash, so a lost secret can only be replaced):",
+            "Client secret (shown only once; the cluster keeps only its hash, so a lost secret has to be replaced):",
         );
         output::stderr(&secret);
     }
