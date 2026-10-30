@@ -14,6 +14,9 @@ import {
 const form = document.getElementById("sign-in") as HTMLFormElement | null
 const messages = form?.dataset ?? {}
 let autofill: AbortController | null = null
+// Set while an assertion is being checked or the page is on its way out, so autofill and the
+// button never send two: the second answer would reach the app after the first had used it up.
+let finishing = false
 const usernameField = document.getElementById("username-field")
 const useUsername = document.getElementById("use-username")
 
@@ -44,13 +47,21 @@ const failures: Record<string, string | undefined> = {
 async function finish(credential: Credential | null): Promise<void> {
   if (!(credential instanceof PublicKeyCredential))
     throw new DOMException("no credential", "NotAllowedError")
-  const reply = await post("/login", { credential: assertionJson(credential) })
+  if (finishing) return
+  finishing = true
+  const reply = await post("/login", { credential: assertionJson(credential) }).catch(
+    (error: unknown) => {
+      finishing = false
+      throw error
+    },
+  )
   await signal(reply.body)
   if (reply.ok && typeof reply.body.redirect_to === "string") {
     say("status", "")
     window.location.assign(reply.body.redirect_to)
     return
   }
+  finishing = false
   say("status", "")
   const kind = problem(reply)
   if (kind === "no-request") ended()
@@ -90,6 +101,7 @@ async function startAutofill(): Promise<void> {
 
 async function signIn(event: SubmitEvent): Promise<void> {
   event.preventDefault()
+  if (finishing) return
   autofill?.abort()
   say("error", "")
   say("status", messages.msgWorking ?? "")
