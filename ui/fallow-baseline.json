@@ -10,10 +10,7 @@
   },
   "identity": "dc1",
   "unused_files": [],
-  "unused_exports": [
-    "unused-export:src/webauthn.ts:fromBase64url",
-    "unused-export:src/webauthn.ts:toBase64url"
-  ],
+  "unused_exports": [],
   "unused_types": [],
   "private_type_leaks": [],
   "deprecated_exports_in_use": [],
