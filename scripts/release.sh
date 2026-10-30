@@ -39,10 +39,6 @@ case "$stage" in
   *) usage ;;
 esac
 version="$2"
-if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  echo "error: $version is not vX.Y.Z" >&2
-  exit 2
-fi
 
 # The marker tells a re-run inside the dev shell apart from a call outside it.
 if [[ -z "${ZEABUR_RELEASE_SHELL:-}" ]]; then
@@ -51,6 +47,8 @@ if [[ -z "${ZEABUR_RELEASE_SHELL:-}" ]]; then
   [[ -f "$flake/flake.nix" ]] || flake="$root"
   exec nix develop "$flake" --command "$0" "$@"
 fi
+
+plain="$(zeabur-oss-release version "$version" | sed -n 's/^plain=//p')" || exit 2
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
@@ -87,7 +85,7 @@ platform() {
 # Every workspace crate (zeabur-identityctl, zeabur-identity...) and ui/package.json carry the
 # version, Cargo.lock agrees (--locked), and CHANGELOG.md has its section.
 check() {
-  local number="${version#v}" wrong
+  local number="$plain" wrong
   wrong="$(cargo metadata --locked --no-deps --format-version 1 --manifest-path "$root/Cargo.toml" |
     jq -r --arg v "$number" '.packages[] | select(.version != $v) | "\(.name) \(.version)"')"
   if [[ -n "$wrong" ]]; then
@@ -215,7 +213,7 @@ publish() {
   mkdir -p "$DOCKER_CONFIG"
   printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
   rm -f "$published/digests.txt" "$published/subjects.json"
-  zeabur-oss-release push-image --repository "$image" --tag "${version#v}" --attest-platforms \
+  zeabur-oss-release push-image --repository "$image" --tag "$plain" --attest-platforms \
     --digests "$published/digests.txt" --subjects "$published/subjects.json" "${platforms[@]}"
 
   # Each platform image carries its own SBOM; the index carries both.

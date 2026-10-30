@@ -19,6 +19,12 @@ being released. The steps every zeabur-oss release shares (pushing by digest, si
 The signatures name the shared workflow, not this repository's: see
 [Release files and verification](../reference/releases.mdx).
 
+A tag is a SemVer 2.0.0 version with a `v` and no build metadata. `vX.Y.Z` is a normal release;
+`vX.Y.Z-<pre-release>` (`v0.1.2-beta.1`, `v1.0.0-rc.1`) is a GitHub pre-release, never marked
+latest. A pre-release has no `CHANGELOG.md` section of its own: it reads the section of its normal
+version (`## [0.1.2]`), and the crates and `ui/package.json` carry the full version
+(`0.1.2-beta.1`).
+
 1. Update the workspace version in `Cargo.toml`, `Cargo.lock` and `ui/package.json`. Add a
    `## [<VERSION>] - <DATE>` section to `CHANGELOG.md` with the alpha status, platform scope and
    known limitations. Use level-three headings within each version; the release notes include only
@@ -39,7 +45,7 @@ The signatures name the shared workflow, not this repository's: see
    git push origin v0.1.1
    ```
 
-5. Watch the **Release** run in GitHub Actions. A successful run leaves a **draft prerelease**;
+5. Watch the **Release** run in GitHub Actions. A successful run leaves a **draft release**;
    it never makes the GitHub release public automatically.
 6. Download the draft assets with a maintainer's authenticated GitHub CLI:
 
@@ -54,10 +60,10 @@ The signatures name the shared workflow, not this repository's: see
    Record the release commit, CLI checksums, image digests, cluster versions and observed
    outcomes in the release tracking issue. Keep acceptance failures
    visible; a green release workflow is not a substitute for this checklist.
-7. Only after the workflow and installation acceptance pass, make the prerelease public:
+7. Only after the workflow and installation acceptance pass, make the release public:
 
    ```sh
-   gh release edit v0.1.1 --repo zeabur-oss/identity --draft=false --prerelease
+   gh release edit v0.1.1 --repo zeabur-oss/identity --draft=false
    ```
 
    Repeat the guide's unauthenticated downloads and signature/checksum verification against
