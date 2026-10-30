@@ -11,12 +11,15 @@ The repository's spec-work skill names its protocols, its cluster-test skill and
 1. **Read the source.** Find the exact section of the RFC, W3C or OIDF specification, KEP,
    Kubernetes documentation revision or upstream source the behaviour depends on. Note MUST and
    SHOULD (RFC 2119, RFC 8174). For prior art, read the other project's code at a pinned tag or
-   commit. Never cite something you have not read; if a fact cannot be verified, write "not
-   verified" instead of inventing a section number, URL, author or date.
-2. **Decide and write it down where the code is.** In the module's rustdoc: what it does, the
-   invariant, why (the threat or the spec rule), and the citation as a markdown reference link;
-   collect several sources in a `# References` section (IEEE-like: authors, title, venue, date,
-   URL/DOI). State decisions as facts about the design, not as history.
+   commit. Cite only what you have read, and never invent a section number, URL, author or
+   date. A source you have not read is not cited at all; if it matters, note it in the internal
+   docs or an issue.
+2. **Cite the rule next to the code, decide in the docs.** In rustdoc: the constraint the code
+   keeps (the spec rule or the invariant) and the citation as a markdown reference link; collect
+   several sources in a `# References` section (IEEE-like: authors, title, venue, date,
+   URL/DOI). The decision and its reasons (the threat, the options) go in the repository's
+   docs, stated as facts about the design, not as history. Comments otherwise follow
+   `zeabur-oss-standards`, section 1.
 3. **Fail closed.** Ambiguous answers (from storage or the API server), unknown inputs and races
    are errors or explicit outcomes, never silent success. A single-use thing (a code, a link, a
    ceremony, a plan) is consumed or checked by one atomic step (create-once, compare-and-swap,
