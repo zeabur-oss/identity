@@ -1,6 +1,6 @@
 ---
 name: zeabur-identity-ui
-description: Change Zeabur Identity's sign-in pages — askama templates, the design system's generated classes, TypeScript, Tailwind CSS, translations — while keeping the strict CSP, committed reproducible assets, size budgets and WCAG 2.2 AA contrast. Use for any change under ui/ or crates/zeabur-identity-ui.
+description: Change Zeabur Identity's sign-in pages (askama templates, the design system's generated classes, TypeScript, Tailwind CSS, translations) while keeping the strict CSP, committed reproducible assets, size budgets and WCAG 2.2 AA contrast. Use for any change under ui/ or crates/zeabur-identity-ui.
 ---
 
 # Sign-in pages
@@ -45,11 +45,10 @@ description: Change Zeabur Identity's sign-in pages — askama templates, the de
   origins; scripts write only `textContent`, `hidden` and `location` (Trusted Types `'none'`). The
   page tests enforce this.
 - **Text.** Every string is a field of `Messages` in `crates/zeabur-identity-ui/src/i18n.rs` with English,
-  Traditional Chinese (Taiwan usage, Passkey) and Simplified Chinese (mainland usage, 通行密钥)
+  Traditional Chinese (Taiwan usage, 通行密鑰) and Simplified Chinese (mainland usage, 通行密钥)
   values; scripts get their messages from `data-msg-*` attributes. A missing translation is a
-  compile error. Wording and terms follow Zeabur's `docs/wording.md`: sentence case, errors
-  that say what failed and what to do next, no "we"; in Chinese no 被／進行／您, 請 only in a
-  full sentence that asks the reader to act.
+  compile error. Write and review them with the `zeabur-writing` skill, using the terms in Zeabur's
+  `docs/internal/wording.md`.
 - **Contrast.** After changing a token, a colour class or the design-system pin, run
   `python3 .claude/skills/zeabur-identity-ui/contrast.py` (inside `nix develop`; exits 1 on any
   failure). Try a value first with `--set light:input='rgb(126, 122, 133)'`. Add a pair to its
