@@ -177,33 +177,31 @@ function addPasskey(event: SubmitEvent): void {
   })
 }
 
-/** A row's parts, each with the control that takes focus when it opens. */
-const parts = {
-  actions: { selector: "[data-actions]", focus: null },
-  rename: { selector: "[data-rename]", focus: "input" },
-  confirm: { selector: "[data-confirm]", focus: "[data-action=confirm-remove]" },
-} as const
-
-/** Shows one part of a row and hides the others. */
-function show(item: HTMLElement, shown: keyof typeof parts): void {
-  for (const [name, { selector }] of Object.entries(parts)) {
-    const element = item.querySelector<HTMLElement>(selector)
-    if (element) element.hidden = name !== shown
-  }
-  const { selector, focus } = parts[shown]
-  if (focus) item.querySelector<HTMLElement>(`${selector} ${focus}`)?.focus()
+/**
+ * Opens a row's dialog (`dialog[data-<name>]`) from its `data-opens` button. `confirmed` runs when
+ * the dialog closes through its confirm button; cancel, Escape and the backdrop leave things as
+ * they were.
+ */
+function wireDialog(
+  item: HTMLElement,
+  name: string,
+  confirmed: (dialog: HTMLDialogElement) => void,
+): void {
+  const dialog = item.querySelector<HTMLDialogElement>(`dialog[data-${name}]`)
+  if (!dialog) return
+  item.querySelector(`[data-opens=${name}]`)?.addEventListener("click", () => {
+    dialog.returnValue = ""
+    dialog.showModal()
+  })
+  dialog.querySelector("[data-close]")?.addEventListener("click", () => dialog.close())
+  dialog.addEventListener("close", () => {
+    if (dialog.returnValue === "confirm") confirmed(dialog)
+  })
 }
 
-/** Wires a row's remove, confirm and cancel buttons. `passkey` names the row's passkey, if any. */
+/** Wires a row's remove confirmation. `passkey` names the row's passkey, if any. */
 function wireRemove(item: HTMLElement, path: string, name: string, passkey: string): void {
-  item.querySelector("[data-action=remove]")?.addEventListener("click", () => show(item, "confirm"))
-  for (const cancel of item.querySelectorAll("[data-action=cancel]")) {
-    cancel.addEventListener("click", () => {
-      write(rowPlace(item).error, "")
-      show(item, "actions")
-    })
-  }
-  item.querySelector("[data-action=confirm-remove]")?.addEventListener("click", () => {
+  wireDialog(item, "confirm", () => {
     const place = rowPlace(item)
     run(() => fresh(place, () => post(path, { csrf, name })), place, passkey)
   })
@@ -211,11 +209,9 @@ function wireRemove(item: HTMLElement, path: string, name: string, passkey: stri
 
 function wirePasskey(item: HTMLElement): void {
   const name = item.dataset.passkey ?? ""
-  item.querySelector("[data-action=rename]")?.addEventListener("click", () => show(item, "rename"))
   wireRemove(item, "/account/passkeys/remove", name, name)
-  item.querySelector<HTMLFormElement>("[data-rename]")?.addEventListener("submit", (event) => {
-    event.preventDefault()
-    const label = item.querySelector<HTMLInputElement>("[data-rename] input")?.value.trim() ?? ""
+  wireDialog(item, "rename", (dialog) => {
+    const label = dialog.querySelector("input")?.value.trim() ?? ""
     if (label)
       run(() => post("/account/passkeys/rename", { csrf, name, label }), rowPlace(item), name)
   })

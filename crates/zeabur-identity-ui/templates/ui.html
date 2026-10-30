@@ -69,6 +69,26 @@
 </code></pre>
 {%- endmacro -%}
 
+{#- A modal dialog in a list row, marked data-<name> and opened by the row's button with
+    data-opens="<name>". The call body goes under the title; the confirm button closes the dialog
+    with the value "confirm". -#}
+{%- macro dialog(name, id, title, confirm, cancel, variant = "primary", icon_name = "") -%}
+<dialog data-slot="dialog-content" data-{{ name }} aria-labelledby="{{ id }}" class="{{ ds::dialog() }}">
+  <form method="dialog">
+    <div data-slot="dialog-header" class="{{ ds::dialog_header() }}">
+      <h2 id="{{ id }}" data-slot="dialog-title" class="{{ ds::dialog_title() }}">{{ title }}</h2>
+    </div>
+    <div data-slot="dialog-body" class="{{ ds::dialog_body() }}">{{ caller() }}</div>
+    <div data-slot="dialog-footer" class="{{ ds::dialog_footer() }}">
+      <button type="button" data-close class="{{ ds::button("secondary", "sm") }}">{{ cancel }}</button>
+      <button value="confirm" class="{{ ds::button(variant, "sm") }}">
+        {%- if !icon_name.is_empty() %}{{ icons::icon(icon_name) }}{% endif %}{{ confirm -}}
+      </button>
+    </div>
+  </form>
+</dialog>
+{%- endmacro -%}
+
 {#- A collapsed disclosure; the call body is its content. -#}
 {%- macro disclosure(summary, id = "", center = false) -%}
 <details data-slot="disclosure"{% if !id.is_empty() %} id="{{ id }}"{% endif %} class="group/disclosure flex flex-col text-[0.8125rem] leading-5">

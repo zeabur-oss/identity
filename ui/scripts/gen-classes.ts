@@ -18,6 +18,15 @@ import {
   cardVariants,
 } from "@zeabur/design-system/variants/card"
 import {
+  dialogBackdropVariants,
+  dialogBodyVariants,
+  dialogContentVariants,
+  dialogDescriptionVariants,
+  dialogFooterVariants,
+  dialogHeaderVariants,
+  dialogTitleVariants,
+} from "@zeabur/design-system/variants/dialog"
+import {
   fieldDescriptionVariants,
   fieldErrorVariants,
   fieldLabelVariants,
@@ -37,7 +46,16 @@ type Macro = {
   identity?: string
 }
 
+/** `classes` for a pseudo-element: each class behind `variant:` (`backdrop:bg-overlay`). */
+const on = (variant: string, classes: string): string =>
+  classes
+    .split(" ")
+    .map((name) => `${variant}:${name}`)
+    .join(" ")
+
 // The sign-in card has more padding and a larger, centred heading than the design system's card.
+// A dialog is a native <dialog>, centred by the browser's margins instead of the design system's
+// translate, with the backdrop on its ::backdrop.
 const macros: Record<string, Macro> = {
   button: {
     classes: buttonVariants,
@@ -64,6 +82,15 @@ const macros: Record<string, Macro> = {
   field_description: { classes: () => fieldDescriptionVariants() },
   field_error: { classes: () => fieldErrorVariants() },
   separator: { classes: () => separatorVariants() },
+  dialog: {
+    classes: () => cn(dialogContentVariants(), on("backdrop", dialogBackdropVariants())),
+    identity: "inset-0 m-auto translate-x-0 translate-y-0",
+  },
+  dialog_header: { classes: () => dialogHeaderVariants() },
+  dialog_title: { classes: () => dialogTitleVariants() },
+  dialog_description: { classes: () => dialogDescriptionVariants() },
+  dialog_body: { classes: () => dialogBodyVariants() },
+  dialog_footer: { classes: () => dialogFooterVariants() },
 }
 
 function combinations(params: Record<string, string[]>): Props[] {

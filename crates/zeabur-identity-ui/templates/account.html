@@ -76,30 +76,24 @@
             {%- if let Some(added) = p.added %}{% if !p.storage.is_empty() %} · {% endif %}<time datetime="{{ added.iso }}" data-format="{{ m.passkey_added }}">{{ m.passkey_added.replace("%date%", added.text) }}</time>{% endif -%}
             {%- if let Some(used) = p.last_used %}<br><time datetime="{{ used.iso }}" data-format="{{ m.passkey_last_used }}">{{ m.passkey_last_used.replace("%date%", used.text) }}</time>{% endif -%}
           </p>
-          <div data-actions class="mt-1 flex flex-wrap gap-2">
-            <button type="button" data-action="rename" class="{{ ds::button("secondary", "sm") }}">{{ m.rename }}</button>
+          <div class="mt-1 flex flex-wrap gap-2">
+            <button type="button" data-opens="rename" class="{{ ds::button("secondary", "sm") }}">{{ m.rename }}</button>
             {%- if view.passkeys.len() > 1 %}
-            <button type="button" data-action="remove" class="{{ ds::button("secondary-destructive", "sm") }}">{{ m.remove }}</button>
+            <button type="button" data-opens="confirm" class="{{ ds::button("secondary-destructive", "sm") }}">{{ m.remove }}</button>
             {%- endif %}
           </div>
           {%- if view.passkeys.len() == 1 %}
           <p class="text-xs leading-4 text-secondary">{{ m.last_passkey_note }}</p>
           {%- endif %}
-          <form data-rename hidden class="mt-1 flex flex-col gap-2" novalidate>
-            <label class="sr-only" for="label-{{ loop.index }}">{{ m.setup_label }}</label>
-            <input id="label-{{ loop.index }}" name="label" type="text" maxlength="64" required autocomplete="off" value="{{ p.label.unwrap_or_default() }}" class="{{ ds::input() }}">
-            <div class="flex gap-2">
-              <button type="submit" class="{{ ds::button("primary", "sm") }}">{{ m.save }}</button>
-              <button type="button" data-action="cancel" class="{{ ds::button("secondary", "sm") }}">{{ m.cancel }}</button>
-            </div>
-          </form>
-          <div data-confirm hidden class="mt-1 flex flex-col gap-2">
-            {% call ui::alert(m.remove_title, "destructive", "WarningCircle", live = "") %}{{ m.remove_body }}{% endcall %}
-            <div class="flex gap-2">
-              <button type="button" data-action="confirm-remove" class="{{ ds::button("destructive", "sm") }}">{{ icons::icon("Fingerprint") }}{{ m.remove }}</button>
-              <button type="button" data-action="cancel" class="{{ ds::button("secondary", "sm") }}">{{ m.cancel }}</button>
-            </div>
-          </div>
+          {% call ui::dialog("rename", "rename-title-" ~ loop.index, m.rename, m.save, m.cancel) %}
+          <label class="sr-only" for="label-{{ loop.index }}">{{ m.setup_label }}</label>
+          <input id="label-{{ loop.index }}" name="label" type="text" maxlength="64" required autofocus autocomplete="off" value="{{ p.label.unwrap_or_default() }}" class="{{ ds::input() }}">
+          {%- endcall %}
+          {%- if view.passkeys.len() > 1 %}
+          {% call ui::dialog("confirm", "remove-title-" ~ loop.index, m.remove_title, m.remove, m.cancel, "destructive", "Fingerprint") %}
+          <p data-slot="dialog-description" class="{{ ds::dialog_description() }} text-pretty">{{ m.remove_body }}</p>
+          {%- endcall %}
+          {%- endif %}
           <p data-status role="status" aria-live="polite" class="empty:sr-only text-[0.8125rem] leading-5 text-secondary"></p>
           <p data-error role="alert" class="empty:sr-only text-[0.8125rem] leading-5 text-pretty text-fail-strong"></p>
         </div>
@@ -137,16 +131,12 @@
           {%- if let Some(linked) = l.linked %}
           <p class="text-[0.8125rem] leading-5 text-secondary"><time datetime="{{ linked.iso }}" data-format="{{ m.linked_on }}">{{ m.linked_on.replace("%date%", linked.text) }}</time></p>
           {%- endif %}
-          <div data-actions class="mt-1 flex flex-wrap gap-2">
-            <button type="button" data-action="remove" class="{{ ds::button("secondary-destructive", "sm") }}">{{ m.remove }}</button>
+          <div class="mt-1 flex flex-wrap gap-2">
+            <button type="button" data-opens="confirm" class="{{ ds::button("secondary-destructive", "sm") }}">{{ m.remove }}</button>
           </div>
-          <div data-confirm hidden class="mt-1 flex flex-col gap-2">
-            {% call ui::alert(m.unlink_title, "destructive", "WarningCircle", live = "") %}{{ m.unlink_body }}{% endcall %}
-            <div class="flex gap-2">
-              <button type="button" data-action="confirm-remove" class="{{ ds::button("destructive", "sm") }}">{{ icons::icon("Fingerprint") }}{{ m.remove }}</button>
-              <button type="button" data-action="cancel" class="{{ ds::button("secondary", "sm") }}">{{ m.cancel }}</button>
-            </div>
-          </div>
+          {% call ui::dialog("confirm", "unlink-title-" ~ loop.index, m.unlink_title, m.remove, m.cancel, "destructive", "Fingerprint") %}
+          <p data-slot="dialog-description" class="{{ ds::dialog_description() }} text-pretty">{{ m.unlink_body }}</p>
+          {%- endcall %}
           <p data-status role="status" aria-live="polite" class="empty:sr-only text-[0.8125rem] leading-5 text-secondary"></p>
           <p data-error role="alert" class="empty:sr-only text-[0.8125rem] leading-5 text-pretty text-fail-strong"></p>
         </div>
