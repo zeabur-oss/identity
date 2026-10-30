@@ -55,10 +55,10 @@ itself, so a job runs the same on your machine:
 The `ui` job's `fallow audit --base HEAD^` compares with the previous commit; on a branch, run
 `(cd ui && bun run fallow audit --base main)` inside `nix develop` instead.
 
-A comment says only what the code cannot: a quirk and its cause, a workaround, or the
-specification section, paper or prior art behind behaviour that must not change, cited in
-rustdoc. It holds no design rationale. Never cite something you have not read; write "not
-verified" instead. Code that implements a MUST or SHOULD of a specification updates
+A comment says only what the code cannot: a quirk and its cause, a workaround, or the specification
+section, paper or prior art behind behaviour that must not change, cited in rustdoc. It holds no
+design rationale. Cite only what you have read. Do not cite an unread source; if it matters, note it
+in internal docs or an issue. Code that implements a MUST or SHOULD of a specification updates
 [docs/reference/conformance.mdx](docs/reference/conformance.mdx). Write documentation first in
 English, Traditional Chinese or Simplified Chinese.
 
