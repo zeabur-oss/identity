@@ -829,10 +829,12 @@ mod tests {
         let env = Env::new().await;
         let grants: Api<Grant> = env.zeabur_identity_api();
         let t0 = now();
+        // Room for the creates and the refresh below on a slow runner.
+        let due = t0 + 10;
         for (name, expires) in [
             ("expired", Some(t0 - 10)),
-            ("soon", Some(t0 + 4)),
-            ("extended", Some(t0 + 4)),
+            ("soon", Some(due)),
+            ("extended", Some(due)),
             ("later", Some(t0 + 3600)),
             ("unlabelled", None),
         ] {
@@ -879,9 +881,8 @@ mod tests {
         );
         let soon_at = gone_soon.expect("an object is collected once it expires");
         assert!(
-            soon_at >= t0 + 4,
-            "never before its expiry ({soon_at} < {})",
-            t0 + 4
+            soon_at >= due,
+            "never before its expiry ({soon_at} < {due})"
         );
 
         tokio::time::sleep(Duration::from_secs(2)).await;
