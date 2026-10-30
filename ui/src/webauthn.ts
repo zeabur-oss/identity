@@ -3,7 +3,15 @@
 
 type Json = Record<string, unknown>
 
-export function toBase64url(buffer: ArrayBuffer | ArrayBufferView): string {
+/** A page's messages, from the `data-msg-*` attributes on `element`; a missing one is empty. */
+export type Text = (key: string) => string
+
+export function messages(element: HTMLElement | null): Text {
+  const dataset = element?.dataset ?? {}
+  return (key) => dataset[key] ?? ""
+}
+
+function toBase64url(buffer: ArrayBuffer | ArrayBufferView): string {
   const bytes =
     buffer instanceof ArrayBuffer
       ? new Uint8Array(buffer)
@@ -13,7 +21,7 @@ export function toBase64url(buffer: ArrayBuffer | ArrayBufferView): string {
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")
 }
 
-export function fromBase64url(value: string): ArrayBuffer {
+function fromBase64url(value: string): ArrayBuffer {
   const base64 = value
     .replace(/-/g, "+")
     .replace(/_/g, "/")
@@ -111,6 +119,9 @@ export async function post(path: string, body: Json): Promise<Reply> {
   return { ok: response.ok, status: response.status, body: json }
 }
 
+/** The reply for a request that never reached the server. */
+const unreachable = (): Reply => ({ ok: false, status: 0, body: {} })
+
 /** The problem type suffix from an RFC 9457 response, for example "setup-invalid". */
 export function problem(reply: Reply): string {
   const type = typeof reply.body.type === "string" ? reply.body.type : ""
@@ -125,9 +136,18 @@ export function supported(): boolean {
 }
 
 /** Writes `text` into a live region (textContent only). */
-export function say(id: "status" | "error", text: string): void {
-  const element = document.getElementById(id)
+export function write(element: HTMLElement | null, text: string): void {
   if (element) element.textContent = text
+}
+
+/** Writes `text` into the page's status or error region. */
+export function say(id: "status" | "error", text: string): void {
+  write(document.getElementById(id), text)
+}
+
+/** The URL in a reply that sends the browser elsewhere, if it has one. */
+export function redirect(reply: Reply): string | null {
+  return reply.ok && typeof reply.body.redirect_to === "string" ? reply.body.redirect_to : null
 }
 
 /**
@@ -137,31 +157,30 @@ export function say(id: "status" | "error", text: string): void {
  */
 export function upstreamButtons(
   body: () => Json,
-  messages: DOMStringMap,
+  text: Text,
   handlers: Record<string, () => void> = {},
 ): void {
   for (const button of document.querySelectorAll<HTMLButtonElement>("button[data-provider]")) {
-    button.addEventListener("click", () => {
-      void (async () => {
-        say("error", "")
-        say("status", messages.msgWorking ?? "")
-        try {
-          const reply = await post(`/upstream/${button.dataset.provider ?? ""}/start`, body())
-          if (reply.ok && typeof reply.body.redirect_to === "string") {
-            window.location.assign(reply.body.redirect_to)
-            return
-          }
-          say("status", "")
-          const handler = handlers[problem(reply)]
-          if (handler) handler()
-          else say("error", messages.msgError ?? "")
-        } catch {
-          say("status", "")
-          say("error", messages.msgError ?? "")
-        }
-      })()
-    })
+    const provider = button.dataset.provider ?? ""
+    button.addEventListener("click", () => void startUpstream(provider, body(), text, handlers))
   }
+}
+
+async function startUpstream(
+  provider: string,
+  body: Json,
+  text: Text,
+  handlers: Record<string, () => void>,
+): Promise<void> {
+  say("error", "")
+  say("status", text("msgWorking"))
+  const reply = await post(`/upstream/${provider}/start`, body).catch(unreachable)
+  const to = redirect(reply)
+  if (to) return window.location.assign(to)
+  say("status", "")
+  const handler = handlers[problem(reply)]
+  if (handler) handler()
+  else say("error", text("msgError"))
 }
 
 /** Whether an error is the user cancelling or the browser's timeout. */
@@ -184,17 +203,15 @@ type Signals = {
  * manager extension never settles them, so this waits half a second at most.
  */
 export async function signal(body: Json): Promise<void> {
-  const api = window.PublicKeyCredential as unknown as Signals | undefined
-  const sent: Promise<void>[] = []
-  try {
-    if (body.accepted && typeof api?.signalAllAcceptedCredentials === "function") {
-      sent.push(api.signalAllAcceptedCredentials(body.accepted as Json))
-    }
-    if (body.unknownCredential && typeof api?.signalUnknownCredential === "function") {
-      sent.push(api.signalUnknownCredential(body.unknownCredential as Json))
-    }
-  } catch {
-    // Not supported for this provider.
-  }
+  const sent = [
+    send("signalAllAcceptedCredentials", body.accepted),
+    send("signalUnknownCredential", body.unknownCredential),
+  ]
   await Promise.race([Promise.allSettled(sent), new Promise((resolve) => setTimeout(resolve, 500))])
+}
+
+async function send(name: keyof Signals, options: unknown): Promise<void> {
+  const api = window.PublicKeyCredential as unknown as Signals | undefined
+  const method = api?.[name]
+  if (options && typeof method === "function") await method.call(api, options as Json)
 }

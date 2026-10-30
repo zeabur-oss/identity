@@ -6,6 +6,7 @@ import {
   assertionJson,
   cancelled,
   creationOptions,
+  messages,
   post,
   problem,
   type Reply,
@@ -13,24 +14,28 @@ import {
   requestOptions,
   signal,
   supported,
+  write,
 } from "./webauthn"
 
 const root = document.getElementById("account")
-const messages = root?.dataset ?? {}
-const csrf = messages.csrf ?? ""
+const text = messages(root)
+const csrf = text("csrf")
 
-const errors: Record<string, string | undefined> = {
-  "passkey-failed": messages.msgFailed,
-  "passkey-exists": messages.msgExists,
-  "last-passkey": messages.msgLast,
-  conflict: messages.msgChanged,
-  "not-found": messages.msgGone,
-  "signed-out": messages.msgSignedOut,
-  "device-passkey-needed": messages.msgDevicePasskey,
-  "last-credential": messages.msgLastCredential,
-  "admin-needs-passkey": messages.msgAdminPasskey,
-  "ceremony-expired": messages.msgExpired,
+const errors: Record<string, string> = {
+  "passkey-failed": "msgFailed",
+  "passkey-exists": "msgExists",
+  "last-passkey": "msgLast",
+  conflict: "msgChanged",
+  "not-found": "msgGone",
+  "signed-out": "msgSignedOut",
+  "device-passkey-needed": "msgDevicePasskey",
+  "last-credential": "msgLastCredential",
+  "admin-needs-passkey": "msgAdminPasskey",
+  "ceremony-expired": "msgExpired",
 }
+
+/** The message for a problem code, or the generic one. */
+const explain = (code: string): string => text(errors[code] ?? "msgError")
 
 /** Where a task reports progress and failure: the page header, or a passkey's row. */
 type Place = { status: HTMLElement | null; error: HTMLElement | null }
@@ -43,18 +48,9 @@ const header: Place = {
 /** Problems that mean the page shows a stale list: reload it from the server, then explain. */
 const stale = new Set(["last-passkey", "conflict", "not-found"])
 
-function write(element: HTMLElement | null, text: string): void {
-  if (element) element.textContent = text
-}
-
-function fail(place: Place, reply: Reply | null, error?: unknown): void {
+function fail(place: Place, message: string): void {
   write(place.status, "")
-  if (error !== undefined)
-    write(
-      place.error,
-      cancelled(error) ? (messages.msgCancelled ?? "") : (messages.msgFailed ?? ""),
-    )
-  else write(place.error, (reply && errors[problem(reply)]) ?? messages.msgError ?? "")
+  write(place.error, message)
 }
 
 function refresh(code: string, passkey: string): void {
@@ -75,15 +71,14 @@ function showNotice(): void {
   const row = [...document.querySelectorAll<HTMLElement>("[data-passkey]")].find(
     (item) => item.dataset.passkey === name,
   )
-  const place = row ? rowPlace(row) : header
-  write(place.error, errors[code] ?? messages.msgError ?? "")
+  write((row ? rowPlace(row) : header).error, explain(code))
 }
 
 /** After the provider sends the person back with a new link. */
 function showLinked(): void {
   if (window.location.hash !== "#notice=linked") return
   window.history.replaceState(null, "", window.location.pathname + window.location.search)
-  write(header.status, messages.msgLinked ?? "")
+  write(header.status, text("msgLinked"))
 }
 
 function rowPlace(item: HTMLElement): Place {
@@ -103,7 +98,7 @@ async function assertion(
 }
 
 async function reauthenticate(place: Place): Promise<Reply> {
-  write(place.status, messages.msgConfirm ?? "")
+  write(place.status, text("msgConfirm"))
   const credential = await assertion("/account/reauth/options", { csrf })
   return post("/account/reauth", { csrf, credential: assertionJson(credential) })
 }
@@ -116,29 +111,43 @@ async function fresh(place: Place, action: () => Promise<Reply>): Promise<Reply>
   return confirmed.ok ? action() : confirmed
 }
 
+/** Set while a task runs, so a second press does not send the same change twice. */
+let running = false
+
+const isReply = (value: unknown): value is Reply =>
+  typeof value === "object" && value !== null && "status" in value
+
 /**
  * Wraps a click or submit handler: status while working, then reload or explain at `place`.
  * `passkey` names the row's passkey, so a stale-list refusal can point back at it.
  */
 function run(task: () => Promise<Reply | null>, place: Place = header, passkey = ""): void {
+  if (running) return
+  running = true
   for (const p of new Set([header, place])) write(p.error, "")
-  write(place.status, messages.msgWorking ?? "")
-  const failed = (reply: Reply): void => {
-    const code = problem(reply)
-    if (stale.has(code)) refresh(code, passkey)
-    else fail(place, reply)
-  }
+  write(place.status, text("msgWorking"))
   task()
-    .then(async (reply) => {
-      if (!reply) return
-      if (!reply.ok) return failed(reply)
-      await signal(reply.body)
-      window.location.reload()
-    })
+    .then((reply) => reply && settle(reply, place, passkey))
     .catch((error: unknown) => {
-      if (error && typeof error === "object" && "status" in error) failed(error as Reply)
-      else fail(place, null, error)
+      if (isReply(error)) refused(error, place, passkey)
+      else fail(place, text(cancelled(error) ? "msgCancelled" : "msgFailed"))
     })
+    .finally(() => {
+      running = false
+    })
+}
+
+/** A finished task: reload to show the change, or explain why there is none. */
+async function settle(reply: Reply, place: Place, passkey: string): Promise<void> {
+  if (!reply.ok) return refused(reply, place, passkey)
+  await signal(reply.body)
+  window.location.reload()
+}
+
+function refused(reply: Reply, place: Place, passkey: string): void {
+  const code = problem(reply)
+  if (stale.has(code)) refresh(code, passkey)
+  else fail(place, explain(code))
 }
 
 function signIn(): void {
@@ -150,11 +159,11 @@ function signIn(): void {
 
 function addPasskey(event: SubmitEvent): void {
   event.preventDefault()
-  const label = (document.getElementById("add-label") as HTMLInputElement | null)?.value.trim()
+  const label = document.querySelector<HTMLInputElement>("#add-label")?.value.trim()
   run(async () => {
     const started = await fresh(header, () => post("/account/passkeys/options", { csrf }))
     if (!started.ok) return started
-    write(header.status, messages.msgWorking ?? "")
+    write(header.status, text("msgWorking"))
     const credential = await navigator.credentials.create({
       publicKey: creationOptions(started.body),
     })
@@ -168,16 +177,21 @@ function addPasskey(event: SubmitEvent): void {
   })
 }
 
-function show(item: HTMLElement, part: "rename" | "confirm" | null): void {
-  const actions = item.querySelector<HTMLElement>("[data-actions]")
-  const rename = item.querySelector<HTMLElement>("[data-rename]")
-  const confirm = item.querySelector<HTMLElement>("[data-confirm]")
-  if (actions) actions.hidden = part !== null
-  if (rename) rename.hidden = part !== "rename"
-  if (confirm) confirm.hidden = part !== "confirm"
-  if (part === "rename") rename?.querySelector("input")?.focus()
-  if (part === "confirm")
-    confirm?.querySelector<HTMLElement>("[data-action=confirm-remove]")?.focus()
+/** A row's parts, each with the control that takes focus when it opens. */
+const parts = {
+  actions: { selector: "[data-actions]", focus: null },
+  rename: { selector: "[data-rename]", focus: "input" },
+  confirm: { selector: "[data-confirm]", focus: "[data-action=confirm-remove]" },
+} as const
+
+/** Shows one part of a row and hides the others. */
+function show(item: HTMLElement, shown: keyof typeof parts): void {
+  for (const [name, { selector }] of Object.entries(parts)) {
+    const element = item.querySelector<HTMLElement>(selector)
+    if (element) element.hidden = name !== shown
+  }
+  const { selector, focus } = parts[shown]
+  if (focus) item.querySelector<HTMLElement>(`${selector} ${focus}`)?.focus()
 }
 
 /** Wires a row's remove, confirm and cancel buttons. `passkey` names the row's passkey, if any. */
@@ -186,7 +200,7 @@ function wireRemove(item: HTMLElement, path: string, name: string, passkey: stri
   for (const cancel of item.querySelectorAll("[data-action=cancel]")) {
     cancel.addEventListener("click", () => {
       write(rowPlace(item).error, "")
-      show(item, null)
+      show(item, "actions")
     })
   }
   item.querySelector("[data-action=confirm-remove]")?.addEventListener("click", () => {
@@ -218,7 +232,7 @@ function link(provider: string): void {
 }
 
 function localizeDates(): void {
-  const format = new Intl.DateTimeFormat(messages.lang, { dateStyle: "medium" })
+  const format = new Intl.DateTimeFormat(root?.dataset.lang, { dateStyle: "medium" })
   for (const time of document.querySelectorAll<HTMLTimeElement>("time[data-format]")) {
     const date = new Date(time.dateTime)
     if (!Number.isNaN(date.getTime()))

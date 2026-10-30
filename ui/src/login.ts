@@ -2,8 +2,10 @@
 import {
   assertionJson,
   cancelled,
+  messages,
   post,
   problem,
+  redirect,
   requestOptions,
   say,
   signal,
@@ -12,8 +14,7 @@ import {
 } from "./webauthn"
 
 const form = document.getElementById("sign-in") as HTMLFormElement | null
-const messages: DOMStringMap = form?.dataset ?? {}
-const text = (key: string): string => messages[key] ?? ""
+const text = messages(form)
 let autofill: AbortController | null = null
 // Set while an assertion is being checked or the page is on its way out, so autofill and the
 // button never send two: the second answer would reach the app after the first had used it up.
@@ -40,9 +41,9 @@ function ended(): void {
   view.focus()
 }
 
-const failures: Record<string, string | undefined> = {
-  "passkey-failed": messages.msgFailed,
-  "device-passkey-needed": messages.msgDevicePasskey,
+const failures: Record<string, string> = {
+  "passkey-failed": "msgFailed",
+  "device-passkey-needed": "msgDevicePasskey",
 }
 
 async function finish(credential: Credential | null): Promise<void> {
@@ -63,8 +64,9 @@ async function send(credential: PublicKeyCredential): Promise<boolean> {
   const reply = await post("/login", { credential: assertionJson(credential) })
   await signal(reply.body)
   say("status", "")
-  if (reply.ok && typeof reply.body.redirect_to === "string") {
-    window.location.assign(reply.body.redirect_to)
+  const to = redirect(reply)
+  if (to) {
+    window.location.assign(to)
     return true
   }
   failed(problem(reply))
@@ -73,7 +75,7 @@ async function send(credential: PublicKeyCredential): Promise<boolean> {
 
 function failed(kind: string): void {
   if (kind === "no-request") ended()
-  else say("error", failures[kind] ?? text("msgError"))
+  else say("error", text(failures[kind] ?? "msgError"))
 }
 
 async function options(): Promise<PublicKeyCredentialRequestOptions | null> {
@@ -136,7 +138,7 @@ window.addEventListener("pageshow", (event) => {
 })
 
 if (form) {
-  const expiresIn = Number(messages.expiresIn)
+  const expiresIn = Number(form.dataset.expiresIn)
   if (expiresIn >= 0) window.setTimeout(ended, expiresIn * 1000)
   // Upstream providers work without passkey support.
   upstreamButtons(
@@ -144,7 +146,7 @@ if (form) {
       autofill?.abort()
       return {}
     },
-    messages,
+    text,
     { "no-request": ended },
   )
   if (!supported()) {
