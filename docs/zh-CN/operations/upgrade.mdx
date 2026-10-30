@@ -1,16 +1,16 @@
 ---
 title: 升级与回滚 Zeabur Identity
 description: 备份并记录当前部署，检查版本差异后升级 Zeabur Identity，并根据数据兼容性回滚到旧版或恢复备份。
-source: "eacab4b4631b"
+source: "11c8a979e25e"
 ---
 
 先备份并记录当前部署，再检查版本差异、应用新版配置并验证登录与权限。需要回滚到旧版时，根据数据兼容性选择切回旧镜像或恢复升级前的备份。
 
-### 升级的风险
+### 目前不保证的事项
 
-Zeabur Identity 目前处于 alpha 阶段，资源版本仍是 `v1alpha1`，版本之间没有转换机制，升级和回滚都可能失败。在发行说明明确承诺兼容之前，升级和降级都要先做好失败的准备。记录实际运行的完整 commit 与镜像，不要只记录会重复使用的标签，例如 `zeabur-identity:dev`。
+Zeabur Identity 目前处于 alpha 阶段，不保证升级与回滚能成功。资源版本仍是 `v1alpha1`，版本之间没有转换机制。在发行说明明确承诺前，不要假设任何方向的版本切换都能成功。记录实际运行的完整 commit 与镜像，不要只记录会重复使用的标签，例如 `zeabur-identity:dev`。
 
-`kubectl rollout undo` 只会回滚 Pod 模板，不会回滚 CRD、用户、签名密钥、Secret、RBAC、Service、Ingress 或 kube-apiserver 的文件。新版 Zeabur Identity 写入的数据，旧版可能无法读取。
+`kubectl rollout undo` 只会回滚 Pod 模板，不会回滚 CRD、用户、签名密钥、Secret、RBAC、Service、Ingress 或 kube-apiserver 的文件。新版 Zeabur Identity 写入数据后，不保证旧版能读取。
 
 Zeabur Identity 运行单个副本，更新时会替换副本，不采用滚动更新。升级会短暂中断服务，当时正在登录的用户必须重新登录。不要增加副本来掩盖中断。
 
@@ -129,7 +129,7 @@ kubectl -n "$NS" rollout status deployment/zeabur-identity --timeout=5m
 kubectl -n "$NS" logs deployment/zeabur-identity --tail=200
 ```
 
-保留 `zeabur-identity` Service、`zeabur-identity-internal-ca` 与 `zeabur-identity-signing-keys`，不要替换。重建的 Service 可能分到新的 IP，而每个 kube-apiserver 的认证文件都固定使用旧 IP。
+保留 `zeabur-identity` Service、`zeabur-identity-internal-ca` 与 `zeabur-identity-signing-keys`，不要替换。新 Service 不保证沿用原来的 IP，而每个 kube-apiserver 的认证文件都固定使用旧 IP。
 
 不要在升级时替换根 CA、更改 Issuer 或删除会话。如果新版确实需要不同的 kube-apiserver 配置，将它作为独立变更，一次处理一台机器。
 
