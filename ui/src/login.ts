@@ -12,7 +12,8 @@ import {
 } from "./webauthn"
 
 const form = document.getElementById("sign-in") as HTMLFormElement | null
-const messages = form?.dataset ?? {}
+const messages: DOMStringMap = form?.dataset ?? {}
+const text = (key: string): string => messages[key] ?? ""
 let autofill: AbortController | null = null
 // Set while an assertion is being checked or the page is on its way out, so autofill and the
 // button never send two: the second answer would reach the app after the first had used it up.
@@ -49,29 +50,36 @@ async function finish(credential: Credential | null): Promise<void> {
     throw new DOMException("no credential", "NotAllowedError")
   if (finishing) return
   finishing = true
-  const reply = await post("/login", { credential: assertionJson(credential) }).catch(
-    (error: unknown) => {
-      finishing = false
-      throw error
-    },
-  )
-  await signal(reply.body)
-  if (reply.ok && typeof reply.body.redirect_to === "string") {
-    say("status", "")
-    window.location.assign(reply.body.redirect_to)
-    return
+  try {
+    finishing = await send(credential)
+  } catch (error) {
+    finishing = false
+    throw error
   }
-  finishing = false
+}
+
+/** Sends the assertion; true when the page is on its way to the app. */
+async function send(credential: PublicKeyCredential): Promise<boolean> {
+  const reply = await post("/login", { credential: assertionJson(credential) })
+  await signal(reply.body)
   say("status", "")
-  const kind = problem(reply)
+  if (reply.ok && typeof reply.body.redirect_to === "string") {
+    window.location.assign(reply.body.redirect_to)
+    return true
+  }
+  failed(problem(reply))
+  return false
+}
+
+function failed(kind: string): void {
   if (kind === "no-request") ended()
-  else say("error", failures[kind] ?? messages.msgError ?? "")
+  else say("error", failures[kind] ?? text("msgError"))
 }
 
 async function options(): Promise<PublicKeyCredentialRequestOptions | null> {
   const reply = await post("/login/options", {})
   if (!reply.ok) {
-    say("error", messages.msgError ?? "")
+    say("error", text("msgError"))
     return null
   }
   return requestOptions(reply.body)
@@ -84,7 +92,10 @@ async function startAutofill(): Promise<void> {
     return
   }
   const publicKey = await options()
-  if (!publicKey) return
+  if (publicKey) await autofillWith(publicKey)
+}
+
+async function autofillWith(publicKey: PublicKeyCredentialRequestOptions): Promise<void> {
   autofill = new AbortController()
   try {
     const credential = await navigator.credentials.get({
@@ -95,23 +106,27 @@ async function startAutofill(): Promise<void> {
     await finish(credential)
   } catch (error) {
     // Aborted when the user presses the button instead; other errors surface on the next attempt.
-    if (!cancelled(error)) say("error", messages.msgError ?? "")
+    if (!cancelled(error)) say("error", text("msgError"))
   }
 }
 
-async function signIn(event: SubmitEvent): Promise<void> {
+function signIn(event: SubmitEvent): void {
   event.preventDefault()
   if (finishing) return
   autofill?.abort()
+  void signInWithButton()
+}
+
+async function signInWithButton(): Promise<void> {
   say("error", "")
-  say("status", messages.msgWorking ?? "")
+  say("status", text("msgWorking"))
   try {
     const publicKey = await options()
     if (!publicKey) return
     await finish(await navigator.credentials.get({ publicKey }))
   } catch (error) {
     say("status", "")
-    say("error", cancelled(error) ? (messages.msgCancelled ?? "") : (messages.msgFailed ?? ""))
+    say("error", text(cancelled(error) ? "msgCancelled" : "msgFailed"))
   }
 }
 
@@ -136,7 +151,7 @@ if (form) {
     document.getElementById("unsupported")?.removeAttribute("hidden")
     form.hidden = true
   } else {
-    form.addEventListener("submit", (event) => void signIn(event))
+    form.addEventListener("submit", signIn)
     useUsername?.addEventListener("click", () => {
       fold(false)
       document.getElementById("username")?.focus()
