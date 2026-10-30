@@ -184,6 +184,8 @@ CARD = stack(paint("card"))  # ds.html card: bg-card
 ALERT = stack(paint("card"), paint("v2-surface-hover"))  # alert default: bg-v2-surface-hover
 ALERT_WARN = stack(paint("card"), paint("amber", 0.08))  # alert warn: bg-amber/8
 ALERT_FAIL = stack(paint("card"), paint("danger", 0.06))  # alert destructive: bg-danger/6
+DIALOG = stack(paint("popover"))  # ds.html dialog: bg-popover
+DIALOG_FOOTER = stack(paint("popover"), paint("v2-surface-hover"))  # dialog footer: bg-v2-surface-hover
 # button-primary and button-destructive: the lightest gradient stop.
 PRIMARY_LIGHTEST = stack(paint("#8340ff"))
 DESTRUCTIVE_LIGHTEST = stack(paint("destructive-from"))
@@ -231,6 +233,16 @@ COMMON: tuple[Pair, ...] = (
          source="design system base.css :focus-visible outline var(--focus-ring)"),
     Pair(name="focus outline against page", kind=Kind.FOCUS, fg=paint("focus-ring"), bg=PAGE_BG,
          source="design system base.css :focus-visible, base.html language links"),
+    Pair(name="dialog title", kind=Kind.TEXT, fg=paint("text-main"), bg=DIALOG,
+         source="ui.html dialog title (text-main), rename input text"),
+    Pair(name="dialog description", kind=Kind.TEXT, fg=paint("text-secondary"), bg=DIALOG,
+         source="account.html remove and unlink dialogs (text-secondary)"),
+    Pair(name="input border against dialog", kind=Kind.BOUNDARY, fg=paint("input"), bg=DIALOG,
+         source="account.html rename dialog, ds.html input border-input"),
+    Pair(name="input focus edge against dialog", kind=Kind.FOCUS, fg=paint("ring"), bg=DIALOG,
+         source="account.html rename dialog, ds.html input focus:border-ring"),
+    Pair(name="focus outline against dialog footer", kind=Kind.FOCUS, fg=paint("focus-ring"),
+         bg=DIALOG_FOOTER, source="ui.html dialog footer buttons, base.css :focus-visible"),
 )
 
 # button-secondary: the hover's lower gradient stop.

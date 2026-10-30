@@ -19,7 +19,7 @@ description: Change Zeabur Identity's sign-in pages (askama templates, the desig
   the design system's (the card's padding and heading), each one explicit; there are no contrast
   overrides. A value the templates need that is missing from the generator's table goes into the
   table; a treatment the design system lacks goes into the design system. `ui.html` holds the
-  markup of the shared macros (card, alert, field, command, disclosure). The Geist font is copied
+  markup of the shared macros (card, alert, field, command, disclosure, dialog). The Geist font is copied
   from the package by the build. A destructive action on each row of a list (remove a passkey)
   takes `ds::button("secondary-destructive", "sm")`; the solid `destructive` is for the final
   confirm only.
