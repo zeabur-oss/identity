@@ -5,10 +5,10 @@ description: Run Zeabur Identity's Kubernetes integration and end-to-end tests o
 
 # Cluster tests
 
-The cluster tests are `#[ignore]`d and need a disposable cluster where you are cluster admin.
-Run Docker/k3d on a Linux machine or VM (for example over SSH), not on a workstation you care
-about; sync the working tree there with `rsync -a --delete --exclude target ./ host:zeabur-identity/` and
-run the commands below inside `nix develop` on that machine.
+Follow `zeabur-oss-cluster-tests` (install: `npx skills add zeabur-oss/skills --skill
+zeabur-oss-cluster-tests`; `skills-lock.json` pins it): a disposable cluster on a Linux machine
+or VM, a snapshot restored after every run, and the common failures. Sync with
+`rsync -a --delete --exclude target ./ host:zeabur-identity/`.
 
 ## Cluster with a writable authentication config
 `scripts/k3d-up.sh` creates it with cert-manager, as CI does. kube-apiserver re-reads
@@ -40,11 +40,6 @@ The e2e test takes 1–3 minutes, mostly waiting for kube-apiserver to reload th
 - **Probe CEL quickly**: write a candidate config with a dummy issuer into the mounted
   directory, wait ~70 s, and read the log; a health error about the dummy issuer means the
   config itself validated. Restore the empty config afterwards.
-- **`cannot change roleRef`**: a ClusterRoleBinding from an older install has a different role;
-  delete it (`kubectl delete clusterrolebinding <name>`) and apply again.
-- **NodePort refused**: kube-proxy needs a moment after a Service is created; poll.
-- **Concurrent deletes** on k3s can return 500 for the loser; code fails closed, tests accept it.
-- Measure memory with the kubelet summary API (`/api/v1/nodes/<node>/proxy/stats/summary`); the
-  e2e test writes it to `ZEABUR_IDENTITY_E2E_MEASUREMENTS`.
+- The e2e test writes the kubelet's memory figures to `ZEABUR_IDENTITY_E2E_MEASUREMENTS`.
 
 Clean up with `k3d cluster delete zeabur-identity`.

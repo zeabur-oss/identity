@@ -55,11 +55,12 @@ itself, so a job runs the same on your machine:
 The `ui` job's `fallow audit --base HEAD^` compares with the previous commit; on a branch, run
 `(cd ui && bun run fallow audit --base main)` inside `nix develop` instead.
 
-Design rationale lives next to the code, in rustdoc: state the decision and its reason, and
-cite the specification section, paper or prior art it rests on (the crates show the style).
-Never cite something you have not read; write "not verified" instead. Code that implements a
-MUST or SHOULD of a specification updates [docs/reference/conformance.mdx](docs/reference/conformance.mdx).
-Documentation is written in English.
+A comment says only what the code cannot: a quirk and its cause, a workaround, or the
+specification section, paper or prior art behind behaviour that must not change, cited in
+rustdoc. It holds no design rationale. Never cite something you have not read; write "not
+verified" instead. Code that implements a MUST or SHOULD of a specification updates
+[docs/reference/conformance.mdx](docs/reference/conformance.mdx). Write documentation first in
+English, Traditional Chinese or Simplified Chinese.
 
 ## Toolchain
 
