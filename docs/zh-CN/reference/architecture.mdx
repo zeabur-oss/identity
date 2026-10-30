@@ -10,11 +10,11 @@ k3s 和 RKE2 使用相同配置。CI 测试涵盖 k3s。
 
 ## 安全特性
 
-- **不使用密码。** 通行密钥是主要凭证，使用 WebAuthn，且必须完成用户验证。日常访问也可以改用关联的 GitHub 或 Google 账号登录。
-- **管理员权限只授予管理员账号。** 只有 `accountType: Admin` 的 `User` 会获得 `zeabur:admins` 组，该组绑定 `cluster-admin`。管理员账号只能用通行密钥登录，令牌默认有效期为五分钟，会话也可能因空闲而提前结束。如果安装配置启用 AAL3，管理员账号还必须使用绑定设备的通行密钥。普通账号只能获得所属组绑定的权限。所有会话都会在登录 12 小时后结束。
-- **令牌有效期短。** 令牌绑定目标受众（audience），签名密钥会定期轮换。
-- **用户自行管理登录方式。** 添加或移除通行密钥、关联或取消关联 GitHub 或 Google 账号，都需要重新使用通行密钥完成验证。用户无法移除最后一把通行密钥，也无法取消关联最后一种登录方式。
-- **状态存储在 Kubernetes 中。** 自定义资源存储用户、凭证、客户端、会话与邀请，无需数据库。撤销访问权限与删除数据的顺序，见[退出登录、救援与移除用户](../users/offboarding.mdx)。
+- **不使用密码**。通行密钥是主要凭证，使用 WebAuthn，且必须完成用户验证。日常访问也可以改用关联的 GitHub 或 Google 账号登录。
+- **管理员权限只授予管理员账号**。只有 `accountType: Admin` 的 `User` 会获得 `zeabur:admins` 组，该组绑定 `cluster-admin`。管理员账号只能用通行密钥登录，令牌默认有效期为五分钟，会话也可能因空闲而提前结束。如果安装配置启用 AAL3，管理员账号还必须使用绑定设备的通行密钥。普通账号只能获得所属组绑定的权限。所有会话都会在登录 12 小时后结束。
+- **令牌有效期短**。令牌绑定目标受众（audience），签名密钥会定期轮换。
+- **用户自行管理登录方式**。添加或移除通行密钥、关联或取消关联 GitHub 或 Google 账号，都需要重新使用通行密钥完成验证。用户无法移除最后一把通行密钥，也无法取消关联最后一种登录方式。
+- **状态存储在 Kubernetes 中**。自定义资源存储用户、凭证、客户端、会话与邀请，无需数据库。撤销访问权限与删除数据的顺序，见[退出登录、救援与移除用户](../users/offboarding.mdx)。
 
 [规范符合度](./conformance.mdx)列出 Zeabur Identity 实现的各项规范要求，以及对应的代码和验证测试。
 
@@ -80,10 +80,10 @@ kube-apiserver 使用 Zeabur Identity 公开的密钥，验证令牌签名。密
 
 代码分成多个小型 crate，全部放在同一层的 `crates/` 目录：
 
-- **依赖关系只向下，不形成循环。** 参考 [Kladov][matklad-workspaces]，以及下方参考文献中的 Lakos 和 Martin。
-- **每个 crate 用窄接口封装一项设计决策。** 参考 [Parnas][parnas]。
-- **存储层由一组 trait 定义。** 内存与 Kubernetes 各有实现，所以大多数测试无需集群。这里采用 ports and adapters 架构，参考 [Cockburn][cockburn]。
-- **服务器与管理 CLI 使用不同的可执行文件。** Kanidm（`kanidmd`／`kanidm`）、etcd（`etcd`／`etcdctl`）和 cert-manager（`cmctl`）也采用这种分工。只有管理员需要运行的代码，不会放进服务器镜像。
+- **依赖关系只向下，不形成循环**。参考 [Kladov][matklad-workspaces]，以及下方参考文献中的 Lakos 和 Martin。
+- **每个 crate 用窄接口封装一项设计决策**。参考 [Parnas][parnas]。
+- **存储层由一组 trait 定义**。内存与 Kubernetes 各有实现，所以大多数测试无需集群。这里采用 ports and adapters 架构，参考 [Cockburn][cockburn]。
+- **服务器与管理 CLI 使用不同的可执行文件**。Kanidm（`kanidmd`／`kanidm`）、etcd（`etcd`／`etcdctl`）和 cert-manager（`cmctl`）也采用这种分工。只有管理员需要运行的代码，不会放进服务器镜像。
 
 每个 crate 的 README 同时是该 crate 的 crate 级文档，可用 `cargo doc --open` 打开。
 

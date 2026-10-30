@@ -68,7 +68,7 @@ Zeabur Identity 用 `User` 物件的 UID 識別每個人。每個權杖的 `sub`
 
 這份資源匯出檔要與資料存放區備份一起儲存。你需要 `kubectl`、`jq`、`tar`、[`age`](https://github.com/FiloSottile/age)、Bash，以及管理員 kubeconfig。
 
-匯出期間必須停止 Zeabur Identity，確保使用者、憑證與金鑰的資料都來自同一個時間點。這會造成短暫的計畫性停機。
+為了讓使用者、憑證與金鑰的資料都來自同一個時間點，匯出期間必須停止 Zeabur Identity。這會造成短暫的計畫性停機。
 
 <Steps>
 
@@ -521,7 +521,7 @@ kubectl -n zeabur-identity wait certificate/zeabur-identity-internal-tls --for=c
 
 ### 建立備份
 
-複製資料時要停止 k3s，確保資料庫檔案一致。先按照前面的備份流程，暫停其他寫入來源並停止 Zeabur Identity。
+為了讓資料庫檔案一致，複製資料時要停止 k3s。先按照前面的備份流程，暫停其他寫入來源並停止 Zeabur Identity。
 
 ```sh
 SNAPSHOT=/var/backups/zeabur-identity-k3s/$(date -u +%Y%m%dT%H%M%SZ)

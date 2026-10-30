@@ -9,7 +9,7 @@ source: "fbfb872646a8"
 ## 開始前
 
 - 將 Zeabur Identity 安裝在 `zeabur-identity` Namespace，並使用叢集管理員的 kubeconfig 執行 `zeabur-identityctl` 和 `kubectl`。
-- 準備實際可用的公開網域。Google 只接受公開網域上的重新導向 URI，詳見 [Google 的 URI 驗證規則](https://developers.google.com/identity/protocols/oauth2/web-server#uri-validation)。[在 k3s 上安裝並登入](../get-started/quickstart.mdx) 使用的本機名稱 `identity.example.test` 不適用。
+- 準備實際可用的公開網域。Google 只接受公開網域上的重新導向 URI，詳見 [Google 的 URI 驗證規則](https://developers.google.com/identity/protocols/oauth2/web-server#uri-validation)。[在 k3s 上安裝並登入](../get-started/quickstart.mdx)使用的本機名稱 `identity.example.test` 不適用。
 - 確認瀏覽器能用該網域連到 Zeabur Identity，並信任它的 TLS 憑證。
 - 確認 Zeabur Identity 的 Pod 能用 HTTPS 對外連到 `oauth2.googleapis.com` 和 `www.googleapis.com`。
 
@@ -31,7 +31,7 @@ Google 帳號必須先連結到 Zeabur Identity 使用者，才能登入。Zeabu
 
 ### 註冊 Google OAuth 用戶端
 
-依照 Google 的 [OpenID Connect 設定文件](https://developers.google.com/identity/openid-connect/openid-connect) 和[同意畫面設定指南](https://developers.google.com/workspace/guides/configure-oauth-consent)，在 Google Cloud Console 完成以下設定：
+依照 Google 的 [OpenID Connect 設定文件](https://developers.google.com/identity/openid-connect/openid-connect)和[同意畫面設定指南](https://developers.google.com/workspace/guides/configure-oauth-consent)，在 Google Cloud Console 完成以下設定：
 
 1. 選取或建立專案。在 **Google Auth platform → Branding** 設定應用程式名稱、支援電子郵件和聯絡資料。
 2. 在 **Audience** 選擇 **Internal**，只允許你的 Google Workspace 組織使用。若要允許任何 Google 帳號使用，則選擇 **External**。不論選哪一種，使用者都必須先連結 Zeabur Identity 帳號。依照 [Google 的發布規則](https://support.google.com/cloud/answer/15549945)，應用程式在測試模式下會有使用限制。只要求 `openid` 的應用程式不受這項限制，Zeabur Identity 就是這種應用程式。

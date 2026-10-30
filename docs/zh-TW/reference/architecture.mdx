@@ -10,11 +10,11 @@ k3s 與 RKE2 使用相同設定。CI 測試涵蓋 k3s。
 
 ## 安全性質
 
-- **不使用密碼。** 通行密鑰是主要認證資訊，使用 WebAuthn，且必須完成使用者驗證。日常存取也可以改用連結的 GitHub 或 Google 帳號登入。
-- **只有管理員帳號能取得管理員權限。** 只有 `accountType: Admin` 的 `User` 會取得 `zeabur:admins` 群組，這個群組綁定 `cluster-admin`。管理員帳號只能用通行密鑰登入，權杖預設有效期限為五分鐘。工作階段也可能因閒置而提早結束。如果安裝設定啟用 AAL3，管理員帳號還必須使用綁定裝置的通行密鑰。一般帳號只會取得所屬群組綁定的權限。所有工作階段都會在登入 12 小時後結束。
-- **權杖有效期限短。** 權杖綁定目標對象（audience），簽章金鑰會定期輪替。
-- **使用者自行管理登入方式。** 不論是新增或移除通行密鑰，還是連結或解除連結 GitHub 或 Google 帳號，使用者都需要再次用通行密鑰完成驗證。使用者無法移除最後一把通行密鑰，也無法解除連結最後一種登入方式。
-- **狀態儲存在 Kubernetes。** 自訂資源儲存使用者、認證資訊、用戶端、工作階段與邀請，不需要資料庫。撤銷存取權與刪除資料的順序，請見[登出、救援與移除使用者](../users/offboarding.mdx)。
+- **不使用密碼**。通行密鑰是主要認證資訊，使用 WebAuthn，且必須完成使用者驗證。日常存取也可以改用連結的 GitHub 或 Google 帳號登入。
+- **只有管理員帳號能取得管理員權限**。只有 `accountType: Admin` 的 `User` 會取得 `zeabur:admins` 群組，這個群組綁定 `cluster-admin`。管理員帳號只能用通行密鑰登入，權杖預設有效期限為五分鐘。工作階段也可能因閒置而提早結束。如果安裝設定啟用 AAL3，管理員帳號還必須使用綁定裝置的通行密鑰。一般帳號只會取得所屬群組綁定的權限。所有工作階段都會在登入 12 小時後結束。
+- **權杖有效期限短**。權杖綁定目標對象（audience），簽章金鑰會定期輪替。
+- **使用者自行管理登入方式**。不論是新增或移除通行密鑰，還是連結或解除連結 GitHub 或 Google 帳號，使用者都需要再次用通行密鑰完成驗證。使用者無法移除最後一把通行密鑰，也無法解除連結最後一種登入方式。
+- **狀態儲存在 Kubernetes**。自訂資源儲存使用者、認證資訊、用戶端、工作階段與邀請，不需要資料庫。撤銷存取權與刪除資料的順序，請見[登出、救援與移除使用者](../users/offboarding.mdx)。
 
 [規格符合度](./conformance.mdx)列出 Zeabur Identity 實作的各項規格要求，以及對應的程式碼和驗證測試。
 
@@ -80,10 +80,10 @@ kube-apiserver 使用 Zeabur Identity 公開的金鑰驗證權杖簽章。金鑰
 
 程式碼分成多個小型 crate，全都放在 `crates/` 目錄下的同一層：
 
-- **相依關係只向下，不形成循環。** 參考 [Kladov][matklad-workspaces]，以及下方參考文獻中的 Lakos 和 Martin。
-- **每個 crate 用窄介面封裝一項設計決策。** 參考 [Parnas][parnas]。
-- **儲存層由一組 trait 定義。** 記憶體與 Kubernetes 各有一套實作，所以多數測試不需要叢集。這裡採用 ports and adapters 架構，參考 [Cockburn][cockburn]。
-- **伺服器與管理 CLI 使用不同的執行檔。** Kanidm（`kanidmd`／`kanidm`）、etcd（`etcd`／`etcdctl`）和 cert-manager（`cmctl`）也採用這種分工。只有管理員需要執行的程式碼，不會放進伺服器映像檔。
+- **相依關係只向下，不形成循環**。參考 [Kladov][matklad-workspaces]，以及下方參考文獻中的 Lakos 和 Martin。
+- **每個 crate 用窄介面封裝一項設計決策**。參考 [Parnas][parnas]。
+- **儲存層由一組 trait 定義**。記憶體與 Kubernetes 各有一套實作，所以多數測試不需要叢集。這裡採用 ports and adapters 架構，參考 [Cockburn][cockburn]。
+- **伺服器與管理 CLI 使用不同的執行檔**。Kanidm（`kanidmd`／`kanidm`）、etcd（`etcd`／`etcdctl`）和 cert-manager（`cmctl`）也採用這種分工。只有管理員需要執行的程式碼，不會放進伺服器映像檔。
 
 每個 crate 的 README 同時是該 crate 的 crate 層級文件，可用 `cargo doc --open` 開啟。
 

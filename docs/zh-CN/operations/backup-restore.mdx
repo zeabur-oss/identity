@@ -68,7 +68,7 @@ Zeabur Identity 用 `User` 对象的 UID 识别每个人。每个令牌的 `sub`
 
 这份资源导出文件要与数据存储备份一起保存。你需要 `kubectl`、`jq`、`tar`、[`age`](https://github.com/FiloSottile/age)、Bash，以及管理员 kubeconfig。
 
-导出期间必须停止 Zeabur Identity，确保用户、凭据与密钥来自同一个时间点。这会造成短暂的计划停机。
+为了让用户、凭据与密钥来自同一个时间点，导出期间必须停止 Zeabur Identity。这会造成短暂的计划停机。
 
 <Steps>
 
@@ -521,7 +521,7 @@ kubectl -n zeabur-identity wait certificate/zeabur-identity-internal-tls --for=c
 
 ### 创建备份
 
-复制数据时要停止 k3s，确保数据库文件一致。先按前面的创建备份流程，暂停其他写入来源并停止 Zeabur Identity。
+为了让数据库文件一致，复制数据时要停止 k3s。先按前面的创建备份流程，暂停其他写入来源并停止 Zeabur Identity。
 
 ```sh
 SNAPSHOT=/var/backups/zeabur-identity-k3s/$(date -u +%Y%m%dT%H%M%SZ)
