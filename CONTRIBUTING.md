@@ -77,6 +77,26 @@ English, Traditional Chinese or Simplified Chinese.
 
 Release binaries are built with `trim-paths = "all"`, so they carry no build-host paths.
 
+## Change files
+
+A pull request that changes what users of the server, the CLI or the chart see adds a change
+file. `nix develop -c knope document-change` asks for its level and summary and writes it to
+`.changeset/`; add paragraphs under the summary when it needs them:
+
+```md
+---
+default: patch
+---
+
+# Passkey sign-in works again after the browser restarts
+```
+
+Choose the level by the effect on users: `major` when they have to change something (`minor`
+before 1.0), `minor` for something new, `patch` for a fix. A change only to CI or tooling needs
+none; label the pull request `changelog: none` when its title is `feat`, `fix` or `perf` and users
+see no difference. The Changeset check enforces this. Keep each paragraph on one line: the section
+becomes the release body as it is. Releasing is in [docs/internal/releasing.md](docs/internal/releasing.md).
+
 ## Compiler cache (optional)
 
 The repository sets up no compiler cache. To share compiled crates between checkouts and

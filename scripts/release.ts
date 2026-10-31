@@ -4,6 +4,7 @@
 // itself checks the CHANGELOG.md section, signs SHA256SUMS and writes the notes. This script keeps
 // what is Zeabur Identity's own.
 //
+//   bump    <version>                           after knope set Cargo.toml: Cargo.lock and ui/package.json
 //   check   <version>                           the version is the crates' and ui/package.json's
 //   build   <version> <os> <arch> <dist>        build the CLI archive and image into <dist>, smoke them on k3s
 //   publish <version> <artifacts> <published>   push and sign the image by digest, attest its SBOMs
@@ -67,6 +68,28 @@ const names = (version: string, arch: string) => ({
   cliSbom: `zeabur-identityctl-${version}-linux-${arch}.cdx.json`,
   imageSbom: `zeabur-identity-${version}-linux-${arch}.cdx.json`,
 });
+
+// knope (knope.toml) has set [workspace.package] in Cargo.toml; the workspace's crates in
+// Cargo.lock and ui/package.json follow.
+async function bump(version: string) {
+  const plain = version.slice(1);
+  const metadata =
+    await $`cargo metadata --manifest-path ${join(root, "Cargo.toml")} --no-deps --format-version 1`.json();
+  const lockFile = join(root, "Cargo.lock");
+  let lock = await Bun.file(lockFile).text();
+  for (const { name } of metadata.packages as { name: string }[]) {
+    const entry = new RegExp(`(\nname = "${name}"\nversion = )"[^"]*"`);
+    if (!entry.test(lock)) fail(`Cargo.lock has no package ${name}`);
+    lock = lock.replace(entry, `$1"${plain}"`);
+  }
+  await Bun.write(lockFile, lock);
+  const uiFile = join(root, "ui/package.json");
+  const ui = (await Bun.file(uiFile).text()).replace(
+    /^(\s*"version": )"[^"]*"/m,
+    `$1"${plain}"`,
+  );
+  await Bun.write(uiFile, ui);
+}
 
 async function check(version: string) {
   const plain = version.slice(1);
@@ -320,14 +343,15 @@ async function verify(
 
 const [stage, version, ...rest] = process.argv.slice(2);
 const usage =
-  "usage: bun scripts/release.ts check|build|publish|assets|verify <version> ... (see the script's header)";
+  "usage: bun scripts/release.ts bump|check|build|publish|assets|verify <version> ... (see the script's header)";
 if (!version || !semver.test(version))
   fail(`${usage}\n<version> is vX.Y.Z or vX.Y.Z-<pre-release>, without +`);
 const args = rest.map((a, i) =>
   (stage === "build" || stage === "verify") && i < 2 ? a : resolve(a),
 );
 try {
-  if (stage === "check" && args.length === 0) await check(version);
+  if (stage === "bump" && args.length === 0) await bump(version);
+  else if (stage === "check" && args.length === 0) await check(version);
   else if (stage === "build" && args.length === 3)
     await build(version, args[0], args[1], args[2]);
   else if (stage === "publish" && args.length === 2)
