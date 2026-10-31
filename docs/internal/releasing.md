@@ -10,6 +10,7 @@ being released. The steps every zeabur-oss release shares (pushing by digest, si
 
 | Stage | Does |
 |---|---|
+| `bump` | After knope sets `Cargo.toml`, sets the workspace crates in `Cargo.lock` and `ui/package.json`. |
 | `check` | Every workspace crate (including `zeabur-identityctl`), `Cargo.lock` and `ui/package.json` carry the version, and `CHANGELOG.md` has its `## X.Y.Z (YYYY-MM-DD)` section. |
 | `build` | Per platform (Linux amd64 and arm64, each natively): static musl binaries, the CLI archive, CycloneDX SBOMs and the image, then `scripts/release-smoke.sh` (this repository's own) runs that archive and image on a disposable k3s cluster. |
 | `publish` | Pushes each smoked image to `ghcr.io/zeabur-oss/identity` by digest and the multi-platform index as the version tag, signs them and records them in `digests.txt`, then attests their SBOMs with cosign; the shared workflow adds build provenance. |
@@ -24,10 +25,14 @@ A tag is a SemVer 2.0.0 version with a `v` and no build metadata. `vX.Y.Z` is a 
 latest. A pre-release has a `CHANGELOG.md` section of its own (`## 0.1.2-beta.1 (YYYY-MM-DD)`), and
 the crates and `ui/package.json` carry the full version (`0.1.2-beta.1`).
 
-1. Update the workspace version in `Cargo.toml`, `Cargo.lock` and `ui/package.json`. Add a
-   `## <VERSION> (<DATE>)` section to `CHANGELOG.md` with the alpha status, platform scope and
-   known limitations. Use level-three headings within each version and keep each paragraph and list
-   item on one line; the release notes are the matching version section as it is. Merge the release commit to `main`.
+1. Run the **Release pull request** workflow (Actions, **Run workflow** on `main`), with
+   `prerelease: rc` for a release candidate. knope turns the change files in `.changeset/` into the
+   next `CHANGELOG.md` section and sets the workspace version in `Cargo.toml`;
+   `bun scripts/release.ts bump` sets `Cargo.lock` and `ui/package.json`, and zeabur-oss-bot opens
+   `chore(release): vX.Y.Z`. Edit `CHANGELOG.md` on that branch to add the alpha status, platform
+   scope and known limitations. Use level-three headings within each version and keep each
+   paragraph and list item on one line; the release notes are the matching version section as it is.
+   Merge the release pull request to `main`.
 2. In GitHub Actions, select **Release → Run workflow**, choose that commit's branch and enter
    the matching version, such as `v0.1.1`. This builds and smokes both platforms without
    publishing.
@@ -37,13 +42,7 @@ the crates and `ui/package.json` carry the full version (`0.1.2-beta.1`).
    restrict release-tag changes to maintainers.
    Enable GitHub private vulnerability reporting and confirm the reporting link in `SECURITY.md`
    works before making the release public.
-4. Check that **CI** passed on `main` for the release commit, then tag it and push the tag. Replace `YOUR_RELEASE_COMMIT` with its commit hash:
-
-   ```sh
-   git tag v0.1.1 YOUR_RELEASE_COMMIT
-   git push origin v0.1.1
-   ```
-
+4. zeabur-oss-bot tags the merge commit once **CI** has passed on it.
 5. Watch the **Release** run in GitHub Actions. A successful run leaves a **draft release**;
    it never makes the GitHub release public automatically.
 6. Download the draft assets with a maintainer's authenticated GitHub CLI:
