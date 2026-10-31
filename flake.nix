@@ -2,14 +2,14 @@
   description = "zeabur-identity development environment";
 
   inputs = {
-    nixpkgs.url = "https://flakehub.com/f/NixOS/nixpkgs/0.1"; # unstable Nixpkgs
+    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     # Rust toolchains. The locked revision sets the nightly (overlays.default).
     rust-overlay = {
-      url = "https://flakehub.com/f/oxalica/rust-overlay/0.1";
+      url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    # zeabur-oss-release (scripts/release.sh) and zeabur-oss-unsafe-report (scripts/ci.sh).
-    oss-release = {
+    # The base shell of every zeabur-oss repository: Bun, the release tools and the shared linters.
+    oss = {
       url = "github:zeabur-oss/.github";
       inputs.nixpkgs.follows = "nixpkgs";
     };
@@ -64,6 +64,7 @@
         { pkgs, system }:
         {
           default = pkgs.mkShell {
+            inputsFrom = [ inputs.oss.devShells.${system}.base ];
             packages = with pkgs; [
               rustToolchain
 
@@ -72,20 +73,11 @@
               cargo-nextest
               cargo-auditable
               cargo-cyclonedx
-              jq
-              shellcheck
-              actionlint
-              # Releases: SBOM generation and attestation; pinned by flake.lock.
-              inputs.oss-release.packages.${system}.zeabur-oss-release
-              inputs.oss-release.packages.${system}.zeabur-oss-unsafe-report
-              cosign
               syft
               curl
-              gh
               binutils
 
               # Sign-in page assets: bun installs the rest from ui/bun.lock.
-              bun
               brotli
               python3 # .claude/skills/zeabur-identity-ui/contrast.py
 
@@ -93,8 +85,6 @@
               kind
               k3d
               kubectl
-
-              self.formatter.${system}
             ];
 
             env = {
