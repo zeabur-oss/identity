@@ -13,11 +13,6 @@
       url = "github:zeabur-oss/nix-bun";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    # zeabur-oss-unsafe-report (scripts/ci.sh).
-    oss-release = {
-      url = "github:zeabur-oss/.github";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
   };
 
   outputs =
@@ -81,7 +76,6 @@
               jq
               shellcheck
               actionlint
-              inputs.oss-release.packages.${system}.zeabur-oss-unsafe-report
               # Releases: scripts/release.ts and @zeabur-oss/release (package.json) call these
               bun
               crane
