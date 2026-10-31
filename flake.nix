@@ -8,7 +8,12 @@
       url = "https://flakehub.com/f/oxalica/rust-overlay/0.1";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    # zeabur-oss-release (scripts/release.sh) and zeabur-oss-unsafe-report (scripts/ci.sh).
+    # Bun's own release binaries; Nixpkgs is behind, and bun fmt and bun check are newer.
+    nix-bun = {
+      url = "github:zeabur-oss/nix-bun";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    # zeabur-oss-unsafe-report (scripts/ci.sh).
     oss-release = {
       url = "github:zeabur-oss/.github";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -34,6 +39,7 @@
               inherit system;
               overlays = [
                 inputs.rust-overlay.overlays.default
+                inputs.nix-bun.overlays.default
                 inputs.self.overlays.default
               ];
             };
@@ -75,17 +81,17 @@
               jq
               shellcheck
               actionlint
-              # Releases: SBOM generation and attestation; pinned by flake.lock.
-              inputs.oss-release.packages.${system}.zeabur-oss-release
               inputs.oss-release.packages.${system}.zeabur-oss-unsafe-report
+              # Releases: scripts/release.ts and @zeabur-oss/release (package.json) call these
+              bun
+              crane
               cosign
+              gh
               syft
               curl
-              gh
               binutils
 
               # Sign-in page assets: bun installs the rest from ui/bun.lock.
-              bun
               brotli
               python3 # .claude/skills/zeabur-identity-ui/contrast.py
 
