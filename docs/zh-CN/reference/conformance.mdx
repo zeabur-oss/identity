@@ -240,7 +240,7 @@ cargo doc --workspace --open
 | RFC 9700 §4.16 | Prevent clickjacking (CSP `frame-ancestors`, `X-Frame-Options`) | MUST | `zeabur-identity-ui/src/lib.rs` `harden` | all page tests | Met |
 | CSP Level 3, Trusted Types | No inline script, style, or handlers; no string-to-HTML sinks | — | `zeabur-identity-ui`, `ui/src/*.ts` | all page tests | Met |
 | RFC 9110 §12.5.4, §12.4.2 | `Accept-Language` with quality values | — | `zeabur-identity-ui/src/i18n.rs` | `zeabur-identity-ui: i18n::tests::*`, `language_follows_parameter_then_header` | Met |
-| Project requirement | Assets embedded, no CDN; built output checked against source; size measured | MUST | `zeabur-identity-ui/src/assets.rs`, `scripts/build-ui.sh`, `scripts/ui-budget.sh` | `assets_are_embedded_versioned_and_immutable`; CI `ui` | Met |
+| Project requirement | Assets embedded, no CDN; built from source for every shipped binary; size measured | MUST | `zeabur-identity-ui/src/assets.rs`, `zeabur-identity-ui/build.rs`, `scripts/build-ui.sh`, `scripts/ui-budget.sh` | `assets_are_embedded_versioned_and_immutable`; CI `ui` | Met |
 | Project requirement | No tokens in browser storage; cookies `HttpOnly`, `Secure`, `SameSite` | MUST | `ui/src/*.ts`, `zeabur-identity-signin` | `bun run typecheck` in `ui/`, review | Met |
 | Project requirement | Fallback without passkey support or script; provider buttons only when configured | MUST | templates | `login_offers_passkey_autofill_for_a_pending_request`, `provider_buttons_appear_only_when_configured` | Met |
 | Project requirement | Dark mode; en, zh-TW, zh-CN | MUST | `ui/styles/app.css`, `zeabur-identity-ui/src/i18n.rs` | `language_follows_parameter_then_header` | Met |

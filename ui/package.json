@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "bun scripts/gen-classes.ts && tailwindcss --input styles/app.css --output ../crates/zeabur-identity-ui/assets/app.css --minify",
+    "build": "bun scripts/gen-classes.ts && tailwindcss --input styles/app.css --output dist/app.css --minify",
     "typecheck": "tsc -b",
     "lint": "oxlint --deny-warnings",
     "fallow": "bunx fallow@3.33.1",

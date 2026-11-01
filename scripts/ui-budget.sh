@@ -4,7 +4,7 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
-assets="$root/crates/zeabur-identity-ui/assets"
+assets="${ZEABUR_IDENTITY_UI_DIST:-$root/ui/dist}"
 status=0
 printf '%-12s %8s %8s %8s\n' asset bytes brotli budget
 for entry in app.css:9216 login.js:3072 setup.js:3072 account.js:3072; do

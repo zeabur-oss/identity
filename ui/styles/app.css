@@ -1,5 +1,5 @@
-/* Built by scripts/build-ui.sh into crates/zeabur-identity-ui/assets, which are committed.
-   The font file is copied there from the design system. */
+/* Built by scripts/build-ui.sh into ui/dist, which the binary embeds. The font file is copied
+   there from the design system. */
 @import "tailwindcss" source(none);
 @source "../../crates/zeabur-identity-ui/templates";
 @import "@zeabur-oss/design-system/tokens.css";

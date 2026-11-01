@@ -7,8 +7,9 @@ description: Change Zeabur Identity's sign-in pages (askama templates, the desig
 
 - **Where things are.** Sources: `ui/src/*.ts` (one script per page, no framework),
   `ui/styles/app.css` (Tailwind v4 input; imports `@zeabur-oss/design-system/tokens.css`). Templates:
-  `crates/zeabur-identity-ui/templates/` (askama). Built output: `crates/zeabur-identity-ui/assets/`
-  (committed, embedded with `include_bytes!`). Page routes live in
+  `crates/zeabur-identity-ui/templates/` (askama). Built output: `ui/dist/` (not committed;
+  `crates/zeabur-identity-ui/build.rs` embeds it when `ZEABUR_IDENTITY_UI_DIST` points at it, empty
+  placeholders otherwise in a debug build). Page routes live in
   `crates/zeabur-identity-signin/src/pages.rs`; rendering in `crates/zeabur-identity-ui/src/pages.rs`.
 - **Design system.** `@zeabur-oss/design-system` is a dependency in `ui/package.json`, as in web.
   `ui/scripts/gen-classes.ts` calls its React-free `cva` functions
@@ -26,14 +27,15 @@ description: Change Zeabur Identity's sign-in pages (askama templates, the desig
 - **Build and check** (inside `nix develop`):
   ```sh
   (cd ui && bun ci && bun run fmt:check && bun run lint && bun run typecheck)
-  ./scripts/build-ui.sh && git diff --stat -- crates/zeabur-identity-ui/assets crates/zeabur-identity-ui/templates/ds.html
+  ./scripts/build-ui.sh && git diff --stat -- crates/zeabur-identity-ui/templates/ds.html
   ./scripts/ui-budget.sh && python3 .claude/skills/zeabur-identity-ui/contrast.py
   (cd ui && bun run fallow dead-code --baseline fallow-baseline.json && bun run fallow audit --base main)
-  cargo nextest run -p zeabur-identity-signin -E 'binary(pages)'
+  ZEABUR_IDENTITY_UI_DIST="$PWD/ui/dist" cargo nextest run -p zeabur-identity-signin -E 'binary(pages)'
   ```
-  Commit the rebuilt assets and `ds.html` with the source change; CI rebuilds and fails on any
-  difference. Format with `bun run fmt` in `ui/`. Look at every page state with
-  `cargo run -p zeabur-identity-ui --example preview` (http://localhost:8090/).
+  Commit the regenerated `ds.html` with the source change; CI fails on any difference. Without
+  `ZEABUR_IDENTITY_UI_DIST` the tests that read the styles and scripts return early. Format with `bun run fmt` in `ui/`. Look at every page state with
+  `ZEABUR_IDENTITY_UI_DIST="$PWD/ui/dist" cargo run -p zeabur-identity-ui --example preview`
+  (http://localhost:8090/).
 - **fallow** (`bun run fallow <command>` in `ui/`, config in `ui/.fallowrc.json`). `dead-code` finds
   unused files, exports and dependencies, and a page that imports another page (pages import only
   `webauthn.ts`). `ui/fallow-baseline.json` holds the findings that predate fallow; never add to

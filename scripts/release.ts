@@ -127,6 +127,8 @@ async function build(version: string, os: string, arch: string, dist: string) {
   const release = join(targetDir, target, "release");
   const { archive, cliSbom, imageSbom } = names(version, arch);
 
+  await $`${join(root, "scripts/build-ui.sh")}`;
+  process.env.ZEABUR_IDENTITY_UI_DIST = join(root, "ui/dist");
   // Embedded cargo-auditable metadata lets Syft inventory dependencies in the shipped binaries.
   await $`cargo auditable build --release --locked --target ${target} --target-dir ${targetDir} --manifest-path ${join(root, "Cargo.toml")} -p zeabur-identityctl -p zeabur-identity`;
   for (const binary of ["zeabur-identityctl", "zeabur-identity"]) {
