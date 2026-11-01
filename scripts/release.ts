@@ -337,12 +337,11 @@ async function verify(
     s.predicate.version >= 1 &&
     Array.isArray(s.predicate.components);
   // An actual CycloneDX document inside the verified envelope, this platform's, not only its label.
+  // cosign re-encodes the predicate with its keys sorted, so compare values, not text.
   if (
     !statements.length ||
     !statements.every(valid) ||
-    !statements.some(
-      (s) => JSON.stringify(s.predicate) === JSON.stringify(expected),
-    )
+    !statements.some((s) => Bun.deepEquals(s.predicate, expected, true))
   )
     fail(`${index} has no valid CycloneDX attestation of ${imageSbom}`);
 
