@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Builds the sign-in page assets into crates/zeabur-identity-ui/assets and the design system's
-# classes into crates/zeabur-identity-ui/templates/ds.html. Both are committed: `cargo build`
+# Builds the sign-in page assets into crates/zeabur-identity-ui/assets, styles and scripts as brotli
+# only, and the design system's classes into crates/zeabur-identity-ui/templates/ds.html. Both are committed: `cargo build`
 # embeds them and never needs this toolchain. CI rebuilds and fails if the committed files
 # differ. Run `bun ci` in ui/ first.
 set -euo pipefail
@@ -13,6 +13,10 @@ geist="$ui/node_modules/@zeabur-oss/design-system/vendor/geist"
 (cd "$ui" && bun run --silent build)
 for page in login setup account; do
   bun build "$ui/src/$page.ts" --target=browser --format=esm --minify --outfile "$out/$page.js" >/dev/null
+done
+for file in app.css login.js setup.js account.js; do
+  brotli -q 11 -f -o "$out/$file.br" "$out/$file"
+  rm "$out/$file"
 done
 cp "$geist/Geist-Variable.woff2" "$out/Geist-Variable.woff2"
 cp "$geist/LICENSE.txt" "$out/LICENSE-Geist.txt"
