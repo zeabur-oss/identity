@@ -28,7 +28,7 @@ import {
 } from "@zeabur-oss/release";
 import { $ } from "bun";
 import { rmSync } from "node:fs";
-import { cp, mkdir, mkdtemp, rm } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, rm, utimes } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -156,7 +156,15 @@ async function build(version: string, os: string, arch: string, dist: string) {
   await $`install -m 0555 ${join(release, "zeabur-identity")} ${join(stage, "zeabur-identity")}`;
   await $`install -m 0444 ${ca} ${join(certs, "ca-certificates.crt")}`;
   await $`chmod 0755 ${join(stage, "etc")} ${join(stage, "etc/ssl")} ${certs}`;
-  await $`touch -d ${"@" + epoch} ${join(stage, "zeabur-identity")} ${join(stage, "etc")} ${join(stage, "etc/ssl")} ${certs} ${join(certs, "ca-certificates.crt")}`;
+  // Bun's $ has its own touch, without -d.
+  for (const path of [
+    join(stage, "zeabur-identity"),
+    join(stage, "etc"),
+    join(stage, "etc/ssl"),
+    certs,
+    join(certs, "ca-certificates.crt"),
+  ])
+    await utimes(path, Number(epoch), Number(epoch));
   const image = `zeabur-identity:release-${arch}`;
   await $`docker build --platform ${"linux/" + arch} --network none --build-arg ${"SOURCE_DATE_EPOCH=" + epoch} --file ${join(root, "Containerfile")} --tag ${image} ${stage}`;
   const tar = join(dist, "image.tar");
