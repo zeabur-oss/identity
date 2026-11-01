@@ -1,7 +1,7 @@
 # Change files in .changeset/ and release pull requests (CONTRIBUTING.md, "Change files"; docs/internal/releasing.md).
 [package]
 versioned_files = [
-  { path = "Cargo.toml", regex = '\[workspace\.package\]\nversion = "(?<version>[^"]+)"' },
+  "Cargo.toml",
 ]
 changelog = "CHANGELOG.md"
 
