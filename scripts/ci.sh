@@ -73,14 +73,18 @@ case "$job" in
     nixfmt --check flake.nix
     shellcheck scripts/*.sh
     actionlint
+    bun install --frozen-lockfile
+    bun fmt --check scripts/release.ts
+    bun check scripts/
     ;;
   clippy) cargo lint ;;
   docs) cargo doc --workspace --no-deps --document-private-items --locked ;;
   test) cargo nextest run --workspace --all-features --locked --no-tests=warn ;;
   cargo-deny) cargo deny --locked check ;;
   unsafe-report)
+    bun install --frozen-lockfile
     status=0
-    zeabur-oss-unsafe-report zeabur-identity zeabur-identityctl || status=$?
+    node_modules/.bin/zeabur-oss-unsafe-report zeabur-identity zeabur-identityctl || status=$?
     if [[ -n "${CI_ARTIFACTS:-}" && -f target/unsafe-report.md ]]; then
       mkdir -p "$CI_ARTIFACTS"
       cp target/unsafe-report.md "$CI_ARTIFACTS/"

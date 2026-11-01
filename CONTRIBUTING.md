@@ -83,7 +83,7 @@ The repository sets up no compiler cache. To share compiled crates between check
 worktrees on your machine, install [kache](https://ninja.kunobi.com/docs/kache/getting-started/c-cpp)
 and set `RUSTC_WRAPPER=kache` in your shell profile; `nix develop` keeps it. The C code that build
 scripts compile (aws-lc-sys) goes through kache too, with no further setup.
-`scripts/release.sh build` unsets `RUSTC_WRAPPER`, so release binaries are always compiled.
+`bun scripts/release.ts build` unsets `RUSTC_WRAPPER`, so release binaries are always compiled.
 
 ## Lints and formatting
 

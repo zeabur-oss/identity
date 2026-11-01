@@ -1,6 +1,6 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "description": "Cargo crates, ui/ packages (bun.lock, the same schedule and grouping as Zeabur's web/), action digests and the k3s test version, on the shared zeabur-oss preset. Lock file maintenance also updates flake.lock, and with it the Rust nightly.",
+  "description": "Cargo crates, the release scripts' package.json and ui/ packages (bun.lock, the same schedule and grouping as Zeabur's web/), action digests and the k3s test version, on the shared zeabur-oss preset. Lock file maintenance also updates flake.lock, and with it the Rust nightly.",
   "extends": [
     "github>zeabur-oss/.github"
   ],
