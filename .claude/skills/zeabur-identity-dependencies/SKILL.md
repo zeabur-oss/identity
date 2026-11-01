@@ -22,6 +22,5 @@ Identity's own.
   system's React peers are not installed.
 - `bun pm untrusted` lists `@parcel/watcher`, through the Tailwind CLI, whose prebuilt binary is
   used.
-- `@zeabur/design-system` is a Git dependency pinned to a commit
-  (`github:zeabur-oss/design-system#<commit>`).
+- `@zeabur-oss/design-system` comes from npm at an exact version, which Renovate moves.
 - Renovate (`renovate.json`) updates `ui/` on web's schedule and with web's grouping.
