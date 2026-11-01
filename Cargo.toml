@@ -31,6 +31,8 @@ bytes = "1"
 clap = { version = "4", default-features = false, features = ["std", "derive", "env", "help", "usage", "error-context"] }
 form_urlencoded = "1"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
+# Decodes the embedded styles and scripts for a client without brotli (zeabur-identity-ui).
+brotli-decompressor = { version = "6.1", default-features = false, features = ["std"] }
 http = "1"
 http-body-util = "0.1"
 hyper = { version = "1.12.0", default-features = false, features = ["client", "http1"] }

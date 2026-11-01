@@ -353,6 +353,31 @@ mod tests {
         }
     }
 
+    /// Styles and scripts go out brotli-encoded to a browser that takes it, as they are otherwise.
+    #[tokio::test]
+    async fn styles_and_scripts_are_brotli_when_accepted() {
+        let app = app().await;
+        let plain = get(&app, "/assets/app.css", &[]).await;
+        assert_eq!(plain.status, StatusCode::OK);
+        assert!(plain.headers.get(header::CONTENT_ENCODING).is_none());
+        assert!(plain.body.contains("@font-face"));
+        for accept in ["gzip, deflate, br, zstd", "br;q=1"] {
+            let encoded = get(&app, "/assets/app.css", &[("accept-encoding", accept)]).await;
+            assert_eq!(encoded.headers[header::CONTENT_ENCODING], "br", "{accept}");
+            assert_eq!(encoded.headers[header::VARY], "accept-encoding");
+            assert!(encoded.body.len() < plain.body.len());
+        }
+        let refused = get(&app, "/assets/login.js", &[("accept-encoding", "br;q=0")]).await;
+        assert!(refused.headers.get(header::CONTENT_ENCODING).is_none());
+        let font = get(
+            &app,
+            "/assets/Geist-Variable.woff2",
+            &[("accept-encoding", "br")],
+        )
+        .await;
+        assert!(font.headers.get(header::CONTENT_ENCODING).is_none());
+    }
+
     /// A used or expired link leaves only the way to a new one: the script hides the form and the
     /// provider buttons and shows the new-link guidance, all found by these ids.
     #[tokio::test]

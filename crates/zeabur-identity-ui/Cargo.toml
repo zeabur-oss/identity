@@ -15,6 +15,7 @@ workspace = true
 zeabur-identity-core.workspace = true
 askama.workspace = true
 axum.workspace = true
+brotli-decompressor.workspace = true
 form_urlencoded.workspace = true
 serde.workspace = true
 tracing.workspace = true

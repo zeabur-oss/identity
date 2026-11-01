@@ -10,8 +10,8 @@ printf '%-12s %8s %8s %8s\n' asset bytes brotli budget
 for entry in app.css:9216 login.js:3072 setup.js:3072 account.js:3072; do
   name="${entry%%:*}"
   budget="${entry##*:}"
-  raw=$(wc -c <"$assets/$name" | tr -d ' ')
-  compressed=$(brotli --best --stdout "$assets/$name" | wc -c | tr -d ' ')
+  raw=$(brotli -d --stdout "$assets/$name.br" | wc -c | tr -d ' ')
+  compressed=$(wc -c <"$assets/$name.br" | tr -d ' ')
   printf '%-12s %8s %8s %8s\n' "$name" "$raw" "$compressed" "$budget"
   if (( compressed > budget )); then
     echo "error: $name is $compressed bytes compressed, over its budget of $budget" >&2
