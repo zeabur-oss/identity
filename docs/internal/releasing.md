@@ -32,8 +32,7 @@ the crates and `ui/package.json` carry the full version (`0.1.2-beta.1`).
    `chore(release): vX.Y.Z`. Edit `CHANGELOG.md` on that branch to add the alpha status, platform
    scope and known limitations. Use level-three headings within each version and keep each
    paragraph and list item on one line; the release notes are the matching version section as it is.
-   Merge the release pull request to `main`.
-2. In GitHub Actions, select **Release → Run workflow**, choose that commit's branch and enter
+2. In GitHub Actions, select **Release → Run workflow**, choose `release/next` and enter
    the matching version, such as `v0.1.1`. This builds and smokes both platforms without
    publishing.
 3. Make sure the GHCR package `zeabur-oss/identity` is public and this repository's Actions token
@@ -42,7 +41,8 @@ the crates and `ui/package.json` carry the full version (`0.1.2-beta.1`).
    restrict release-tag changes to maintainers.
    Enable GitHub private vulnerability reporting and confirm the reporting link in `SECURITY.md`
    works before making the release public.
-4. zeabur-oss-bot tags the merge commit once **CI** has passed on it.
+4. Merge the release pull request to `main` once its CI has passed. zeabur-oss-bot tags the
+   merge commit as soon as it lands, which starts the **Release** run.
 5. Watch the **Release** run in GitHub Actions. A successful run leaves a **draft release**;
    it never makes the GitHub release public automatically.
 6. Download the draft assets with a maintainer's authenticated GitHub CLI:
