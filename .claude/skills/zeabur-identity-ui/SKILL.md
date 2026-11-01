@@ -6,13 +6,13 @@ description: Change Zeabur Identity's sign-in pages (askama templates, the desig
 # Sign-in pages
 
 - **Where things are.** Sources: `ui/src/*.ts` (one script per page, no framework),
-  `ui/styles/app.css` (Tailwind v4 input; imports `@zeabur/design-system/tokens.css`). Templates:
+  `ui/styles/app.css` (Tailwind v4 input; imports `@zeabur-oss/design-system/tokens.css`). Templates:
   `crates/zeabur-identity-ui/templates/` (askama). Built output: `crates/zeabur-identity-ui/assets/`
   (committed, embedded with `include_bytes!`). Page routes live in
   `crates/zeabur-identity-signin/src/pages.rs`; rendering in `crates/zeabur-identity-ui/src/pages.rs`.
-- **Design system.** `@zeabur/design-system` is a dependency in `ui/package.json`, as in web.
+- **Design system.** `@zeabur-oss/design-system` is a dependency in `ui/package.json`, as in web.
   `ui/scripts/gen-classes.ts` calls its React-free `cva` functions
-  (`@zeabur/design-system/variants/<name>`) and writes `templates/ds.html`: one askama macro per
+  (`@zeabur-oss/design-system/variants/<name>`) and writes `templates/ds.html`: one askama macro per
   component part (`ds::button("primary", "lg")`, `ds::card()`, `ds::alert("warn")` …) and the mark.
   Never edit `ds.html`. A component is used as the design system has it; a template adds only
   layout classes (`w-full`, `flex-1`). The generator holds the few identity classes merged over

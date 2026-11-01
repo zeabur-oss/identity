@@ -35,7 +35,7 @@ type Layers = tuple[Paint, ...]
 """Paints from the bottom up; the first is opaque."""
 
 DEFAULT_CSS = (
-    Path("ui/node_modules/@zeabur/design-system/src/tokens.css"),
+    Path("ui/node_modules/@zeabur-oss/design-system/src/tokens.css"),
     Path("ui/styles/app.css"),
 )
 THEMES = ("light", "dark")

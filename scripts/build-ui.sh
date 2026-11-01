@@ -8,7 +8,7 @@ set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 ui="$root/ui"
 out="$root/crates/zeabur-identity-ui/assets"
-geist="$ui/node_modules/@zeabur/design-system/vendor/geist"
+geist="$ui/node_modules/@zeabur-oss/design-system/vendor/geist"
 
 (cd "$ui" && bun run --silent build)
 for page in login setup account; do

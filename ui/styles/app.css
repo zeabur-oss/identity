@@ -2,7 +2,7 @@
    The font file is copied there from the design system. */
 @import "tailwindcss" source(none);
 @source "../../crates/zeabur-identity-ui/templates";
-@import "@zeabur/design-system/tokens.css";
+@import "@zeabur-oss/design-system/tokens.css";
 
 @custom-variant dark (@media (prefers-color-scheme: dark));
 :root {
