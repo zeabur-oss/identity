@@ -2,6 +2,28 @@
 
 All notable changes to Zeabur Identity. Versions follow [Semantic Versioning](https://semver.org/); each section comes from the change files in `.changeset/` (docs/internal/releasing.md).
 
+## 0.1.2-beta.0 (2026-11-01)
+
+### Fixes
+
+- Images are pushed by digest with no `candidate-*` tags left in GHCR
+
+#### The sign-in pages' styles and scripts are stored brotli-compressed only
+
+A browser that accepts brotli gets them as they are stored, and others get a copy decoded once.
+
+#### The release file `image-digests.txt` is now `digests.txt`
+
+It has a line per image kind (`linux/amd64`, `linux/arm64`, `index`), as in every zeabur-oss release ([release files](docs/reference/releases.mdx)). The `index` line is unchanged.
+
+#### Release notes are the changelog section and a link to the documentation
+
+The digests are in the signed `digests.txt`.
+
+#### The server image's version tag drops the `v`
+
+As every zeabur-oss image and chart does: `ghcr.io/zeabur-oss/identity:0.1.2`, not `:v0.1.2`. The 0.1.1 image is also tagged `0.1.1`; its `v0.1.1` tag stays and names the same digest.
+
 ## 0.1.1 (2026-10-28)
 
 First published alpha, for evaluating passkey-based access to self-managed Kubernetes clusters. Use a disposable cluster and keep an independent cluster-admin kubeconfig.
