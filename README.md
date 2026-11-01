@@ -109,5 +109,5 @@ Apache-2.0. Contributions are accepted under the [Developer Certificate of Origi
 The sign-in pages take their styles and component classes from Zeabur's design system
 (Apache-2.0, built on [shadcn/ui](https://ui.shadcn.com), MIT) and ship the
 [Geist](https://github.com/vercel/geist-font) font (SIL Open Font License 1.1,
-`crates/zeabur-identity-ui/assets/LICENSE-Geist.txt`). The container image includes
+`vendor/geist/LICENSE.txt` in the design system). The container image includes
 Mozilla's CA certificate bundle as packaged by nixpkgs (MPL-2.0).

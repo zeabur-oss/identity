@@ -340,6 +340,9 @@ mod tests {
     /// the generic error.
     #[tokio::test]
     async fn login_script_handles_an_ended_request() {
+        if !built() {
+            return;
+        }
         let app = app().await;
         let login = get(&app, "/assets/login.js", &[]).await.body;
         for needle in [
@@ -353,9 +356,19 @@ mod tests {
         }
     }
 
+    /// Whether the build embeds the built pages. Without `ZEABUR_IDENTITY_UI_DIST` it embeds empty
+    /// placeholders, so the tests that read styles and scripts return early; CI's `ui` job runs
+    /// them with the built pages.
+    fn built() -> bool {
+        option_env!("ZEABUR_IDENTITY_UI_DIST").is_some_and(|dist| !dist.is_empty())
+    }
+
     /// Styles and scripts go out brotli-encoded to a browser that takes it, as they are otherwise.
     #[tokio::test]
     async fn styles_and_scripts_are_brotli_when_accepted() {
+        if !built() {
+            return;
+        }
         let app = app().await;
         let plain = get(&app, "/assets/app.css", &[]).await;
         assert_eq!(plain.status, StatusCode::OK);
@@ -382,6 +395,9 @@ mod tests {
     /// provider buttons and shows the new-link guidance, all found by these ids.
     #[tokio::test]
     async fn setup_page_has_what_a_used_link_hides() {
+        if !built() {
+            return;
+        }
         let app = app_with(&[Kind::GitHub]).await;
         let setup = get(&app, "/assets/setup.js", &[]).await.body;
         let page = get(&app, "/setup", &[]).await;
@@ -398,6 +414,9 @@ mod tests {
     /// only the generic error.
     #[tokio::test]
     async fn setup_script_explains_each_refusal() {
+        if !built() {
+            return;
+        }
         let app = app_with(&[Kind::GitHub]).await;
         let setup = get(&app, "/assets/setup.js", &[]).await.body;
         let page = get(&app, "/setup", &[]).await;
@@ -418,6 +437,9 @@ mod tests {
 
     #[tokio::test]
     async fn account_script_links_unlinks_and_explains_refusals() {
+        if !built() {
+            return;
+        }
         let app = app().await;
         let account = get(&app, "/assets/account.js", &[]).await.body;
         for needle in [

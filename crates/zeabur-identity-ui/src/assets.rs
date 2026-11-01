@@ -1,5 +1,5 @@
-//! Static assets, built by `scripts/build-ui.sh`, committed, and embedded in the binary. Nothing is
-//! loaded from other origins at run time.
+//! Static assets, built by `scripts/build-ui.sh` into `ZEABUR_IDENTITY_UI_DIST` and embedded in the
+//! binary (`build.rs`). Nothing is loaded from other origins at run time.
 //!
 //! Styles and scripts are embedded brotli-encoded only, which a browser far away gets in fewer
 //! round trips; a client without brotli gets them decoded once and kept.
@@ -46,35 +46,38 @@ static ASSETS: [Asset; 5] = [
     Asset {
         name: "app.css",
         content_type: "text/css; charset=utf-8",
-        stored: include_bytes!("../assets/app.css.br"),
+        stored: include_bytes!(concat!(env!("ZEABUR_IDENTITY_UI_DIR"), "/app.css.br")),
         brotli: true,
         decoded: OnceLock::new(),
     },
     Asset {
         name: "login.js",
         content_type: "text/javascript; charset=utf-8",
-        stored: include_bytes!("../assets/login.js.br"),
+        stored: include_bytes!(concat!(env!("ZEABUR_IDENTITY_UI_DIR"), "/login.js.br")),
         brotli: true,
         decoded: OnceLock::new(),
     },
     Asset {
         name: "setup.js",
         content_type: "text/javascript; charset=utf-8",
-        stored: include_bytes!("../assets/setup.js.br"),
+        stored: include_bytes!(concat!(env!("ZEABUR_IDENTITY_UI_DIR"), "/setup.js.br")),
         brotli: true,
         decoded: OnceLock::new(),
     },
     Asset {
         name: "account.js",
         content_type: "text/javascript; charset=utf-8",
-        stored: include_bytes!("../assets/account.js.br"),
+        stored: include_bytes!(concat!(env!("ZEABUR_IDENTITY_UI_DIR"), "/account.js.br")),
         brotli: true,
         decoded: OnceLock::new(),
     },
     Asset {
         name: "Geist-Variable.woff2",
         content_type: "font/woff2",
-        stored: include_bytes!("../assets/Geist-Variable.woff2"),
+        stored: include_bytes!(concat!(
+            env!("ZEABUR_IDENTITY_UI_DIR"),
+            "/Geist-Variable.woff2"
+        )),
         brotli: false,
         decoded: OnceLock::new(),
     },
