@@ -15,6 +15,6 @@ permissions:
 
 jobs:
   skills:
-    uses: zeabur-oss/.github/.github/workflows/skills.yml@d89d1411a8183aad5dfa177bcab5b1a4f4666356 # main
+    uses: zeabur-oss/.github/.github/workflows/skills.yml@0c71bf4017582c7cabe03d79842254694964a385 # main
     secrets:
       private-key: ${{ secrets.ZEABUR_OSS_BOT_PRIVATE_KEY }}
