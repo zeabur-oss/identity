@@ -169,7 +169,7 @@ fn container(issuer: &BaseUrl, options: &Options) -> Container {
         resources: Some(ResourceRequirements {
             requests: Some(BTreeMap::from([
                 ("cpu".to_owned(), quantity("10m")),
-                ("memory".to_owned(), quantity("32Mi")),
+                ("memory".to_owned(), quantity("24Mi")),
             ])),
             limits: Some(BTreeMap::from([("memory".to_owned(), quantity("128Mi"))])),
             ..ResourceRequirements::default()
