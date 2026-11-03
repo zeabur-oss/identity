@@ -35,6 +35,10 @@ pub(crate) enum Command {
     /// Print everything to install (the `rbac` objects, the Service and the Deployment) as a
     /// Kubernetes `List` (JSON), for `zeabur-identityctl manifests … | kubectl apply -f -`.
     Manifests(ManifestsArgs),
+    /// Print the total memory request of the pods `manifests` renders with its defaults, as JSON
+    /// (`{"requestMemoryMiB": 24}`), so an installer can check a server has room before it
+    /// downloads anything.
+    Resources,
     /// Prepare kube-apiserver to accept Zeabur Identity's tokens, using your own kubeconfig
     /// (cluster admin): issues the internal listener's certificate if needed, prints the
     /// `AuthenticationConfiguration` (stdout) and how to install it (stderr).

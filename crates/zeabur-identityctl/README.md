@@ -23,6 +23,8 @@ Replace the example URL with your own issuer. `zeabur-identityctl` reads `ZEABUR
   the empty key Secret.
 - `zeabur-identityctl manifests --image <ref>`: everything `rbac` prints plus the Service
   and the single-replica Deployment.
+- `zeabur-identityctl resources`: the memory the default Deployment requests in total, as JSON
+  (`{"requestMemoryMiB": 24}`). Each release publishes it as `resources.json`.
 - `zeabur-identityctl kube-config --distro <k3s|generic>`: issues the
   internal listener's certificate if needed (the CA key is discarded), prints the kube-apiserver
   `AuthenticationConfiguration` on stdout and how to install it on stderr. `k3s` covers K3s/RKE2.

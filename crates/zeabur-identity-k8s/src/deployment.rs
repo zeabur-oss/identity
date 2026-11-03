@@ -244,6 +244,38 @@ pub fn deployment(namespace: &str, issuer: &BaseUrl, options: &Options) -> Deplo
     }
 }
 
+/// The memory the pods of [`deployment`] request in total, in MiB: the replicas times the
+/// containers' requests. `None` if a request is not a whole number of `Mi`.
+#[must_use]
+pub fn request_memory_mib(deployment: &Deployment) -> Option<u64> {
+    let spec = deployment.spec.as_ref()?;
+    let replicas = u64::try_from(spec.replicas?).ok()?;
+    let containers = &spec.template.spec.as_ref()?.containers;
+    let mut per_pod = 0_u64;
+    for container in containers {
+        let request = container
+            .resources
+            .as_ref()?
+            .requests
+            .as_ref()?
+            .get("memory")?;
+        per_pod += request.0.strip_suffix("Mi")?.parse::<u64>().ok()?;
+    }
+    replicas.checked_mul(per_pod)
+}
+
+/// [`request_memory_mib`] of the Deployment that `zeabur-identityctl manifests` renders with its
+/// defaults. Nothing the install options set changes the request.
+#[must_use]
+pub fn default_request_memory_mib() -> Option<u64> {
+    let issuer = BaseUrl::parse("issuer", "https://login.example.com").ok()?;
+    request_memory_mib(&deployment(
+        super::rbac::DEFAULT_NAMESPACE,
+        &issuer,
+        &Options::default(),
+    ))
+}
+
 /// Everything to install, in apply order: the RBAC objects ([`super::rbac::manifests`]), the
 /// Service and the Deployment.
 ///
@@ -328,6 +360,35 @@ mod tests {
             container["env"][1]["valueFrom"]["fieldRef"]["fieldPath"],
             "metadata.namespace"
         );
+    }
+
+    #[test]
+    fn request_memory_is_replicas_times_container_requests() {
+        let issuer = BaseUrl::parse("issuer", "https://login.example.com").unwrap();
+        let mut deployment = deployment("ns", &issuer, &Options::default());
+        let per_pod = request_memory_mib(&deployment).unwrap();
+        assert_eq!(default_request_memory_mib(), Some(per_pod));
+
+        deployment.spec.as_mut().unwrap().replicas = Some(3);
+        assert_eq!(request_memory_mib(&deployment), Some(3 * per_pod));
+        let container = &mut deployment
+            .spec
+            .as_mut()
+            .unwrap()
+            .template
+            .spec
+            .as_mut()
+            .unwrap()
+            .containers[0];
+        let requests = container
+            .resources
+            .as_mut()
+            .unwrap()
+            .requests
+            .as_mut()
+            .unwrap();
+        requests.insert("memory".to_owned(), quantity("100Mi"));
+        assert_eq!(request_memory_mib(&deployment), Some(300));
     }
 
     #[test]

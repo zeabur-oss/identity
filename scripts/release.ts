@@ -8,7 +8,7 @@
 //   check   <version>                           the version is the crates' and ui/package.json's
 //   build   <version> <os> <arch> <dist>        build the CLI archive and image into <dist>, smoke them on k3s
 //   publish <version> <artifacts> <published>   push and sign the image by digest, attest its SBOMs
-//   assets  <version> <artifacts> <assets>      copy the archives, SBOMs and digests.txt into <assets>
+//   assets  <version> <artifacts> <assets>      copy the archives, SBOMs, digests.txt and resources.json into <assets>
 //   verify  <version> <os> <arch> <downloaded>  check the draft's image and SBOMs, smoke the archive and image
 //
 // <version> is vX.Y.Z or vX.Y.Z-<pre-release>. <artifacts> holds the workflow's earlier artifacts:
@@ -287,6 +287,15 @@ async function assets(version: string, artifacts: string, dir: string) {
     join(artifacts, "published", "digests.txt"),
     join(dir, "digests.txt"),
   );
+  // The CLI built from this commit for the runner's architecture.
+  const arch = process.arch === "x64" ? "amd64" : process.arch;
+  const cli = join(dir, ".zeabur-identityctl");
+  const { archive } = names(version, arch);
+  await $`tar -xOzf ${join(artifacts, `candidate-linux-${arch}`, archive)} zeabur-identityctl > ${cli}`;
+  await $`chmod +x ${cli}`;
+  const resources = await $`${cli} resources`.text();
+  await rm(cli);
+  await Bun.write(join(dir, "resources.json"), resources);
 }
 
 // What a user does with the draft's files, after the workflow has verified SHA256SUMS and each

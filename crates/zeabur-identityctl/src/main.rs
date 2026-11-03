@@ -31,6 +31,7 @@ fn main() -> ExitCode {
                 config_secret: args.config_secret.clone(),
             },
         )),
+        Command::Resources => resources(),
         Command::KubeConfig(args) => kube_config(&args),
         Command::Invite(args) => invite(&args),
         Command::AccountType(args) => account_type(&args),
@@ -38,6 +39,17 @@ fn main() -> ExitCode {
             command: ClientCommand::Create(args),
         } => client_create(args),
     }
+}
+
+fn resources() -> ExitCode {
+    let Some(request_memory_mib) = zeabur_identity_k8s::deployment::default_request_memory_mib()
+    else {
+        output::stderr("error: the Deployment's memory request is not a whole number of Mi");
+        return ExitCode::FAILURE;
+    };
+    print_json(serde_json::to_string(
+        &serde_json::json!({ "requestMemoryMiB": request_memory_mib }),
+    ))
 }
 
 fn client_create(args: ClientCreateArgs) -> ExitCode {
