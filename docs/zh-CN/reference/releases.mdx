@@ -27,7 +27,15 @@ linux/arm64  ghcr.io/zeabur-oss/identity@sha256:...
 index  ghcr.io/zeabur-oss/identity@sha256:...
 ```
 
-`SHA256SUMS` 涵盖 `digests.txt` 和其他所有发行文件，`SHA256SUMS.sigstore.json` 则是 `SHA256SUMS` 的签名。以下步骤会先验证这两个文件，再读取 digest。
+`SHA256SUMS` 涵盖 `digests.txt`、`resources.json` 和其他所有发行文件，`SHA256SUMS.sigstore.json` 则是 `SHA256SUMS` 的签名。以下步骤会先验证这两个文件，再读取 digest。
+
+## 内存需求
+
+发行文件 `resources.json` 以 MiB 记录 `zeabur-identityctl manifests` 以默认值安装时，所有 Pod 请求的内存总量。安装程序可以在下载其他东西之前，先用它确认服务器的内存够用。
+
+```json
+{"requestMemoryMiB": 24}
+```
 
 ## 下载并验证
 

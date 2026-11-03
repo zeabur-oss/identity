@@ -26,7 +26,15 @@ linux/arm64  ghcr.io/zeabur-oss/identity@sha256:...
 index  ghcr.io/zeabur-oss/identity@sha256:...
 ```
 
-`SHA256SUMS` covers `digests.txt` and every other release file, and `SHA256SUMS.sigstore.json` is its signature. The steps below verify both before reading a digest.
+`SHA256SUMS` covers `digests.txt`, `resources.json` and every other release file, and `SHA256SUMS.sigstore.json` is its signature. The steps below verify both before reading a digest.
+
+## Memory request
+
+The release file `resources.json` gives the total memory request of the pods that `zeabur-identityctl manifests` installs with its defaults, in MiB. An installer can read it to check a server has room before it downloads anything else.
+
+```json
+{"requestMemoryMiB": 24}
+```
 
 ## Download and verify
 
