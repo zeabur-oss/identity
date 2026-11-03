@@ -20,7 +20,7 @@
     "class-variance-authority": "0.7.1",
     "cn": "0.5.0",
     "oxfmt": "0.75.0",
-    "oxlint": "1.89.0",
+    "oxlint": "1.90.0",
     "tailwindcss": "4.3.3",
     "typescript": "7.0.2"
   }
