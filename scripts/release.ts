@@ -287,10 +287,11 @@ async function assets(version: string, artifacts: string, dir: string) {
     join(artifacts, "published", "digests.txt"),
     join(dir, "digests.txt"),
   );
-  // The amd64 archive's CLI is the one built from this commit, and runs on the release runner.
+  // The CLI built from this commit for the runner's architecture.
+  const arch = process.arch === "x64" ? "amd64" : process.arch;
   const cli = join(dir, ".zeabur-identityctl");
-  const { archive } = names(version, "amd64");
-  await $`tar -xOzf ${join(artifacts, "candidate-linux-amd64", archive)} zeabur-identityctl > ${cli}`;
+  const { archive } = names(version, arch);
+  await $`tar -xOzf ${join(artifacts, `candidate-linux-${arch}`, archive)} zeabur-identityctl > ${cli}`;
   await $`chmod +x ${cli}`;
   const resources = await $`${cli} resources`.text();
   await rm(cli);
