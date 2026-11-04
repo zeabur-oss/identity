@@ -14,8 +14,6 @@ mod tests {
             .args([
                 "--issuer",
                 "https://login.example.com",
-                "--store",
-                "memory",
                 "--log-format",
                 "json",
                 "--token-lifetime",

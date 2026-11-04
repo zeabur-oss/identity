@@ -44,10 +44,6 @@ pub struct ServeArgs {
     #[arg(long, env = "ZEABUR_IDENTITY_LOG_FORMAT", value_enum, default_value_t = LogFormat::Json)]
     pub log_format: LogFormat,
 
-    /// Where state is kept.
-    #[arg(long, env = "ZEABUR_IDENTITY_STORE", value_enum, default_value_t = StoreKind::Kubernetes)]
-    pub store: StoreKind,
-
     /// Kubernetes namespace for state; defaults to the pod's namespace (or the kubeconfig
     /// context's).
     #[arg(long, env = "ZEABUR_IDENTITY_NAMESPACE")]
@@ -129,15 +125,6 @@ pub struct ServeArgs {
     pub internal_url: Option<BaseUrl>,
 }
 
-/// Storage backend.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum StoreKind {
-    /// Kubernetes objects.
-    Kubernetes,
-    /// Process memory (development only).
-    Memory,
-}
-
 fn parse_issuer(input: &str) -> Result<BaseUrl, ConfigError> {
     BaseUrl::parse("issuer", input)
 }
@@ -182,12 +169,9 @@ impl ServeArgs {
             .collect(),
             internal_listen: self.internal_listen,
             internal_url: self.internal_url.clone(),
-            store: match self.store {
-                StoreKind::Kubernetes => Store::Kubernetes {
-                    namespace: self.namespace.clone(),
-                    key_secret: zeabur_identity_k8s::KEY_SECRET.to_owned(),
-                },
-                StoreKind::Memory => Store::Memory,
+            store: Store {
+                namespace: self.namespace.clone(),
+                key_secret: zeabur_identity_k8s::KEY_SECRET.to_owned(),
             },
             lifetimes: zeabur_identity_oauth::Lifetimes {
                 access_token: self.token_lifetime,
