@@ -4,8 +4,8 @@
 # integration tests, then passkey sign-in and `kubectl auth whoami`. The cluster `zeabur-identity`
 # and its directory (kubeconfig, authentication configuration, measurements) are deleted at the end;
 # ZEABUR_CI_KEEP=1 keeps both. K3S_IMAGE picks the k3s release.
-# shellcheck source-path=SCRIPTDIR
-source "$(dirname "$0")/lib.sh"
+set -euo pipefail
+cd "$(dirname "$0")/../.."
 
 k3s_image="${K3S_IMAGE:-rancher/k3s:v1.36.5-k3s1}"
 cluster=zeabur-identity
@@ -22,8 +22,11 @@ report() {
     echo "|---|---|"
     echo "| Image \`zeabur-identity:e2e\` | $size |"
     echo "| Pod working set after a sign-in | $working_set |"
-  } | summary
-  keep "$work/measurements.json"
+  } | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
+  if [[ -n "${CI_ARTIFACTS:-}" && -f "$work/measurements.json" ]]; then
+    mkdir -p "$CI_ARTIFACTS"
+    cp "$work/measurements.json" "$CI_ARTIFACTS/"
+  fi
 }
 
 end() {

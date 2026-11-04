@@ -16,7 +16,7 @@ checks), `zeabur-oss-standards` (with [`STANDARDS.md`](STANDARDS.md) here),
 
 ## Checks (what CI runs, beyond `zeabur-oss-rust`'s)
 ```sh
-nix develop -c ./scripts/ci.sh unsafe-report
+nix develop -c bash -c 'bun install --frozen-lockfile && node_modules/.bin/zeabur-oss-unsafe-report zeabur-identity zeabur-identityctl'
 ```
 Cluster tests: see the `zeabur-identity-cluster-tests` skill. The `ui` job (bun, Tailwind,
 oxlint, oxfmt, fallow from `ui/package.json`) is in `zeabur-identity-ui`.
