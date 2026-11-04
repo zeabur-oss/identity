@@ -308,7 +308,7 @@ async fn run<S: KeyStore, D: Directory, G: GrantStore, K: CredentialStore, T: Se
     ))))
     .merge(business_limits(pages::router(Arc::clone(&server), &kinds)));
     if !providers.is_empty() {
-        let roots = zeabur_identity_tls::trust::roots(config.upstream_ca_file.as_deref())
+        let roots = zeabur_identity_tls::trust::roots()
             .map_err(|error| ServeError::Config(error.to_string()))?;
         let http =
             HyperClient::new(roots).map_err(|error| ServeError::Config(error.to_string()))?;

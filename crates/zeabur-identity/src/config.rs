@@ -46,8 +46,6 @@ pub struct ServeConfig {
     pub invitations: bool,
     /// Enabled upstream identity providers.
     pub upstream: Vec<UpstreamConfig>,
-    /// Extra CA trusted for the providers (tests and private mirrors).
-    pub upstream_ca_file: Option<std::path::PathBuf>,
     /// Where the internal TLS listener binds (Kubernetes store only).
     pub internal_listen: SocketAddr,
     /// Overrides the internal base URL recorded in the certificate Secret.
