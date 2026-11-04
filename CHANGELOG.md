@@ -2,6 +2,36 @@
 
 All notable changes to Zeabur Identity. Versions follow [Semantic Versioning](https://semver.org/); each section comes from the change files in `.changeset/` (docs/internal/releasing.md).
 
+## 0.1.2 (2026-11-04)
+
+### Fixes
+
+- Images are pushed by digest with no `candidate-*` tags left in GHCR
+
+#### The sign-in pages' styles and scripts are stored brotli-compressed only
+
+A browser that accepts brotli gets them as they are stored, and others get a copy decoded once.
+
+#### The release file `image-digests.txt` is now `digests.txt`
+
+It has a line per image kind (`linux/amd64`, `linux/arm64`, `index`), as in every zeabur-oss release ([release files](docs/reference/releases.mdx)). The `index` line is unchanged.
+
+#### Release notes are the changelog section and a link to the documentation
+
+The digests are in the signed `digests.txt`.
+
+#### Releases publish `resources.json` with the memory request
+
+`zeabur-identityctl resources` prints the total memory request of the default install as `{"requestMemoryMiB": 24}`, and each release lists the same output as `resources.json` in the signed `SHA256SUMS`, so an installer can check a server's memory before downloading anything ([release files](docs/reference/releases.mdx)).
+
+#### Zeabur Identity asks for 24Mi of memory instead of 32Mi
+
+Zeabur Identity used about 6Mi in a cluster with 35 pods, so its request drops to 24Mi. The limit stays at 128Mi.
+
+#### The server image's version tag drops the `v`
+
+As every zeabur-oss image and chart does: `ghcr.io/zeabur-oss/identity:0.1.2`, not `:v0.1.2`. The 0.1.1 image is also tagged `0.1.1`; its `v0.1.1` tag stays and names the same digest.
+
 ## 0.1.2-beta.1 (2026-11-03)
 
 ### Fixes
