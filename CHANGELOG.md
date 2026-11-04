@@ -4,33 +4,26 @@ All notable changes to Zeabur Identity. Versions follow [Semantic Versioning](ht
 
 ## 0.1.2 (2026-11-04)
 
-### Fixes
+### Changed
 
-- Images are pushed by digest with no `candidate-*` tags left in GHCR
+- The server image's version tag has no `v`, as with every zeabur-oss image and chart. Pull `ghcr.io/zeabur-oss/identity:0.1.2`, not `:v0.1.2`. The 0.1.1 image is also tagged `0.1.1`, and its `v0.1.1` tag stays on the same digest.
+- The release file `image-digests.txt` is now `digests.txt`. Pin a deployment to its `index` line, as before. It also lists the `linux/amd64` and `linux/arm64` images ([release files](https://oss.zeabur.com/docs/identity/reference/releases/)).
+- Release notes are this changelog section and a link to the documentation. The image digests are in the signed `digests.txt`.
+- Zeabur Identity asks for 24Mi of memory instead of 32Mi. It used about 6Mi in a cluster with 35 pods. The limit stays at 128Mi.
+- On the account page, removing a passkey, removing a linked account and renaming a passkey open a dialog instead of expanding the row. Escape or **Cancel** closes it, and focus goes back to the button that opened it.
+- The sign-in pages' styles and scripts are stored and sent brotli-compressed, so a browser far away loads them in fewer round trips. A browser without brotli gets a copy decoded once.
+- The sign-in pages, the docs and `zeabur-identityctl` output are reworded in English, Traditional Chinese and Simplified Chinese. Nothing they say has changed.
 
-#### The sign-in pages' styles and scripts are stored brotli-compressed only
+![The account page asks before removing a linked account](https://github.com/zeabur-oss/identity/raw/v0.1.2/docs/images/changelog/0.1.2-remove-linked-account.png)
 
-A browser that accepts brotli gets them as they are stored, and others get a copy decoded once.
+### Added
 
-#### The release file `image-digests.txt` is now `digests.txt`
+- Each release has `resources.json`, the total memory request of the default install (`{"requestMemoryMiB": 24}`), covered by the signed `SHA256SUMS`. An installer can read it to check a server has room before it downloads anything else. `zeabur-identityctl resources` prints the same.
 
-It has a line per image kind (`linux/amd64`, `linux/arm64`, `index`), as in every zeabur-oss release ([release files](docs/reference/releases.mdx)). The `index` line is unchanged.
+### Fixed
 
-#### Release notes are the changelog section and a link to the documentation
-
-The digests are in the signed `digests.txt`.
-
-#### Releases publish `resources.json` with the memory request
-
-`zeabur-identityctl resources` prints the total memory request of the default install as `{"requestMemoryMiB": 24}`, and each release lists the same output as `resources.json` in the signed `SHA256SUMS`, so an installer can check a server's memory before downloading anything ([release files](docs/reference/releases.mdx)).
-
-#### Zeabur Identity asks for 24Mi of memory instead of 32Mi
-
-Zeabur Identity used about 6Mi in a cluster with 35 pods, so its request drops to 24Mi. The limit stays at 128Mi.
-
-#### The server image's version tag drops the `v`
-
-As every zeabur-oss image and chart does: `ghcr.io/zeabur-oss/identity:0.1.2`, not `:v0.1.2`. The 0.1.1 image is also tagged `0.1.1`; its `v0.1.1` tag stays and names the same digest.
+- A passkey sign-in no longer ends on "This sign-in expired" when autofill and the **Sign in with a passkey** button both answered. Only the first answer is sent.
+- Images are pushed by digest, so a release leaves no `candidate-*` tags in GHCR.
 
 ## 0.1.2-beta.1 (2026-11-03)
 
