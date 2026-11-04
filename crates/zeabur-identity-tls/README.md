@@ -5,7 +5,7 @@ TLS for Zeabur Identity's own connections, all on rustls with the aws-lc-rs prov
 ## Contents
 
 - [`trust`](crate::trust): the certificate authorities trusted for outgoing TLS (upstream
-  identity providers): the system bundle plus an optional extra PEM file.
+  identity providers): the system bundle.
 - [`certificate`](crate::certificate): loads a PEM chain and key for rustls.
 - [`listener`](crate::listener): a TLS listener for axum whose certificate can be replaced while
   it runs, with bounded, time-limited handshakes.

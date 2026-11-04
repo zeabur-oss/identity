@@ -104,10 +104,6 @@ pub struct ServeArgs {
     )]
     pub google_client_secret_file: Option<PathBuf>,
 
-    /// Extra CA (PEM) trusted for upstream providers.
-    #[arg(long, env = "ZEABUR_IDENTITY_UPSTREAM_CA_FILE")]
-    pub upstream_ca_file: Option<PathBuf>,
-
     /// Lifetime of an admin account's access and ID tokens. They carry `cluster-admin`.
     #[arg(long, env = "ZEABUR_IDENTITY_ADMIN_TOKEN_LIFETIME", default_value = "5m", value_parser = parse_duration)]
     pub admin_token_lifetime: Duration,
@@ -184,7 +180,6 @@ impl ServeArgs {
                 })
             })
             .collect(),
-            upstream_ca_file: self.upstream_ca_file.clone(),
             internal_listen: self.internal_listen,
             internal_url: self.internal_url.clone(),
             store: match self.store {
