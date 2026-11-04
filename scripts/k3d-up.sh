@@ -53,7 +53,7 @@ if [[ -n "${ZEABUR_REGISTRY_MIRRORS:-}" ]]; then
   args+=(--registry-config "$dir/registries.yaml")
 fi
 
-k3d cluster create "$cluster" --image "${K3S_IMAGE:-rancher/k3s:v1.36.5-k3s1}" --no-lb --wait --timeout 300s \
+k3d cluster create "$cluster" --image "${K3S_IMAGE:-rancher/k3s:v1.37.2-k3s1}" --no-lb --wait --timeout 300s \
   --kubeconfig-update-default=false --kubeconfig-switch-context=false "${args[@]}" \
   --volume "$dir/authn:/etc/rancher/k3s/zeabur-identity@server:0" \
   --k3s-arg "--kube-apiserver-arg=authentication-config=/etc/rancher/k3s/zeabur-identity/authn.yaml@server:0" \
