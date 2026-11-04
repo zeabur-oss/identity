@@ -31,23 +31,6 @@ image_tagged=false
 forward_pid=
 export KUBECONFIG="$work/kubeconfig"
 
-# Runs one wait; when it times out, says which one and shows why, since the cluster is gone by
-# the time anyone reads the CI log. wait_for <namespace> <command...>
-wait_for() {
-  local ns="$1" pod
-  shift
-  "$@" && return 0
-  echo "error: timed out: $*" >&2
-  kubectl -n "$ns" get pods -o wide >&2 || true
-  kubectl -n "$ns" get events --sort-by=.lastTimestamp >&2 || true
-  for pod in $(kubectl -n "$ns" get pods --no-headers 2> /dev/null \
-    | awk '{ split($2, ready, "/"); if (ready[1] != ready[2]) print $1 }'); do
-    kubectl -n "$ns" describe pod "$pod" >&2 || true
-    kubectl -n "$ns" logs "$pod" --all-containers --prefix --tail=40 >&2 || true
-  done
-  exit 1
-}
-
 cleanup() {
   status=$?
   trap - EXIT
@@ -119,7 +102,7 @@ CLUSTER="$cluster" "$(dirname "$0")/k3d-up.sh" "$work" \
   --k3s-arg '--disable=traefik@server:0' --k3s-arg '--disable=servicelb@server:0'
 k3d image import "$work/image.tar" --cluster "$cluster"
 kubectl apply -f "$work/crds.json"
-wait_for kube-system kubectl wait --for=condition=Established --timeout=90s -f "$work/crds.json"
+kubectl wait --for=condition=Established --timeout=90s -f "$work/crds.json"
 kubectl apply -f "$work/rbac.json"
 # Exercise the archived install command as well as the production hardened Deployment:
 # real service account, namespace RBAC, read-only root, non-root UID and seccomp.
@@ -128,7 +111,7 @@ kubectl apply -f "$work/rbac.json"
   > "$work/manifests.json"
 # RBAC includes the initially empty signing-key Secret: do not reapply it after startup.
 kubectl apply -f "$work/manifests.json"
-wait_for "$namespace" kubectl -n "$namespace" rollout status deployment/zeabur-identity --timeout=180s
+kubectl -n "$namespace" rollout status deployment/zeabur-identity --timeout=180s
 kubectl -n "$namespace" get secret zeabur-identity-signing-keys -o json \
   | jq -e '.data | type == "object" and length > 0' > /dev/null
 
