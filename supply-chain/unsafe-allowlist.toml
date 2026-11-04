@@ -1087,19 +1087,6 @@ kind = "unsafe"
 reason = "Build time only (parser combinators under askama_parser). Unchecked slicing at offsets the parser has already validated"
 approved = "2026-10-28"
 
-# --- Parser stack growth (pest 2.9.4 uses stacker to avoid stack overflow on deep input).
-[[crate]]
-name = "psm"
-kind = "unsafe"
-reason = "Stack pointer switching under stacker"
-approved = "2026-10-28"
-
-[[crate]]
-name = "stacker"
-kind = "unsafe"
-reason = "Grows the stack for recursive parsing in pest"
-approved = "2026-10-28"
-
 # --- Sign-in pages: decoding the embedded brotli styles and scripts for clients without brotli (zeabur-identity-ui).
 # The `unsafe` lines sit behind the crates' `unsafe` and `ffi-api` features, which are off; the default build is `forbid(unsafe_code)`.
 # Zeabur approved the same three crates with the same features on 2026-10-30.
