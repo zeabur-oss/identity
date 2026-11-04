@@ -13,17 +13,6 @@
   ],
   "packageRules": [
     {
-      "description": "One pull request for compatible crate updates; majors stay separate.",
-      "matchManagers": [
-        "cargo"
-      ],
-      "matchUpdateTypes": [
-        "minor",
-        "patch"
-      ],
-      "groupName": "cargo (non-major)"
-    },
-    {
       "description": "One pull request for compatible ui/ package updates; majors stay separate.",
       "matchManagers": [
         "bun"
