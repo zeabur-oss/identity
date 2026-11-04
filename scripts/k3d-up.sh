@@ -18,6 +18,23 @@ mkdir -p "$dir/authn"
 dir="$(cd "$dir" && pwd)"
 cluster="${CLUSTER:-zeabur-identity}"
 
+# Runs one wait; when it times out, says which one and shows why, since the cluster is gone by
+# the time anyone reads the CI log. wait_for <namespace> <command...>
+wait_for() {
+  local ns="$1" pod
+  shift
+  "$@" && return 0
+  echo "error: timed out: $*" >&2
+  kubectl -n "$ns" get pods -o wide >&2 || true
+  kubectl -n "$ns" get events --sort-by=.lastTimestamp >&2 || true
+  for pod in $(kubectl -n "$ns" get pods --no-headers 2> /dev/null \
+    | awk '{ split($2, ready, "/"); if (ready[1] != ready[2]) print $1 }'); do
+    kubectl -n "$ns" describe pod "$pod" >&2 || true
+    kubectl -n "$ns" logs "$pod" --all-containers --prefix --tail=40 >&2 || true
+  done
+  exit 1
+}
+
 # Mount the directory, not the file: kube-apiserver must see the atomic replacement. The
 # `anonymous` section cannot change on a reload.
 printf 'apiVersion: apiserver.config.k8s.io/v1\nkind: AuthenticationConfiguration\nanonymous:\n  enabled: false\njwt: []\n' \
@@ -51,5 +68,6 @@ curl -fsSL -o "$dir/cert-manager.yaml" \
   "https://github.com/cert-manager/cert-manager/releases/download/$cert_manager_version/cert-manager.yaml"
 echo "$cert_manager_sha256  $dir/cert-manager.yaml" | sha256sum -c --quiet
 KUBECONFIG="$dir/kubeconfig" kubectl apply --server-side -f "$dir/cert-manager.yaml" >/dev/null
-KUBECONFIG="$dir/kubeconfig" kubectl -n cert-manager wait deployment --all \
+export KUBECONFIG="$dir/kubeconfig"
+wait_for cert-manager kubectl -n cert-manager wait deployment --all \
   --for=condition=Available --timeout=300s
