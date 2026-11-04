@@ -375,7 +375,7 @@ pub fn rotated(grant: &Grant, next_hash: &str, idle_expires_at: UnixTime) -> Gra
     }
 }
 
-/// In-memory directory, for tests and `--store memory`.
+/// In-memory directory, for tests.
 #[derive(Debug, Default)]
 pub struct MemoryDirectory {
     clients: Mutex<HashMap<String, Client>>,
@@ -453,7 +453,7 @@ impl Directory for MemoryDirectory {
     }
 }
 
-/// In-memory grant store, for tests and `--store memory`.
+/// In-memory grant store, for tests.
 #[derive(Debug, Default)]
 pub struct MemoryGrantStore {
     grants: Mutex<HashMap<String, Grant>>,
@@ -895,7 +895,7 @@ pub trait SetupStore: Send + Sync + 'static {
     ) -> impl Future<Output = Result<Consume, StoreError>> + Send;
 }
 
-/// In-memory credentials, for tests and `--store memory`.
+/// In-memory credentials, for tests.
 #[derive(Debug, Default)]
 pub struct MemoryCredentialStore {
     passkeys: Mutex<HashMap<String, MemoryPasskey>>,
@@ -1159,7 +1159,7 @@ pub fn invitation_name(presented: &str) -> Option<&str> {
     (label && !secret.is_empty()).then_some(name)
 }
 
-/// In-memory setup token and invitations, for tests and `--store memory`.
+/// In-memory setup token and invitations, for tests.
 #[derive(Debug, Default)]
 pub struct MemorySetupStore {
     token: Mutex<Option<SetupToken>>,

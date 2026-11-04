@@ -1,6 +1,6 @@
 # zeabur-identity-store
 
-Storage interfaces (ports) for Zeabur Identity, with in-memory adapters for tests and `--store memory`.
+Storage interfaces (ports) for Zeabur Identity, with in-memory adapters for tests.
 The Kubernetes adapters, backed by the `User`, `Credential`, `OAuthClient`, `Grant` and
 `Invitation` custom resources, live in `zeabur-identity-k8s`. The one-time setup token lives in a Secret.
 

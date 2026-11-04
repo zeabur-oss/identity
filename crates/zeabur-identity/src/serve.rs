@@ -31,7 +31,7 @@ use zeabur_identity_k8s::grants::KubeGrantStore;
 use zeabur_identity_k8s::keys::SecretKeyStore;
 use zeabur_identity_k8s::setup::KubeSetupStore;
 use zeabur_identity_keys::manager::{KeyManager, ManagerError};
-use zeabur_identity_keys::store::{KeyStore, MemoryKeyStore};
+use zeabur_identity_keys::store::KeyStore;
 use zeabur_identity_oauth::discovery::ProviderMetadata;
 use zeabur_identity_oauth::metadata::{AppState, router};
 use zeabur_identity_oauth::{AuthorizationServer, OneTimeIds, endpoints};
@@ -40,10 +40,7 @@ use zeabur_identity_signin::upstream::http::HyperClient;
 use zeabur_identity_signin::upstream::provider::{Endpoints, Kind, Provider};
 use zeabur_identity_signin::upstream::{self, Upstream};
 use zeabur_identity_signin::{SignIn, pages};
-use zeabur_identity_store::{
-    CredentialStore, Directory, GrantStore, MemoryCredentialStore, MemoryDirectory,
-    MemoryGrantStore, MemorySetupStore, SetupStore,
-};
+use zeabur_identity_store::{CredentialStore, Directory, GrantStore, SetupStore};
 use zeabur_identity_tls::listener::{Resolver, TlsListener, server_config};
 
 use crate::config::{ServeConfig, Store};
@@ -92,73 +89,56 @@ pub enum ServeError {
 /// fails.
 pub async fn serve(config: ServeConfig) -> Result<(), ServeError> {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    match &config.store {
-        Store::Memory => {
-            tracing::warn!(
-                "store=memory: keys, clients, users and grants live in process memory and start \
-                 empty; use only for development"
-            );
-            let stores = (
-                MemoryKeyStore::default(),
-                MemoryDirectory::default(),
-                MemoryGrantStore::default(),
-                MemoryCredentialStore::default(),
-                MemorySetupStore::default(),
-            );
-            run(&config, stores, Vec::new(), None, shutdown_tx).await
-        }
-        Store::Kubernetes {
-            namespace,
-            key_secret,
-        } => {
-            let internal_listener = TcpListener::bind(config.internal_listen).await?;
-            let resolver = Arc::new(Resolver::default());
-            let tls = server_config(Arc::clone(&resolver)).map_err(io::Error::other)?;
-            let internal_listener = TlsListener::new(internal_listener, tls)?;
-            tracing::info!(address = %internal_listener.local_addr()?, "internal listener bound");
-            let client = Client::try_default().await?;
-            let namespace = namespace
-                .clone()
-                .unwrap_or_else(|| client.default_namespace().to_owned());
-            tracing::info!("using Kubernetes storage");
-            let keys = SecretKeyStore::new(
-                Api::namespaced(client.clone(), &namespace),
-                key_secret.clone(),
-            );
-            let mut background = Vec::new();
-            let directory = KubeDirectory::new(
-                Api::namespaced(client.clone(), &namespace),
-                Api::namespaced(client.clone(), &namespace),
-            )
-            .await?;
-            let grants = KubeGrantStore::new(Api::namespaced(client.clone(), &namespace));
-            let credentials = KubeCredentialStore::new(Api::namespaced(client.clone(), &namespace));
-            let mut setup = KubeSetupStore::new(Api::namespaced(client.clone(), &namespace));
-            if config.invitations {
-                setup = setup.with_invitations(Api::namespaced(client.clone(), &namespace));
-                background.push(tokio::spawn({
-                    let (client, namespace, shutdown) =
-                        (client.clone(), namespace.clone(), shutdown_rx.clone());
-                    async move {
-                        gc::run::<Invitation, _>(client, &namespace, SystemClock, shutdown).await;
-                    }
-                }));
+    let Store {
+        namespace,
+        key_secret,
+    } = &config.store;
+    let internal_listener = TcpListener::bind(config.internal_listen).await?;
+    let resolver = Arc::new(Resolver::default());
+    let tls = server_config(Arc::clone(&resolver)).map_err(io::Error::other)?;
+    let internal_listener = TlsListener::new(internal_listener, tls)?;
+    tracing::info!(address = %internal_listener.local_addr()?, "internal listener bound");
+    let client = Client::try_default().await?;
+    let namespace = namespace
+        .clone()
+        .unwrap_or_else(|| client.default_namespace().to_owned());
+    tracing::info!("using Kubernetes storage");
+    let keys = SecretKeyStore::new(
+        Api::namespaced(client.clone(), &namespace),
+        key_secret.clone(),
+    );
+    let mut background = Vec::new();
+    let directory = KubeDirectory::new(
+        Api::namespaced(client.clone(), &namespace),
+        Api::namespaced(client.clone(), &namespace),
+    )
+    .await?;
+    let grants = KubeGrantStore::new(Api::namespaced(client.clone(), &namespace));
+    let credentials = KubeCredentialStore::new(Api::namespaced(client.clone(), &namespace));
+    let mut setup = KubeSetupStore::new(Api::namespaced(client.clone(), &namespace));
+    if config.invitations {
+        setup = setup.with_invitations(Api::namespaced(client.clone(), &namespace));
+        background.push(tokio::spawn({
+            let (client, namespace, shutdown) =
+                (client.clone(), namespace.clone(), shutdown_rx.clone());
+            async move {
+                gc::run::<Invitation, _>(client, &namespace, SystemClock, shutdown).await;
             }
-            let internal_secrets = Api::namespaced(client.clone(), &namespace);
-            let gc = tokio::spawn({
-                let shutdown = shutdown_rx.clone();
-                async move { gc::run::<Grant, _>(client, &namespace, SystemClock, shutdown).await }
-            });
-            run(
-                &config,
-                (keys, directory, grants, credentials, setup),
-                background.into_iter().chain([gc]).collect(),
-                Some((internal_listener, resolver, internal_secrets)),
-                shutdown_tx,
-            )
-            .await
-        }
+        }));
     }
+    let internal_secrets = Api::namespaced(client.clone(), &namespace);
+    let gc = tokio::spawn({
+        let shutdown = shutdown_rx.clone();
+        async move { gc::run::<Grant, _>(client, &namespace, SystemClock, shutdown).await }
+    });
+    run(
+        &config,
+        (keys, directory, grants, credentials, setup),
+        background.into_iter().chain([gc]).collect(),
+        (internal_listener, resolver, internal_secrets),
+        shutdown_tx,
+    )
+    .await
 }
 
 /// The configured upstream providers, with their client secrets read from files.
@@ -245,7 +225,7 @@ async fn run<S: KeyStore, D: Directory, G: GrantStore, K: CredentialStore, T: Se
     config: &ServeConfig,
     (keys, directory, grants, credentials, setup): (S, D, G, K, T),
     mut background: Vec<JoinHandle<()>>,
-    internal_listener: Option<(TlsListener, Arc<Resolver>, Api<Secret>)>,
+    (listener, resolver, secrets): (TlsListener, Arc<Resolver>, Api<Secret>),
     shutdown_tx: watch::Sender<bool>,
 ) -> Result<(), ServeError> {
     let manager = Arc::new(KeyManager::new(keys, SystemClock, config.rotation));
@@ -258,7 +238,7 @@ async fn run<S: KeyStore, D: Directory, G: GrantStore, K: CredentialStore, T: Se
         async move { manager.run(RECONCILE_INTERVAL, shutdown).await }
     });
 
-    if let Some((listener, resolver, secrets)) = internal_listener {
+    {
         let internal = InternalConfig {
             issuer: config.issuer.clone(),
             url: config.internal_url.clone(),

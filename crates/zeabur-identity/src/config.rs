@@ -6,18 +6,14 @@ use std::time::Duration;
 use zeabur_identity_core::config::{BaseUrl, ConfigError};
 use zeabur_identity_keys::rotation::RotationPolicy;
 
-/// Where long-term state is kept.
+/// Where long-term state is kept: Kubernetes objects, custom resources and Secrets in one
+/// namespace (`zeabur_identity_k8s`).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Store {
-    /// Kubernetes objects: custom resources and Secrets in one namespace (`zeabur_identity_k8s`).
-    Kubernetes {
-        /// Namespace; defaults to the client's (in-cluster: the pod's).
-        namespace: Option<String>,
-        /// Name of the signing-key Secret.
-        key_secret: String,
-    },
-    /// Process memory. Nothing survives a restart; for development only.
-    Memory,
+pub struct Store {
+    /// Namespace; defaults to the client's (in-cluster: the pod's).
+    pub namespace: Option<String>,
+    /// Name of the signing-key Secret.
+    pub key_secret: String,
 }
 
 /// An upstream identity provider's client registration.
