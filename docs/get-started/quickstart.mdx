@@ -149,7 +149,7 @@ sudo tee /etc/rancher/k3s/config.yaml.d/50-zeabur-identity.yaml >/dev/null <<'EO
 kube-apiserver-arg:
   - "authentication-config=/etc/rancher/k3s/zeabur-identity/authn.yaml"
 EOF
-curl -sfL https://get.k3s.io | sudo INSTALL_K3S_VERSION=v1.36.5+k3s1 sh -
+curl -sfL https://get.k3s.io | sudo INSTALL_K3S_VERSION=v1.37.2+k3s1 sh -
 
 install -d -m 700 ~/.kube
 sudo install -o "$USER" -m 600 /etc/rancher/k3s/k3s.yaml ~/.kube/config
