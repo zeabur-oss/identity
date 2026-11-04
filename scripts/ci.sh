@@ -5,7 +5,8 @@
 #
 #   scripts/ci.sh <job>             # run one job; it enters its dev shell itself
 #   scripts/ci.sh --list            # every job name
-#   scripts/ci.sh --matrix <tier>   # the shared workflow's matrix: `fast` or `all`, without Nix
+#   scripts/ci.sh --matrix <tier> [changed-files]
+#                                   # the shared workflow's matrix: `fast` or `all`, without Nix
 #
 # A job may leave files in $CI_ARTIFACTS; the workflow uploads them as the artifact `ci-<job>`.
 set -euo pipefail
@@ -36,29 +37,49 @@ case "${1:-}" in
     rows | awk '{ print $1 }'
     exit 0
     ;;
-  # A job inside a group runs only in its group. Keys other than tier, in and shell go to the
-  # workflow as they are.
+  # A job inside a group runs only in its group. With a list of changed files, a job is left out
+  # when every file matches one of its skip-if-only patterns (bash patterns, `*` also matches `/`).
+  # Keys other than tier, in, shell and skip-if-only go to the workflow as they are.
   --matrix)
-    tier="${2:?usage: scripts/ci.sh --matrix fast|all}"
-    rows | awk -v tier="$tier" '
-      {
-        t = "fast"; inside = 0; fields = ""
-        for (i = 2; i <= NF; i++) {
-          split($i, kv, "=")
-          if (kv[1] == "tier") t = kv[2]
-          else if (kv[1] == "in") inside = 1
-          else if (kv[1] != "shell") fields = fields sprintf(",\"%s\":\"%s\"", kv[1], substr($i, length(kv[1]) + 2))
-        }
-        if (inside || (tier == "fast" && t != "fast")) next
-        printf "%s{\"job\":\"%s\"%s}", (n++ ? "," : "["), $1, fields
-      }
-      END { print (n ? "]" : "[]") }
-    '
+    tier="${2:?usage: scripts/ci.sh --matrix fast|all [changed-files]}"
+    changed=()
+    [[ -z "${3:-}" ]] || mapfile -t changed <"$3"
+    out=()
+    while read -r job fields; do
+      t=fast inside=0 skip="" json=""
+      for field in $fields; do
+        key="${field%%=*}" value="${field#*=}"
+        case "$key" in
+          tier) t="$value" ;;
+          in) inside=1 ;;
+          shell) ;;
+          skip-if-only) skip="$value" ;;
+          *) json+=",\"$key\":\"$value\"" ;;
+        esac
+      done
+      [[ $inside == 0 ]] || continue
+      [[ $tier != fast || $t == fast ]] || continue
+      if [[ -n "$skip" && ${#changed[@]} -gt 0 ]]; then
+        IFS=, read -ra patterns <<<"$skip"
+        needed=0
+        for path in "${changed[@]}"; do
+          hit=0
+          for pattern in "${patterns[@]}"; do
+            # shellcheck disable=SC2053 # the pattern is meant to match as a pattern
+            [[ "$path" == $pattern ]] && { hit=1; break; }
+          done
+          [[ $hit == 1 ]] || { needed=1; break; }
+        done
+        [[ $needed == 1 ]] || continue
+      fi
+      out+=("{\"job\":\"$job\"$json}")
+    done < <(rows)
+    (IFS=,; echo "[${out[*]}]")
     exit 0
     ;;
 esac
 
-job="${1:?usage: scripts/ci.sh <job> | --list | --matrix fast|all}"
+job="${1:?usage: scripts/ci.sh <job> | --list | --matrix fast|all [changed-files]}"
 attr "$job" tier >/dev/null || { echo "error: no job named $job (scripts/ci.sh --list)" >&2; exit 1; }
 
 # A group runs every member, also after one fails, and fails if any did.

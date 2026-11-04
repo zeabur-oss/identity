@@ -1,5 +1,7 @@
 # The CI jobs: scripts/ci.sh and zeabur-oss/.github README.md say what the settings mean.
-*               rust-cache=true
+# Text the code doesn't read: docs/ and the top-level Markdown. The crates' README.md are their
+# rustdoc, and the cluster test reads docs/users/provisioning.mdx.
+*               rust-cache=true skip-if-only=docs/*,.changeset/*,CHANGELOG.md,CONTRIBUTING.md,README.md
 # The short checks run one after another: each needs about a minute to set up a runner and its dev
 # shell but much less to run.
 lint
@@ -11,4 +13,4 @@ unsafe-report   in=lint
 test
 # fallow audit compares HEAD with HEAD^.
 ui              fetch-depth=2
-kubernetes      tier=merge
+kubernetes      tier=merge skip-if-only=.changeset/*,CHANGELOG.md,CONTRIBUTING.md,README.md

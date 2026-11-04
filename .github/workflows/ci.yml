@@ -17,11 +17,11 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   ci:
-    uses: zeabur-oss/.github/.github/workflows/ci.yml@e20c21ac376aa7daf8a3c1433a06a2fbbe264bd0 # main
+    uses: zeabur-oss/.github/.github/workflows/ci.yml@38db3b831202938021111168e1a6f77f607707fe # main
   dco:
     uses: zeabur-oss/.github/.github/workflows/dco.yml@6ab106525ce16169ab0ecfebe4b0248e096797fa # main
