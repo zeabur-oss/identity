@@ -7,7 +7,7 @@
 # shellcheck source-path=SCRIPTDIR
 source "$(dirname "$0")/lib.sh"
 
-k3s_image="${K3S_IMAGE:-rancher/k3s:v1.36.5-k3s1}"
+k3s_image="${K3S_IMAGE:-rancher/k3s:v1.37.1-k3s1}"
 cluster=zeabur-identity
 work="$(mktemp -d -p "${RUNNER_TEMP:-${TMPDIR:-/tmp}}" zeabur-identity-ci.XXXXXX)"
 
