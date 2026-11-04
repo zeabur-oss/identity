@@ -40,17 +40,14 @@ below.
 
 ## Before you open a pull request
 
-Run what CI runs. CI calls `scripts/ci.sh` once per job through the shared workflow of
-[zeabur-oss/.github](https://github.com/zeabur-oss/.github); the script enters `nix develop`
-itself, so a job runs the same on your machine. The jobs are the rows of `scripts/ci/jobs`, and each
-one is `scripts/ci/<job>.sh`:
+Run what CI runs. Each job in `.github/workflows/ci.yml` runs `scripts/ci/<job>.sh` in
+`nix develop`, so a job runs the same on your machine:
 
 ```sh
-./scripts/ci.sh --list          # lint format clippy docs cargo-deny unsafe-report test ui kubernetes
-./scripts/ci.sh lint            # format, clippy, docs, cargo-deny and unsafe-report in a row
-./scripts/ci.sh clippy          # cargo lint: all targets and features, -D warnings
-./scripts/ci.sh test
-./scripts/ci.sh kubernetes      # k3s with Docker: see "Disposable k3d cluster" below
+nix develop -c scripts/ci/lint.sh         # format, clippy, docs, cargo-deny and unsafe-report in a row
+nix develop -c scripts/ci/test.sh
+nix develop -c scripts/ci/ui.sh
+nix develop -c scripts/ci/kubernetes.sh   # k3s with Docker: see "Disposable k3d cluster" below
 ```
 
 A pull request runs every job but `kubernetes`. The merge queue runs all of them on the commit that
@@ -158,8 +155,8 @@ allowlist entry below is added and reviewed, so those pull requests are never me
 
 A dependency that reaches the shipped binaries and contains `unsafe` code or builds native code
 needs an entry in `supply-chain/unsafe-allowlist.toml` with a reason and the date a maintainer
-approved it. `zeabur-oss-unsafe-report` (from zeabur-oss/.github, run by `scripts/ci.sh
-unsafe-report`) scans the shipped dependency graph (normal and build dependencies of
+approved it. `zeabur-oss-unsafe-report` (from zeabur-oss/.github, run by
+`scripts/ci/lint.sh`) scans the shipped dependency graph (normal and build dependencies of
 `zeabur-identity` and `zeabur-identityctl` for the image target), lists every such crate and fails
 on one that is not approved; an entry marked `pending` is a proposal awaiting review. The count is a
 review signal, not an audit.
@@ -168,7 +165,7 @@ review signal, not an audit.
 
 - **Unit and integration tests** run anywhere: `cargo nextest run --workspace`.
 - **Cluster tests** and **end-to-end tests** are `#[ignore]`d and require a disposable cluster
-  where you are cluster admin. The setup below is what `./scripts/ci.sh kubernetes` runs, in CI and
+  where you are cluster admin. The setup below is what `scripts/ci/kubernetes.sh` runs, in CI and
   locally.
 
 ### Disposable k3d cluster

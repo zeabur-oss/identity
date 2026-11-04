@@ -10,7 +10,7 @@ zeabur-oss-dependencies`; `skills-lock.json` pins it). This skill adds what is Z
 Identity's own.
 
 ## Rust
-- The unsafe report is `./scripts/ci.sh unsafe-report`. Only normal and build dependencies of
+- The unsafe report is `node_modules/.bin/zeabur-oss-unsafe-report zeabur-identity zeabur-identityctl`, run by `scripts/ci/lint.sh`. Only normal and build dependencies of
   `zeabur-identity` and `zeabur-identityctl` count.
 
 ## Frontend (`ui/`)
