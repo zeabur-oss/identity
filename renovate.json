@@ -46,9 +46,9 @@
   "customManagers": [
     {
       "customType": "regex",
-      "description": "k3s image used by the cluster tests (scripts/ci.sh, scripts/k3d-up.sh, CONTRIBUTING.md).",
+      "description": "k3s image used by the cluster tests (scripts/ci/kubernetes.sh, scripts/k3d-up.sh, CONTRIBUTING.md).",
       "managerFilePatterns": [
-        "/^scripts/ci\\.sh$/",
+        "/^scripts/ci/kubernetes\\.sh$/",
         "/^scripts/k3d-up\\.sh$/",
         "/^CONTRIBUTING\\.md$/"
       ],
