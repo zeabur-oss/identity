@@ -11,6 +11,12 @@ use zeabur_identity_signin::upstream::provider::Kind;
 
 use crate::config::{ServeConfig, Store, UpstreamConfig};
 
+/// `Cache-Control: max-age` for discovery documents and the JWK set.
+pub const METADATA_MAX_AGE: Duration = Duration::from_mins(5);
+
+/// Tokio worker threads. Two keep idle memory low.
+pub const WORKER_THREADS: usize = 2;
+
 /// Log output format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum LogFormat {
@@ -33,28 +39,6 @@ pub struct ServeArgs {
     /// Address of the public HTTP listener. TLS is terminated in front of it.
     #[arg(long, env = "ZEABUR_IDENTITY_LISTEN", default_value = "0.0.0.0:8080")]
     pub listen: SocketAddr,
-
-    /// How long each signing key signs before its successor takes over.
-    #[arg(long, env = "ZEABUR_IDENTITY_KEY_ROTATION_PERIOD", default_value = "7d", value_parser = parse_duration)]
-    pub key_rotation_period: Duration,
-
-    /// How long a new key is published before it signs. Must exceed every verifier's JWK set
-    /// cache lifetime.
-    #[arg(long, env = "ZEABUR_IDENTITY_KEY_PUBLISH_AHEAD", default_value = "24h", value_parser = parse_duration)]
-    pub key_publish_ahead: Duration,
-
-    /// How long a key stays published after it stops signing. Must exceed the longest token
-    /// lifetime.
-    #[arg(long, env = "ZEABUR_IDENTITY_KEY_RETAIN_AFTER", default_value = "24h", value_parser = parse_duration)]
-    pub key_retain_after: Duration,
-
-    /// `Cache-Control: max-age` for discovery documents and the JWK set.
-    #[arg(long, env = "ZEABUR_IDENTITY_METADATA_MAX_AGE", default_value = "5m", value_parser = parse_duration)]
-    pub metadata_max_age: Duration,
-
-    /// Tokio worker threads. Two keep idle memory low.
-    #[arg(long, env = "ZEABUR_IDENTITY_WORKER_THREADS", default_value_t = 2)]
-    pub worker_threads: usize,
 
     /// Log format.
     #[arg(long, env = "ZEABUR_IDENTITY_LOG_FORMAT", value_enum, default_value_t = LogFormat::Json)]
@@ -81,10 +65,6 @@ pub struct ServeArgs {
     /// A refresh-token family ends this long after sign-in.
     #[arg(long, env = "ZEABUR_IDENTITY_REFRESH_ABSOLUTE", default_value = "12h", value_parser = parse_duration)]
     pub refresh_absolute: Duration,
-
-    /// Name of the Secret holding signing keys.
-    #[arg(long, env = "ZEABUR_IDENTITY_KEY_SECRET", default_value = zeabur_identity_k8s::KEY_SECRET)]
-    pub key_secret: String,
 
     /// Accept invitations (`zeabur-identityctl invite`) as enrolment links.
     #[arg(long, env = "ZEABUR_IDENTITY_INVITATIONS")]
@@ -180,12 +160,8 @@ impl ServeArgs {
         let config = ServeConfig {
             issuer: self.issuer.clone(),
             listen: self.listen,
-            rotation: RotationPolicy {
-                rotation_period: self.key_rotation_period,
-                publish_ahead: self.key_publish_ahead,
-                retain_after: self.key_retain_after,
-            },
-            metadata_max_age: self.metadata_max_age,
+            rotation: RotationPolicy::DEFAULT,
+            metadata_max_age: METADATA_MAX_AGE,
             invitations: self.invitations,
             upstream: [
                 (
@@ -214,7 +190,7 @@ impl ServeArgs {
             store: match self.store {
                 StoreKind::Kubernetes => Store::Kubernetes {
                     namespace: self.namespace.clone(),
-                    key_secret: self.key_secret.clone(),
+                    key_secret: zeabur_identity_k8s::KEY_SECRET.to_owned(),
                 },
                 StoreKind::Memory => Store::Memory,
             },
@@ -253,8 +229,8 @@ mod tests {
         let args = parse(&[
             "--issuer",
             "https://login.example.com",
-            "--metadata-max-age",
-            "2d",
+            "--token-lifetime",
+            "2h",
         ])
         .unwrap();
         assert!(args.config().is_err());

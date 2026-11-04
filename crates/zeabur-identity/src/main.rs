@@ -8,7 +8,7 @@ use clap::Parser as _;
 use tracing_subscriber::filter::Targets;
 use tracing_subscriber::layer::SubscriberExt as _;
 use tracing_subscriber::util::SubscriberInitExt as _;
-use zeabur_identity::cli::{LogFormat, ServeArgs};
+use zeabur_identity::cli::{LogFormat, ServeArgs, WORKER_THREADS};
 use zeabur_identity::serve::ServeError;
 
 fn main() -> ExitCode {
@@ -30,7 +30,7 @@ fn serve(args: &ServeArgs) -> ExitCode {
         }
     };
     let runtime = match tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(args.worker_threads.max(1))
+        .worker_threads(WORKER_THREADS)
         .enable_all()
         .build()
     {
