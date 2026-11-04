@@ -1,11 +1,17 @@
 name: CI
 
-# Every job of `scripts/ci.sh --list`, each as `scripts/ci.sh <job>` through the shared workflow of
+# The jobs of scripts/ci/jobs, each as `scripts/ci.sh <job>` through the shared workflow of
 # zeabur-oss/.github; the script enters the Nix dev shell itself, so a job runs the same locally.
+# Pull requests and pushes run the fast tier. The merge queue runs every job on the commit about to
+# land, and the nightly run keeps main's caches for the merge queue's jobs.
 on:
   push:
     branches: [main]
   pull_request:
+  merge_group:
+  schedule:
+    - cron: "0 16 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -16,10 +22,6 @@ concurrency:
 
 jobs:
   ci:
-    uses: zeabur-oss/.github/.github/workflows/ci.yml@6ab106525ce16169ab0ecfebe4b0248e096797fa # main
-    with:
-      # `fallow audit` in the ui job compares HEAD with HEAD^.
-      fetch-depth: 2
-      rust-cache: true
+    uses: zeabur-oss/.github/.github/workflows/ci.yml@e20c21ac376aa7daf8a3c1433a06a2fbbe264bd0 # main
   dco:
     uses: zeabur-oss/.github/.github/workflows/dco.yml@6ab106525ce16169ab0ecfebe4b0248e096797fa # main

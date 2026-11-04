@@ -42,15 +42,19 @@ below.
 
 Run what CI runs. CI calls `scripts/ci.sh` once per job through the shared workflow of
 [zeabur-oss/.github](https://github.com/zeabur-oss/.github); the script enters `nix develop`
-itself, so a job runs the same on your machine:
+itself, so a job runs the same on your machine. The jobs are the rows of `scripts/ci/jobs`, and each
+one is `scripts/ci/<job>.sh`:
 
 ```sh
-./scripts/ci.sh --list          # format clippy docs test cargo-deny unsafe-report ui kubernetes
-./scripts/ci.sh format          # cargo fmt, nixfmt, shellcheck, actionlint
+./scripts/ci.sh --list          # lint format clippy docs cargo-deny unsafe-report test ui kubernetes
+./scripts/ci.sh lint            # format, clippy, docs, cargo-deny and unsafe-report in a row
 ./scripts/ci.sh clippy          # cargo lint: all targets and features, -D warnings
-./scripts/ci.sh test            # and docs, cargo-deny, unsafe-report, ui
+./scripts/ci.sh test
 ./scripts/ci.sh kubernetes      # k3s with Docker: see "Disposable k3d cluster" below
 ```
+
+A pull request runs every job but `kubernetes`. The merge queue runs all of them on the commit that
+is about to land, so a pull request waits for the cluster test only once, when it is queued.
 
 The `ui` job's `fallow audit --base HEAD^` compares with the previous commit; on a branch, run
 `(cd ui && bun run fallow audit --base main)` inside `nix develop` instead.
