@@ -99,6 +99,8 @@ kubectl -n "$NS" rollout history deployment/zeabur-identity > upgrade-record/rol
 
 將前四行換成你的設定值。以下 `manifests` 指令與[在 k3s 上安裝並登入](../get-started/quickstart.mdx)相同，會啟用邀請功能。補上安裝時使用的所有選項。如果原本沒有啟用邀請功能，移除 `--serve-arg=--invitations`。
 
+GitHub 與 Google 登入原本是 `--github-*` 和 `--google-*` 選項，現在和其他提供者一樣，改為 `UpstreamProvider` 物件，`manifests` 會拒絕這些選項。請不要加上這些選項，下一步會處理。
+
 ```sh
 NS=zeabur-identity
 NEXT_ZEABUR_IDENTITYCTL=/path/to/new/zeabur-identityctl
@@ -120,10 +122,13 @@ jq '.items |= map(select(.kind != "Secret"))' upgrade-record/manifests.next.json
 
 套用前，先閱讀 `upgrade-record/crds.next.json` 與 `upgrade-record/manifests.upgrade.json`。
 
+`upstream migrate` 會從執行中的 Deployment 讀取 `--github-*` 和 `--google-*` 選項，建立提供者 `github` 與 `google`，並把它們的用戶端密鑰複製到 Secret `zeabur-identity-upstream`。回呼網址和已連結的帳號都不會改變。Deployment 沒有這些選項時，不會有任何變更。請在套用新的資源清單前執行，新的資源清單會移除這些選項。加上 `--dry-run` 可以先看會建立哪些物件。
+
 如果套用時出現衝突，先找出原因，不要加上 `--force-conflicts`。不要為了排除錯誤而刪除並重建 CRD，這會刪除該類型的所有物件。
 
 ```sh
 kubectl apply --server-side -f upgrade-record/crds.next.json
+"$NEXT_ZEABUR_IDENTITYCTL" upstream migrate --namespace "$NS"
 kubectl apply --server-side -f upgrade-record/manifests.upgrade.json
 kubectl -n "$NS" rollout status deployment/zeabur-identity --timeout=5m
 kubectl -n "$NS" logs deployment/zeabur-identity --tail=200

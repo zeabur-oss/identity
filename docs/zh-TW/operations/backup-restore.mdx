@@ -44,8 +44,8 @@ Zeabur Identity 用 `User` 物件的 UID 識別每個人。每個權杖的 `sub`
 | Secret `zeabur-identity-internal-ca` | 儲存根 CA 與私密金鑰。cert-manager 用它簽發憑證，供 kube-apiserver 連線到內部位址時驗證。這份 Secret 要與每台控制平面機器上的驗證檔案一起儲存。cert-manager 會用它重新簽發 `zeabur-identity-internal-tls`。 |
 | Deployment、Service、ServiceAccount、Role 與 RoleBinding `zeabur-identity`，以及 ClusterRoleBinding `zeabur-identity-cluster-admins` | 儲存 Zeabur Identity 的執行方式與管理員權限。也要備份你為其他應用程式建立的 RoleBinding。 |
 | ConfigMap `zeabur-identity-settings`，如果你有建立 | 儲存 `teams` 與 `admin-aal3` 設定。缺少它時，所有設定都會回到預設值。 |
-| 掛載到 Zeabur Identity 的 Secret，例如 `zeabur-identity-config` | 儲存 GitHub 與 Google 的用戶端密鑰。也要保留上游應用程式的註冊資料。 |
-| `upstreamproviders` 與 Secret `zeabur-identity-upstream` | 儲存 OpenID Connect 提供者及其用戶端密鑰。 |
+| 以 `--config-secret` 掛載到 Zeabur Identity 的 Secret | 儲存 Deployment 讀取的檔案。 |
+| `upstreamproviders` 與 Secret `zeabur-identity-upstream` | 儲存登入提供者（GitHub、Google 和 OpenID Connect）及其用戶端密鑰。也要保留各提供者端的註冊資料。 |
 | 公開 TLS 與路由 | 入門安裝使用 Secret `zeabur-identity-tls` 與 Ingress `zeabur-identity`。登入速率限制另外使用 Ingress `zeabur-identity-rate-limited`、Middleware `zeabur-identity-rate-limit`，以及 `kube-system` 中的 HelmChartConfig `traefik`。 |
 | 每台控制平面機器上的 kube-apiserver 設定 | k3s 使用 `/etc/rancher/k3s/zeabur-identity/authn.yaml`，以及載入這份檔案的設定。 |
 | 機密用戶端應用程式各自密鑰儲存區中的用戶端密鑰 | Zeabur Identity 只儲存雜湊值。 |
