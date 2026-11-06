@@ -48,48 +48,41 @@ export ZEABUR_IDENTITY_ISSUER=https://identity.example.test
 
 ### 存储客户端密钥
 
-Zeabur Identity 从 Kubernetes Secret 中的文件读取密钥，挂载路径为 `/etc/zeabur-identity`。
-
-执行以下命令，避免密钥出现在 Shell 历史记录和进程列表中：
+所有登录提供方的客户端密钥都保存在同一个 Secret `zeabur-identity-upstream` 中，每个提供方一个键。Zeabur Identity 只能读取这个 Secret，读不到其他 Secret。执行以下命令，避免密钥出现在 Shell 历史记录和进程列表中：
 
 ```sh
 read -rs GITHUB_SECRET     # paste the client secret, then Enter
-printf %s "$GITHUB_SECRET" | kubectl -n zeabur-identity create secret generic zeabur-identity-config \
-  --from-file=github-client-secret=/dev/stdin
+printf %s "$GITHUB_SECRET" | kubectl -n zeabur-identity create secret generic zeabur-identity-upstream \
+  --from-file=github=/dev/stdin
 unset GITHUB_SECRET
 ```
 
-如果 `zeabur-identity-config` 已存在，例如已存放 [Google 登录](./google-sign-in.mdx)的密钥，改用以下命令添加键，保留其他键：
-
-```sh
-kubectl -n zeabur-identity edit secret zeabur-identity-config
-```
+如果 `zeabur-identity-upstream` 已存在，例如已存放 [Google 登录](./google-sign-in.mdx)的密钥，用密钥管理工具添加 `github` 键，或执行 `kubectl -n zeabur-identity edit secret zeabur-identity-upstream`。Secret 中的值使用 base64 编码。
 
 </Step>
 
 <Step>
 
-### 启用 GitHub 登录提供方
+### 创建 GitHub 提供方
 
-使用 Secret 和 Client ID 重新生成部署配置。
-
-`zeabur-identityctl manifests` 不会记住之前的选项。执行时要保留安装时使用的镜像、Namespace 和其他 `--serve-arg`，再加上 GitHub 选项。
-
-以下命令沿用[在 k3s 上安装并登录](../get-started/quickstart.mdx)的配置，包含下一步邀请用户所需的 `--invitations`。将 `GITHUB_CLIENT_ID` 换成刚才获取的 **Client ID**；这个值不属于密钥。
+将 `clientId` 换成步骤 1 获取的 **Client ID**，这个值不是密钥。
 
 ```sh
-GITHUB_CLIENT_ID=Ov23li...   # from step 1; not a secret
-ZEABUR_IDENTITY_IMAGE=$(kubectl -n zeabur-identity get deployment zeabur-identity -o jsonpath='{.spec.template.spec.containers[0].image}')
-zeabur-identityctl manifests --image "$ZEABUR_IDENTITY_IMAGE" \
-  --config-secret zeabur-identity-config \
-  --serve-arg=--invitations \
-  --serve-arg=--github-client-id=$GITHUB_CLIENT_ID \
-  --serve-arg=--github-client-secret-file=/etc/zeabur-identity/github-client-secret \
-  | kubectl apply --server-side -f -
-kubectl -n zeabur-identity rollout status deploy/zeabur-identity
+kubectl apply -f - <<'EOF'
+apiVersion: identity.zeabur.com/v1alpha1
+kind: UpstreamProvider
+metadata:
+  name: github                # the ID in the callback URL
+  namespace: zeabur-identity
+spec:
+  type: GitHub
+  displayName: GitHub         # shown as "Continue with GitHub"
+  clientId: Ov23li...
+  clientSecretKey: github     # the key in the Secret zeabur-identity-upstream
+EOF
 ```
 
-部署完成后，登录页面会显示 **Continue with GitHub**。
+几秒内登录页就会出现 **Continue with GitHub**，无需重启。下一步要邀请用户，所以必须启用邀请功能（`--serve-arg=--invitations`，如[在 k3s 上安装并登录](../get-started/quickstart.mdx)所示）。
 
 </Step>
 
@@ -182,7 +175,7 @@ kubectl auth whoami          # choose "Continue with GitHub"; the user is zeabur
 - 让用户退出登录，结束已创建的会话。操作见[退出登录、恢复与移除用户](./offboarding.mdx)。
 - 停用或移除用户，撤销所有访问权限。操作见[退出登录、恢复与移除用户](./offboarding.mdx)。
 
-要关闭 GitHub 登录，重新生成部署配置时移除两个 `--github-*` 选项，保留其他选项，再到 GitHub 删除 OAuth 应用。已关联的账号和现有会话仍会保留，需要按上面的方式移除。
+要关闭 GitHub 登录，执行 `kubectl -n zeabur-identity delete upstreamprovider github` 删除提供方，再到 GitHub 删除 OAuth 应用。已关联的账号和现有会话仍会保留，需要按上面的方式移除。
 
 ## 遇到问题
 
@@ -191,6 +184,5 @@ kubectl auth whoami          # choose "Continue with GitHub"; the user is zeabur
 | GitHub 显示重定向 URI 不属于此应用 | 确认 OAuth 应用的回调网址与 `<issuer>/upstream/github/callback` 完全相同。 |
 | **This account is not linked to any user here** | GitHub 账号没有对应的 `Credential`。按照关联账号的步骤处理。手动创建的凭据如果名称或 ID 错误，也会出现相同提示。 |
 | **Use a passkey for this account** | GitHub 账号关联到了管理员账号。管理员账号只能用通行密钥登录。 |
-| **This provider is not enabled** | Deployment 缺少 `--github-client-id`。执行 `kubectl -n zeabur-identity get deploy zeabur-identity -o jsonpath='{.spec.template.spec.containers[0].args}'` 检查参数。 |
-| Pod 无法读取 `/etc/zeabur-identity/...` | 确认 `--config-secret zeabur-identity-config` 已挂载 Secret，Secret 包含 `github-client-secret`，且 `--github-client-secret-file` 指向 `/etc/zeabur-identity/github-client-secret`。如果你自定义了 Pod 的安全配置或挂载，保留生成配置中的 `fsGroup` 和读取权限。 |
-| GitHub 重定向回来后登录失败 | Pod 无法连接到 `github.com` 或 `api.github.com`。检查对外连接配置，包括代理服务器、防火墙和 NetworkPolicy，并执行 `kubectl -n zeabur-identity logs deploy/zeabur-identity` 查看日志。 |
+| **This provider is not enabled** | 没有名为 `github` 的 `UpstreamProvider`。执行 `kubectl -n zeabur-identity get upstreamproviders` 检查。 |
+| GitHub 重定向回来后登录失败 | 执行 `kubectl -n zeabur-identity logs deploy/zeabur-identity`。`client secret unavailable` 表示 Secret `zeabur-identity-upstream` 或其中的 `github` 键不存在。没有这一行时，请检查 Pod 能否连接到 `github.com` 和 `api.github.com`，以及代理服务器、防火墙和 NetworkPolicy。 |

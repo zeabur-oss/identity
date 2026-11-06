@@ -1,15 +1,13 @@
 //! Command-line flags of the `zeabur-identity` server.
 
 use std::net::SocketAddr;
-use std::path::PathBuf;
 use std::time::Duration;
 
 use clap::{Parser, ValueEnum};
 use zeabur_identity_core::config::{BaseUrl, ConfigError, parse_duration};
 use zeabur_identity_keys::rotation::RotationPolicy;
-use zeabur_identity_signin::upstream::provider::Kind;
 
-use crate::config::{ServeConfig, Store, UpstreamConfig};
+use crate::config::{ServeConfig, Store};
 
 /// `Cache-Control: max-age` for discovery documents and the JWK set.
 pub const METADATA_MAX_AGE: Duration = Duration::from_mins(5);
@@ -66,39 +64,21 @@ pub struct ServeArgs {
     #[arg(long, env = "ZEABUR_IDENTITY_INVITATIONS")]
     pub invitations: bool,
 
-    /// Enable "Continue with GitHub": the OAuth app's client ID. Register
-    /// `<issuer>/upstream/github/callback` as its callback URL.
-    #[arg(
-        long,
-        env = "ZEABUR_IDENTITY_GITHUB_CLIENT_ID",
-        requires = "github_client_secret_file"
-    )]
+    /// Removed: GitHub sign-in is an `UpstreamProvider`. Set, the server does not start.
+    #[arg(long, env = "ZEABUR_IDENTITY_GITHUB_CLIENT_ID", hide = true)]
     pub github_client_id: Option<String>,
 
-    /// File holding the GitHub OAuth app's client secret.
-    #[arg(
-        long,
-        env = "ZEABUR_IDENTITY_GITHUB_CLIENT_SECRET_FILE",
-        requires = "github_client_id"
-    )]
-    pub github_client_secret_file: Option<PathBuf>,
+    /// Removed with `--github-client-id`.
+    #[arg(long, env = "ZEABUR_IDENTITY_GITHUB_CLIENT_SECRET_FILE", hide = true)]
+    pub github_client_secret_file: Option<String>,
 
-    /// Enable "Continue with Google": the OAuth client ID. Register
-    /// `<issuer>/upstream/google/callback` as an authorized redirect URI.
-    #[arg(
-        long,
-        env = "ZEABUR_IDENTITY_GOOGLE_CLIENT_ID",
-        requires = "google_client_secret_file"
-    )]
+    /// Removed: Google sign-in is an `UpstreamProvider`. Set, the server does not start.
+    #[arg(long, env = "ZEABUR_IDENTITY_GOOGLE_CLIENT_ID", hide = true)]
     pub google_client_id: Option<String>,
 
-    /// File holding the Google OAuth client secret.
-    #[arg(
-        long,
-        env = "ZEABUR_IDENTITY_GOOGLE_CLIENT_SECRET_FILE",
-        requires = "google_client_id"
-    )]
-    pub google_client_secret_file: Option<PathBuf>,
+    /// Removed with `--google-client-id`.
+    #[arg(long, env = "ZEABUR_IDENTITY_GOOGLE_CLIENT_SECRET_FILE", hide = true)]
+    pub google_client_secret_file: Option<String>,
 
     /// Lifetime of an admin account's access and ID tokens. They carry `cluster-admin`.
     #[arg(long, env = "ZEABUR_IDENTITY_ADMIN_TOKEN_LIFETIME", default_value = "5m", value_parser = parse_duration)]
@@ -140,33 +120,23 @@ impl ServeArgs {
     ///
     /// Returns [`ConfigError`] if the values are inconsistent.
     pub fn config(&self) -> Result<ServeConfig, ConfigError> {
+        if self.github_client_id.is_some()
+            || self.github_client_secret_file.is_some()
+            || self.google_client_id.is_some()
+            || self.google_client_secret_file.is_some()
+        {
+            return Err(ConfigError::Removed(
+                "the --github-* and --google-* options are gone: GitHub and Google sign-in are \
+                 UpstreamProvider objects now. Run `zeabur-identityctl upstream migrate` to create \
+                 them from these options, then remove the options from the Deployment",
+            ));
+        }
         let config = ServeConfig {
             issuer: self.issuer.clone(),
             listen: self.listen,
             rotation: RotationPolicy::DEFAULT,
             metadata_max_age: METADATA_MAX_AGE,
             invitations: self.invitations,
-            upstream: [
-                (
-                    Kind::GitHub,
-                    &self.github_client_id,
-                    &self.github_client_secret_file,
-                ),
-                (
-                    Kind::Google,
-                    &self.google_client_id,
-                    &self.google_client_secret_file,
-                ),
-            ]
-            .into_iter()
-            .filter_map(|(kind, id, secret)| {
-                Some(UpstreamConfig {
-                    kind,
-                    client_id: id.clone()?,
-                    client_secret_file: secret.clone()?,
-                })
-            })
-            .collect(),
             internal_listen: self.internal_listen,
             internal_url: self.internal_url.clone(),
             store: Store {
@@ -200,6 +170,22 @@ mod tests {
     #[test]
     fn cli_definition_is_valid() {
         ServeArgs::command().debug_assert();
+    }
+
+    #[test]
+    fn refuses_the_removed_github_and_google_options() {
+        let args = parse(&[
+            "--issuer",
+            "https://login.example.com",
+            "--github-client-id",
+            "Ov23li",
+        ])
+        .unwrap();
+        let error = args.config().unwrap_err().to_string();
+        assert!(
+            error.contains("zeabur-identityctl upstream migrate"),
+            "{error}"
+        );
     }
 
     #[test]

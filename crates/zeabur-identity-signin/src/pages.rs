@@ -17,20 +17,19 @@ use zeabur_identity_store::{App, Directory, GrantStore};
 use zeabur_identity_ui::pages::{AppLink, ProviderButton, login_page, page_lang, setup_page};
 
 use crate::cookie;
-use crate::upstream::provider::Kind;
+use crate::upstream::provider::Providers;
 
-type Shared<D, G, C> = (Arc<AuthorizationServer<D, G, C>>, Arc<[ProviderButton]>);
+type Shared<D, G, C> = (Arc<AuthorizationServer<D, G, C>>, Arc<Providers>);
 
 /// The page routes and `/assets/{name}`. `providers` are the upstream providers offered.
 pub fn router<D: Directory, G: GrantStore, C: Clock>(
     server: Arc<AuthorizationServer<D, G, C>>,
-    providers: &[Kind],
+    providers: Arc<Providers>,
 ) -> Router {
-    let buttons: Arc<[ProviderButton]> = providers.iter().map(|kind| kind.button()).collect();
     Router::new()
         .route("/login", get(login::<D, G, C>))
         .route("/setup", get(setup::<D, G, C>))
-        .with_state((server, buttons))
+        .with_state((server, providers))
         .merge(zeabur_identity_ui::assets::router())
 }
 
@@ -54,11 +53,13 @@ async fn login<D: Directory, G: GrantStore, C: Clock>(
         .as_ref()
         .and_then(|(flow, _)| flow.request.login_hint.as_deref());
     let apps = server.directory.apps();
+    let providers = providers.all();
+    let buttons: Vec<ProviderButton<'_>> = providers.iter().map(|p| p.button()).collect();
     login_page(
         lang,
         client.zip(expires_in),
         login_hint,
-        &providers,
+        &buttons,
         &links(&apps),
     )
 }
@@ -70,10 +71,12 @@ async fn setup<D: Directory, G: GrantStore, C: Clock>(
 ) -> Response {
     let pending = pending(&server, &headers).await;
     let apps = server.directory.apps();
+    let providers = providers.all();
+    let buttons: Vec<ProviderButton<'_>> = providers.iter().map(|p| p.button()).collect();
     setup_page(
         page_lang(query.as_deref(), &headers),
         pending.as_ref().map(|(_, client)| client.as_str()),
-        &providers,
+        &buttons,
         &links(&apps),
     )
 }

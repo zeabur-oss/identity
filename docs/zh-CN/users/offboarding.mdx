@@ -23,7 +23,7 @@ kubectl -n zeabur-identity delete zbgrant -l identity.zeabur.com/user=alice
 zeabur-identityctl setup-link --username alice --reset
 ```
 
-这个命令会删除 `alice` 的所有凭据、会话及待接受的邀请。凭据包含通行密钥，以及已关联的 GitHub 或 Google 账号。
+这个命令会删除 `alice` 的所有凭据、会话及待接受的邀请。凭据包含通行密钥，以及已关联的 GitHub、Google 或 OpenID Connect 账号。
 
 命令会输出新的一次性设置链接，有效期为 1 小时。
 
@@ -41,7 +41,7 @@ zeabur-identityctl setup-link --username alice --reset
 zeabur-identityctl invite --username alice --reset
 ```
 
-这个命令会执行相同的重置，并输出邀请。用户也能通过邀请关联 GitHub 或 Google 账号。
+这个命令会执行相同的重置，并输出邀请。用户也能通过邀请关联 GitHub、Google 或 OpenID Connect 账号。
 
 ## 停用用户
 
@@ -67,7 +67,7 @@ kubectl -n zeabur-identity get zbuser alice
 kubectl -n zeabur-identity delete zbuser alice
 ```
 
-删除 `User` 后，用户的通行密钥、已关联的 GitHub 或 Google 账号、会话及邀请链接都会失效。
+删除 `User` 后，用户的通行密钥、已关联的 GitHub、Google 或 OpenID Connect 账号、会话及邀请链接都会失效。
 
 这些对象都绑定原有 `User` 的 UID。即使创建同名的 `User`，新对象也会获得新的 UID。
 

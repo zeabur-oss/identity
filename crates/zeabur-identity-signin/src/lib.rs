@@ -38,7 +38,7 @@ use crate::account::{Audit, record};
 use crate::device::Requester;
 use crate::passkeys::{Passkeys, authenticator, backup_flags, credential_name};
 use crate::problem::Problem;
-use crate::upstream::provider::Kind;
+use crate::upstream::provider::Providers;
 
 /// Cookie holding the sealed WebAuthn ceremony state (`SameSite=Strict`).
 ///
@@ -72,8 +72,9 @@ pub struct SignIn<D, G, C, K, S> {
     pub setup: S,
     /// Ceremony identifiers already used.
     pub used_ceremonies: OneTimeIds,
-    /// The upstream providers that the account page offers to link.
-    pub providers: Vec<Kind>,
+    /// The upstream providers: the sign-in pages offer them, and the account page offers to link
+    /// them.
+    pub providers: Arc<Providers>,
 }
 
 type Shared<D, G, C, K, S> = Arc<SignIn<D, G, C, K, S>>;

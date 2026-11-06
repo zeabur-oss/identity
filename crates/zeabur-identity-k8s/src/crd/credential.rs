@@ -43,7 +43,7 @@ pub use zeabur_identity_store::CredentialType;
 #[x_kube(
     validation = Rule::new("self == oldSelf").message("credentials are immutable; delete and re-enrol instead"),
     validation = Rule::new("(self.type == 'Passkey') == has(self.passkey)").message("passkey is set exactly when type is Passkey"),
-    validation = Rule::new("(self.type != 'Passkey') == has(self.external)").message("external is set exactly when type is GitHub or Google")
+    validation = Rule::new("(self.type != 'Passkey') == has(self.external)").message("external is set exactly when type is GitHub, Google or OIDC")
 )]
 #[serde(rename_all = "camelCase")]
 pub struct CredentialSpec {
@@ -56,7 +56,7 @@ pub struct CredentialSpec {
     /// Passkey details, when `type` is `Passkey`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub passkey: Option<Passkey>,
-    /// Upstream identity, when `type` is `GitHub` or `Google`.
+    /// Upstream identity, when `type` is `GitHub`, `Google` or `OIDC`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub external: Option<ExternalIdentity>,
 }

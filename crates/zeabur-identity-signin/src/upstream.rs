@@ -1,4 +1,5 @@
-//! Signing in with an upstream identity provider (GitHub, Google), and linking such an account
+//! Signing in with an upstream identity provider (GitHub, Google, a configured OpenID Connect
+//! provider), and linking such an account
 //! to a user with an enrolment link or from the account page.
 //!
 //! | Route | Purpose |
@@ -70,7 +71,7 @@ use zeabur_identity_ui::i18n::Lang;
 use zeabur_identity_ui::pages::{ErrorReason, accept_language, error_page, notice_page};
 
 use self::http::HttpClient;
-use self::provider::{Exchange, Kind, Provider, UpstreamError};
+use self::provider::{Exchange, Provider, UpstreamError};
 use crate::account::{Account, Audit, current, log_outcome, record, require_fresh, signed_in};
 use crate::device::Requester;
 use crate::problem::Problem;
@@ -90,13 +91,17 @@ const UNKNOWN_PROVIDER: Problem = Problem::new(
     "unknown-provider",
     "This sign-in provider isn't enabled.",
 );
+const PROVIDER_UNAVAILABLE: Problem = Problem::new(
+    StatusCode::BAD_GATEWAY,
+    "provider-unavailable",
+    "The sign-in provider can't be reached. Try again later.",
+);
 
 /// Upstream sign-in state shared by the handlers.
 pub struct Upstream<D, G, C, K, S, H> {
-    /// Passkey sign-in (its authorization server, credentials and enrolment tokens).
+    /// Passkey sign-in (its authorization server, credentials, enrolment tokens and the enabled
+    /// providers).
     pub sign_in: Arc<SignIn<D, G, C, K, S>>,
-    /// The enabled providers.
-    pub providers: Vec<Provider>,
     /// Outgoing HTTPS.
     pub http: H,
     /// `state` values already returned by a provider.
@@ -106,7 +111,7 @@ pub struct Upstream<D, G, C, K, S, H> {
 impl<D, G, C, K, S, H> std::fmt::Debug for Upstream<D, G, C, K, S, H> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Upstream")
-            .field("providers", &self.providers)
+            .field("providers", &self.sign_in.providers)
             .finish_non_exhaustive()
     }
 }
@@ -184,8 +189,8 @@ struct StartResponse {
     redirect_to: String,
 }
 
-fn redirect_uri(issuer: &str, kind: Kind) -> String {
-    format!("{issuer}/upstream/{}/callback", kind.id())
+fn redirect_uri(issuer: &str, provider: &Provider) -> String {
+    format!("{issuer}/upstream/{}/callback", provider.id())
 }
 
 fn random_text<const N: usize>() -> Result<String, Problem> {
@@ -206,13 +211,12 @@ where
     S: SetupStore,
     H: HttpClient,
 {
-    let normalized_provider = Kind::from_id(&provider).map(Kind::id);
+    let found = service.sign_in.providers.find(&provider);
+    let normalized_provider = found.as_ref().map(|p| p.id());
     let result: Result<Response, Problem> = async {
         let sign_in = &service.sign_in;
         check_request(&headers, sign_in.oauth.issuer.as_str())?;
-        let provider = Kind::from_id(&provider)
-            .and_then(|kind| service.providers.iter().find(|p| p.kind() == kind))
-            .ok_or(UNKNOWN_PROVIDER)?;
+        let provider = found.as_deref().ok_or(UNKNOWN_PROVIDER)?;
         let request: StartRequest = parse(&body)?;
         let now = sign_in.oauth.now();
         if let Some(token) = &request.token {
@@ -227,7 +231,7 @@ where
                 .and_then(|sealed| open_flow(&sign_in.oauth, sealed))
                 .ok_or(NO_REQUEST)?;
         }
-        begin(sign_in, provider, request.token, None, now)
+        begin(sign_in, &service.http, provider, request.token, None, now).await
     }
     .await;
     match &result {
@@ -243,16 +247,29 @@ where
 
 /// Seals a new pending request into [`UPSTREAM_COOKIE`] and answers with the provider's
 /// authorization URL.
-fn begin<D, G, C, K, S>(
+async fn begin<D, G, C, K, S, H>(
     sign_in: &SignIn<D, G, C, K, S>,
+    http: &H,
     provider: &Provider,
     link: Option<String>,
     account: Option<Bound>,
     now: UnixTime,
-) -> Result<Response, Problem> {
+) -> Result<Response, Problem>
+where
+    D: Directory,
+    G: GrantStore,
+    C: Clock,
+    K: CredentialStore,
+    S: SetupStore,
+    H: HttpClient,
+{
+    let endpoints = provider.endpoints(http, now).await.map_err(|error| {
+        tracing::warn!(reason = "provider_discovery_failed", %error, "reading the provider's endpoints failed");
+        PROVIDER_UNAVAILABLE
+    })?;
     let pending = Pending {
         id: hex(&random::<16>().map_err(internal)?),
-        provider: provider.kind().id().to_owned(),
+        provider: provider.id().to_owned(),
         state: random_text::<32>()?,
         nonce: random_text::<32>()?,
         verifier: random_text::<32>()?,
@@ -262,7 +279,8 @@ fn begin<D, G, C, K, S>(
     };
     let challenge = URL_SAFE_NO_PAD.encode(sha256(pending.verifier.as_bytes()));
     let url = provider.authorize_url(
-        &redirect_uri(sign_in.oauth.issuer.as_str(), provider.kind()),
+        &endpoints,
+        &redirect_uri(sign_in.oauth.issuer.as_str(), provider),
         &pending.state,
         &pending.nonce,
         &challenge,
@@ -314,8 +332,9 @@ where
         let account = signed_in(sign_in, &headers, &request.csrf, now).await?;
         audit.session = Some(account.token.name().to_owned());
         user = Some(account.user.clone());
-        let provider = Kind::from_id(&request.provider)
-            .and_then(|kind| service.providers.iter().find(|p| p.kind() == kind))
+        let provider = sign_in
+            .providers
+            .find(&request.provider)
             .ok_or(UNKNOWN_PROVIDER)?;
         require_fresh(&account, now)?;
         check_account(&sign_in.oauth.directory, &account.user, Method::Upstream).await?;
@@ -324,7 +343,7 @@ where
             user: account.user.name.clone(),
             subject: account.user.subject.clone(),
         };
-        begin(sign_in, provider, None, Some(bound), now)
+        begin(sign_in, &service.http, &provider, None, Some(bound), now).await
     }
     .await;
     log_outcome(
@@ -454,7 +473,8 @@ where
     let sign_in = &service.sign_in;
     let oauth = &sign_in.oauth;
     let now = oauth.now();
-    let normalized_provider = Kind::from_id(&provider).map(Kind::id);
+    let found = sign_in.providers.find(&provider);
+    let normalized_provider = found.as_ref().map(|p| p.id());
     let mut event = "auth.upstream_callback";
     let mut identity = None;
     let mut link_user = None;
@@ -482,8 +502,8 @@ where
             (None, Some(_)) => "auth.account_link",
             (None, None) => "auth.sign_in",
         };
-        let provider = Kind::from_id(&pending.provider)
-            .and_then(|kind| service.providers.iter().find(|p| p.kind() == kind))
+        let provider = found
+            .as_deref()
             .ok_or(("provider_unavailable", ErrorReason::ProviderFailed, None))?;
         // The provider refused, or the user cancelled (RFC 6749 §4.1.2.1).
         let (Some(code), Some(state)) = (param("code"), param("state")) else {
@@ -513,7 +533,7 @@ where
         let exchange = Exchange {
             code,
             verifier: &pending.verifier,
-            redirect_uri: &redirect_uri(oauth.issuer.as_str(), provider.kind()),
+            redirect_uri: &redirect_uri(oauth.issuer.as_str(), provider),
             nonce: &pending.nonce,
         };
         let subject = provider
@@ -523,7 +543,7 @@ where
                 tracing::warn!(reason = "provider_verification_failed", %error, "upstream provider verification failed");
                 verification_failure(&error)
             })?;
-        let issuer = provider.kind().issuer();
+        let issuer = provider.issuer();
         let name = external_credential_name(issuer, &subject);
         let linked = sign_in
             .credentials

@@ -1,6 +1,6 @@
-//! Upstream sign-in and account linking against fake GitHub and Google providers that answer in
-//! process: PKCE is checked against the challenge sent, Google's ID token is signed with a test
-//! key published in a test JWK set.
+//! Upstream sign-in and account linking against fake GitHub, Google and OpenID Connect providers
+//! that answer in process: PKCE is checked against the challenge sent, ID tokens are signed with a
+//! test key published in a test JWK set.
 
 #[cfg(test)]
 mod tests {
@@ -11,7 +11,7 @@ mod tests {
 
     use axum::Router;
     use axum::body::{Body, Bytes};
-    use axum::http::{HeaderMap, Method, Request, Response, StatusCode, header};
+    use axum::http::{HeaderMap, HeaderValue, Method, Request, Response, StatusCode, header};
     use base64::Engine as _;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use http_body_util::BodyExt as _;
@@ -35,7 +35,9 @@ mod tests {
     use zeabur_identity_signin::account::{ACCOUNT_CLIENT, SESSION_COOKIE, SessionToken};
     use zeabur_identity_signin::passkeys::Passkeys;
     use zeabur_identity_signin::upstream::http::{HttpClient, HttpError};
-    use zeabur_identity_signin::upstream::provider::{Endpoints, Kind, Provider};
+    use zeabur_identity_signin::upstream::provider::{
+        ClientSecret, Endpoints, Kind, Provider, Providers, TokenAuth,
+    };
     use zeabur_identity_signin::upstream::{self, UPSTREAM_COOKIE, Upstream};
     use zeabur_identity_store::{
         Client, ClientType, CredentialStore as _, Directory as _, GrantStore as _,
@@ -50,6 +52,8 @@ mod tests {
     const VERIFIER: &str = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
     const GITHUB_ID: u64 = 583_231;
     const GOOGLE_SUB: &str = "110169484474386276334";
+    const ACME_ISSUER: &str = "https://idp.acme.test/realms/staff";
+    const ACME_SUB: &str = "f3a1c9e0-5b7d-4e2a-9c61-0d8e4b2f7a55";
     const INVITATION: &str = "inv-1.invitation-secret-with-plenty-of-entropy";
 
     const SECRET_ERROR: &str = "secret-bearing-upstream-http-error-sentinel";
@@ -62,8 +66,12 @@ mod tests {
         google_key: Mutex<Option<Arc<SigningKey>>>,
         /// Published in Google's JWK set.
         published_key: Mutex<Option<Arc<SigningKey>>>,
-        /// Overrides for Google's ID token claims.
+        /// Overrides for the ID token claims.
         id_token_overrides: Mutex<Value>,
+        /// Overrides for the OpenID Connect provider's discovery document.
+        discovery_overrides: Mutex<Value>,
+        /// Discovery documents served.
+        discoveries: std::sync::atomic::AtomicUsize,
         fail_http: AtomicBool,
         secrets: Mutex<Vec<String>>,
     }
@@ -78,13 +86,19 @@ mod tests {
             .unwrap()
     }
 
-    /// Google's token response: an ID token with the fake's claims and overrides.
-    fn google_token(fake: &Fake, nonce: &str) -> Response<Bytes> {
+    /// A token response: an ID token with the fake's claims and overrides.
+    fn id_token_reply(
+        fake: &Fake,
+        nonce: &str,
+        iss: &str,
+        sub: &str,
+        aud: &str,
+    ) -> Response<Bytes> {
         let now = SystemClock.now().as_secs();
         let mut claims = json!({
-            "iss": "https://accounts.google.com",
-            "sub": GOOGLE_SUB,
-            "aud": "google-client",
+            "iss": iss,
+            "sub": sub,
+            "aud": aud,
             "exp": now + 300,
             "iat": now,
             "nonce": nonce,
@@ -143,6 +157,34 @@ mod tests {
                 let verifier = form.get("code_verifier")?;
                 (URL_SAFE_NO_PAD.encode(sha256(verifier.as_bytes())) == challenge).then_some(nonce)
             };
+            let acme_token = |request: &Request<Bytes>, form: &HashMap<String, String>| {
+                let basic = format!(
+                    "Basic {}",
+                    base64::engine::general_purpose::STANDARD.encode("acme%3Aclient:s%2Fcr%26t")
+                );
+                let post = form.get("client_secret").map(String::as_str) == Some("s/cr&t");
+                let authorized = match fake.discovery_overrides.lock().unwrap()
+                    ["token_endpoint_auth_methods_supported"]
+                    .as_array()
+                {
+                    // Only client_secret_post offered: the secret is in the form.
+                    Some(_) => post && !request.headers().contains_key(header::AUTHORIZATION),
+                    None => {
+                        request.headers().get(header::AUTHORIZATION).map(HeaderValue::as_bytes)
+                            == Some(basic.as_bytes())
+                            && !form.contains_key("client_secret")
+                    }
+                };
+                match redeem(form) {
+                    Some(nonce) if authorized => {
+                        id_token_reply(fake, &nonce, ACME_ISSUER, ACME_SUB, "acme:client")
+                    }
+                    _ => reply(
+                        StatusCode::BAD_REQUEST,
+                        &json!({ "error": "invalid_grant" }),
+                    ),
+                }
+            };
             Some(match uri.as_str() {
                 "https://github.test/token" => match redeem(&form) {
                     Some(_)
@@ -174,9 +216,34 @@ mod tests {
                             &json!({ "error": "invalid_grant" }),
                         )
                     },
-                    |nonce| google_token(fake, &nonce),
+                    |nonce| {
+                        id_token_reply(
+                            fake,
+                            &nonce,
+                            "https://accounts.google.com",
+                            GOOGLE_SUB,
+                            "google-client",
+                        )
+                    },
                 ),
-                "https://google.test/jwks" => google_jwks(fake),
+                "https://google.test/jwks" | "https://idp.acme.test/jwks" => google_jwks(fake),
+                "https://idp.acme.test/realms/staff/.well-known/openid-configuration" => {
+                    fake.discoveries.fetch_add(1, Ordering::SeqCst);
+                    let mut document = json!({
+                        "issuer": ACME_ISSUER,
+                        "authorization_endpoint": "https://idp.acme.test/auth?realm=staff",
+                        "token_endpoint": "https://idp.acme.test/token",
+                        "jwks_uri": "https://idp.acme.test/jwks",
+                    });
+                    let overrides = fake.discovery_overrides.lock().unwrap().clone();
+                    if let Value::Object(map) = overrides {
+                        for (k, v) in map {
+                            document[k] = v;
+                        }
+                    }
+                    reply(StatusCode::OK, &document)
+                }
+                "https://idp.acme.test/token" => acme_token(request, &form),
                 _ => return None,
             })
         }
@@ -245,45 +312,45 @@ mod tests {
             &hash_secret(INVITATION.as_bytes()),
             zeabur_identity_core::clock::UnixTime::from_secs(SystemClock.now().as_secs() + 3600),
         );
-        let sign_in = Arc::new(SignIn {
-            oauth: Arc::clone(&oauth),
-            passkeys: Passkeys::new(&issuer).unwrap(),
-            credentials: MemoryCredentialStore::default(),
-            setup,
-            used_ceremonies: OneTimeIds::default(),
-            providers: vec![Kind::GitHub, Kind::Google],
-        });
         let fake = Arc::new(Fake::default());
         let google_key = Arc::new(SigningKey::generate(Algorithm::Rs256).unwrap());
         *fake.google_key.lock().unwrap() = Some(Arc::clone(&google_key));
         *fake.published_key.lock().unwrap() = Some(google_key);
-        let github = Provider::new(
-            Kind::GitHub,
+        let github = Provider::github(
             "gh-client".into(),
-            "gh-secret".into(),
+            "gh-secret".to_owned(),
             Endpoints {
                 authorize: "https://github.test/authorize".into(),
                 token: "https://github.test/token".into(),
                 user: Some("https://api.github.test/user".into()),
                 jwks: None,
                 issuers: vec![],
+                token_auth: TokenAuth::Post,
             },
         );
-        let google = Provider::new(
-            Kind::Google,
+        let google = Provider::google(
             "google-client".into(),
-            "google-secret".into(),
+            "google-secret".to_owned(),
             Endpoints {
                 authorize: "https://google.test/authorize".into(),
                 token: "https://google.test/token".into(),
                 user: None,
                 jwks: Some("https://google.test/jwks".into()),
                 issuers: Endpoints::google().issuers,
+                token_auth: TokenAuth::Post,
             },
         );
+        let providers = Arc::new(Providers::new(vec![github, google, acme()]));
+        let sign_in = Arc::new(SignIn {
+            oauth: Arc::clone(&oauth),
+            passkeys: Passkeys::new(&issuer).unwrap(),
+            credentials: MemoryCredentialStore::default(),
+            setup,
+            used_ceremonies: OneTimeIds::default(),
+            providers,
+        });
         let service = Arc::new(Upstream {
             sign_in: Arc::clone(&sign_in),
-            providers: vec![github, google],
             http: FakeHttp(Arc::clone(&fake)),
             used_states: OneTimeIds::default(),
         });
@@ -392,8 +459,14 @@ mod tests {
                     assert!(fields["reason"].as_str().is_some());
                 }
             }
-            if let Some(kind) = provider.as_deref().and_then(Kind::from_id) {
-                assert_eq!(fields["provider"], kind.id());
+            if let Some(id) = provider
+                .as_deref()
+                .filter(|id| ["github", "google"].contains(id))
+            {
+                assert_eq!(fields["provider"], id);
+            } else if provider.as_deref() == Some("acme") {
+                // Configured: named only while it is configured.
+                assert!(fields.get("provider").is_none_or(|p| p == "acme"));
             } else {
                 assert!(fields.get("provider").is_none());
             }
@@ -572,15 +645,36 @@ mod tests {
         reply
     }
 
+    /// The configured OpenID Connect provider. Its client ID and secret need form-encoding in the
+    /// Basic header (RFC 6749 §2.3.1).
+    fn acme() -> Provider {
+        Provider::oidc(
+            "acme".into(),
+            "Acme SSO".into(),
+            ACME_ISSUER.into(),
+            "acme:client".into(),
+            ClientSecret::Fixed("s/cr&t".into()),
+        )
+    }
+
+    /// The issuer a linked account of `kind` records.
+    const fn issuer(kind: Kind) -> &'static str {
+        match kind {
+            Kind::GitHub => "https://github.com",
+            Kind::Google => "https://accounts.google.com",
+            Kind::Oidc => ACME_ISSUER,
+        }
+    }
+
     async fn link(h: &Harness, kind: Kind, subject: &str, user: &str) {
         h.service
             .sign_in
             .credentials
             .link(&NewExternal {
-                name: external_credential_name(kind.issuer(), subject),
+                name: external_credential_name(issuer(kind), subject),
                 user: user.into(),
                 kind: kind.credential_type(),
-                issuer: kind.issuer().into(),
+                issuer: issuer(kind).into(),
                 subject: subject.into(),
                 user_subject: format!("uid-{user}"),
             })
@@ -805,7 +899,7 @@ mod tests {
         assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
         assert!(reply.body.contains("Account linked"));
         assert_audit(&reply, "auth.account_link", None, Some("dana"), None);
-        let name = external_credential_name(Kind::Google.issuer(), GOOGLE_SUB);
+        let name = external_credential_name(issuer(Kind::Google), GOOGLE_SUB);
         assert_eq!(
             h.service
                 .sign_in
@@ -831,6 +925,137 @@ mod tests {
         let reply = sign_in(&h, "google", "code-2").await;
         assert_eq!(reply.status, StatusCode::SEE_OTHER, "{}", reply.body);
         assert_audit(&reply, "auth.sign_in", None, Some("dana"), Some("uid-dana"));
+    }
+
+    #[tokio::test]
+    async fn a_linked_oidc_account_signs_in_with_discovered_endpoints() {
+        let h = harness().await;
+        link(&h, Kind::Oidc, ACME_SUB, "alice").await;
+        let flow = authorize(&h, "openid").await;
+        let started = start(&h, "acme", &json!({}), &format!("{FLOW_COOKIE}={flow}")).await;
+        assert_eq!(started.status, StatusCode::OK, "{}", started.body);
+        let url = started.json()["redirect_to"].as_str().unwrap().to_owned();
+        // The discovered endpoint keeps its own query.
+        assert!(
+            url.starts_with("https://idp.acme.test/auth?realm=staff&"),
+            "{url}"
+        );
+        let query: HashMap<String, String> =
+            form_urlencoded::parse(url.split_once('?').unwrap().1.as_bytes())
+                .into_owned()
+                .collect();
+        assert_eq!(query["scope"], "openid");
+        assert_eq!(query["client_id"], "acme:client");
+        assert_eq!(
+            query["redirect_uri"],
+            format!("{ISSUER}/upstream/acme/callback")
+        );
+        assert_ne!(query["nonce"], "");
+
+        // The fake's token endpoint accepts only the Basic header with each part form-encoded.
+        let reply = sign_in(&h, "acme", "code-acme").await;
+        assert_eq!(reply.status, StatusCode::SEE_OTHER, "{}", reply.body);
+        assert_audit(
+            &reply,
+            "auth.sign_in",
+            None,
+            Some("alice"),
+            Some("uid-alice"),
+        );
+        // The discovery document is reused.
+        assert_eq!(h.fake.discoveries.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn client_secret_post_when_the_provider_offers_only_that() {
+        let h = harness().await;
+        *h.fake.discovery_overrides.lock().unwrap() =
+            json!({ "token_endpoint_auth_methods_supported": ["client_secret_post"] });
+        link(&h, Kind::Oidc, ACME_SUB, "alice").await;
+        let reply = sign_in(&h, "acme", "code-post").await;
+        assert_eq!(reply.status, StatusCode::SEE_OTHER, "{}", reply.body);
+    }
+
+    /// OpenID Connect Discovery 1.0 §4.3: the document's issuer must be identical to the one
+    /// configured, or its endpoints are not used.
+    #[tokio::test]
+    async fn a_discovery_document_naming_another_issuer_is_refused() {
+        for other in [
+            "https://idp.acme.test",
+            "https://idp.acme.test/realms/staff/",
+            "https://evil.example/realms/staff",
+        ] {
+            let h = harness().await;
+            *h.fake.discovery_overrides.lock().unwrap() = json!({ "issuer": other });
+            let flow = authorize(&h, "openid").await;
+            let reply = start(&h, "acme", &json!({}), &format!("{FLOW_COOKIE}={flow}")).await;
+            assert_eq!(reply.status, StatusCode::BAD_GATEWAY, "{other}");
+            assert_eq!(
+                reply.json()["type"],
+                "urn:zeabur-identity:problem:provider-unavailable"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn oidc_id_tokens_must_name_the_configured_issuer_and_client() {
+        let h = harness().await;
+        link(&h, Kind::Oidc, ACME_SUB, "alice").await;
+        for (i, (claim, value)) in [
+            ("iss", json!("https://accounts.google.com")),
+            ("iss", json!("https://idp.acme.test/realms/staff/")),
+            ("aud", json!("google-client")),
+            ("azp", json!("google-client")),
+            ("nonce", json!("replayed")),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            *h.fake.id_token_overrides.lock().unwrap() = json!({ claim: value });
+            let reply = sign_in(&h, "acme", &format!("code-{i}")).await;
+            assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{claim}={value}");
+            assert_audit(
+                &reply,
+                "auth.sign_in",
+                Some("provider_verification_failed"),
+                None,
+                None,
+            );
+        }
+    }
+
+    /// The same subject at another provider is another account: a link is keyed by issuer and
+    /// subject.
+    #[tokio::test]
+    async fn a_subject_linked_at_one_provider_does_not_sign_in_at_another() {
+        let h = harness().await;
+        link(&h, Kind::Google, ACME_SUB, "alice").await;
+        let reply = sign_in(&h, "acme", "code-other-issuer").await;
+        assert_eq!(reply.status, StatusCode::BAD_REQUEST);
+        assert_audit(&reply, "auth.sign_in", Some("account_unlinked"), None, None);
+    }
+
+    /// The account page names a linked account by its provider, and by the issuer once the
+    /// provider is no longer configured, so it can still be removed.
+    #[tokio::test]
+    async fn the_account_page_lists_oidc_accounts_after_their_provider_goes() {
+        let h = harness().await;
+        link(&h, Kind::Oidc, ACME_SUB, "alice").await;
+        let session = account_session(&h, "alice", 0).await;
+        let page = account_page(&h, &session).await;
+        assert!(page.contains(r#"data-link="acme""#));
+        assert!(page.contains("Acme SSO"));
+        let name = external_credential_name(ACME_ISSUER, ACME_SUB);
+        assert!(page.contains(&format!(r#"data-linked="{name}""#)));
+
+        h.service.sign_in.providers.set_configured(Vec::new());
+        let page = account_page(&h, &session).await;
+        assert!(!page.contains(r#"data-link="acme""#));
+        assert!(page.contains(&format!(r#"data-linked="{name}""#)));
+        assert!(page.contains(ACME_ISSUER));
+        // Its sign-in routes are gone with it.
+        let reply = start(&h, "acme", &json!({}), "").await;
+        assert_eq!(reply.status, StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
@@ -1179,7 +1404,7 @@ mod tests {
         h.service
             .sign_in
             .credentials
-            .linked_account(&external_credential_name(kind.issuer(), subject))
+            .linked_account(&external_credential_name(issuer(kind), subject))
             .await
             .unwrap()
             .map(|linked| linked.user)
@@ -1259,7 +1484,7 @@ mod tests {
             Some("alice"),
             Some("uid-alice"),
         );
-        let name = external_credential_name(Kind::GitHub.issuer(), &GITHUB_ID.to_string());
+        let name = external_credential_name(issuer(Kind::GitHub), &GITHUB_ID.to_string());
         assert_eq!(
             h.service
                 .sign_in
@@ -1455,7 +1680,7 @@ mod tests {
     async fn unlinking_keeps_a_way_to_sign_in_and_ends_what_the_account_signed_in() {
         let h = harness().await;
         link(&h, Kind::GitHub, &GITHUB_ID.to_string(), "alice").await;
-        let github = external_credential_name(Kind::GitHub.issuer(), &GITHUB_ID.to_string());
+        let github = external_credential_name(issuer(Kind::GitHub), &GITHUB_ID.to_string());
         let stale = account_session(&h, "alice", 600).await;
         let session = account_session(&h, "alice", 0).await;
         let unlink = |session: &Session, name: &str| {
@@ -1482,7 +1707,7 @@ mod tests {
         );
         // Another user's linked account is not found.
         link(&h, Kind::Google, GOOGLE_SUB, "dana").await;
-        let google = external_credential_name(Kind::Google.issuer(), GOOGLE_SUB);
+        let google = external_credential_name(issuer(Kind::Google), GOOGLE_SUB);
         let reply = unlink(&session, &google).await;
         assert_eq!(reply.status, StatusCode::NOT_FOUND);
         assert_eq!(
@@ -1498,7 +1723,7 @@ mod tests {
                 name: "c-second".into(),
                 user: "alice".into(),
                 kind: Kind::Google.credential_type(),
-                issuer: Kind::Google.issuer().into(),
+                issuer: issuer(Kind::Google).into(),
                 subject: "second".into(),
                 user_subject: "uid-alice".into(),
             })

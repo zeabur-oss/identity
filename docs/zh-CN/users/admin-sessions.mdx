@@ -16,7 +16,7 @@ source: "55e2a5c129fb"
 
 <Callout type="warn">
 
-每位管理员都应另有一个普通账号，用于日常工作。管理员账号只用于更改集群。管理员账号无法使用 GitHub 或 Google 登录，也无法关联这两种账号。登录页面会显示 **Use a passkey for this account**。
+每位管理员都应另有一个普通账号，用于日常工作。管理员账号只用于更改集群。管理员账号无法使用 GitHub、Google 或 OpenID Connect 提供方登录，也无法关联这些账号。登录页面会显示 **Use a passkey for this account**。
 
 </Callout>
 
@@ -51,7 +51,7 @@ kubectl -n zeabur-identity patch zbuser alice --type merge -p '{"spec":{"account
 kubectl -n zeabur-identity get zbuser            # the Type column shows the account type
 ```
 
-更改会在用户下次登录或刷新令牌时生效。已签发的访问令牌在到期前仍然有效，最长为 5 分钟或 10 分钟。账号改为管理员后，原有的 GitHub 和 Google 会话会在下次刷新令牌时结束。
+更改会在用户下次登录或刷新令牌时生效。已签发的访问令牌在到期前仍然有效，最长为 5 分钟或 10 分钟。账号改为管理员后，原有的 GitHub、Google 和 OpenID Connect 会话会在下次刷新令牌时结束。
 
 目录同步不会更改账号的管理员身份，详见[从目录同步用户](./provisioning.mdx)。
 
@@ -67,7 +67,7 @@ kubectl -n zeabur-identity get zbuser            # the Type column shows the acc
 | 管理员，单个团队 | 5 分钟 | 1 小时 | 登录后 12 小时 |
 | 管理员，多个团队或启用 AAL3 | 5 分钟 | 15 分钟 | 登录后 12 小时 |
 
-12 小时从使用通行密钥、GitHub 或 Google 登录时开始计算，刷新令牌不会重置这个时限。
+12 小时从使用通行密钥、GitHub、Google 或 OpenID Connect 提供方登录时开始计算，刷新令牌不会重置这个时限。
 
 Zeabur Identity 不保留单点登录会话，所以每次授权请求都会显示登录页面。令牌响应中的 `refresh_expires_in` 表示刷新令牌距离空闲超时还剩多少秒。
 

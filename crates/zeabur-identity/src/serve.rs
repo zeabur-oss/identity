@@ -24,6 +24,7 @@ use zeabur_identity_core::clock::SystemClock;
 use zeabur_identity_core::crypto::Sealer;
 use zeabur_identity_k8s::crd::grant::Grant;
 use zeabur_identity_k8s::crd::invitation::Invitation;
+use zeabur_identity_k8s::crd::upstream::{ProviderType, UpstreamProvider};
 use zeabur_identity_k8s::credentials::KubeCredentialStore;
 use zeabur_identity_k8s::directory::KubeDirectory;
 use zeabur_identity_k8s::gc;
@@ -37,7 +38,7 @@ use zeabur_identity_oauth::metadata::{AppState, router};
 use zeabur_identity_oauth::{AuthorizationServer, OneTimeIds, endpoints};
 use zeabur_identity_signin::passkeys::Passkeys;
 use zeabur_identity_signin::upstream::http::HyperClient;
-use zeabur_identity_signin::upstream::provider::{Endpoints, Kind, Provider};
+use zeabur_identity_signin::upstream::provider::{ClientSecret, Endpoints, Provider, Providers};
 use zeabur_identity_signin::upstream::{self, Upstream};
 use zeabur_identity_signin::{SignIn, pages};
 use zeabur_identity_store::{CredentialStore, Directory, GrantStore, SetupStore};
@@ -126,6 +127,13 @@ pub async fn serve(config: ServeConfig) -> Result<(), ServeError> {
             }
         }));
     }
+    let providers = Arc::new(Providers::default());
+    background.push(tokio::spawn(watch_providers(
+        Api::namespaced(client.clone(), &namespace),
+        Api::namespaced(client.clone(), &namespace),
+        Arc::clone(&providers),
+        shutdown_rx.clone(),
+    )));
     let internal_secrets = Api::namespaced(client.clone(), &namespace);
     let gc = tokio::spawn({
         let shutdown = shutdown_rx.clone();
@@ -134,6 +142,7 @@ pub async fn serve(config: ServeConfig) -> Result<(), ServeError> {
     run(
         &config,
         (keys, directory, grants, credentials, setup),
+        providers,
         background.into_iter().chain([gc]).collect(),
         (internal_listener, resolver, internal_secrets),
         shutdown_tx,
@@ -141,33 +150,67 @@ pub async fn serve(config: ServeConfig) -> Result<(), ServeError> {
     .await
 }
 
-/// The configured upstream providers, with their client secrets read from files.
-fn upstream_providers(config: &ServeConfig) -> Result<Vec<Provider>, ServeError> {
-    config
-        .upstream
-        .iter()
-        .map(|upstream| {
-            let secret = std::fs::read_to_string(&upstream.client_secret_file)
-                .map_err(|error| {
-                    ServeError::Config(format!(
-                        "{}: {error}",
-                        upstream.client_secret_file.display()
-                    ))
-                })?
-                .trim()
-                .to_owned();
-            let endpoints = match upstream.kind {
-                Kind::GitHub => Endpoints::github(),
-                Kind::Google => Endpoints::google(),
-            };
-            Ok(Provider::new(
-                upstream.kind,
-                upstream.client_id.clone(),
-                secret,
-                endpoints,
-            ))
-        })
-        .collect()
+/// Keeps the providers in `providers` current until shutdown. A
+/// provider whose object did not change is kept, with its cached discovery document and keys.
+async fn watch_providers(
+    objects: Api<UpstreamProvider>,
+    secrets: Api<Secret>,
+    providers: Arc<Providers>,
+    mut shutdown: watch::Receiver<bool>,
+) {
+    let mut current: Vec<(UpstreamProvider, Arc<Provider>)> = Vec::new();
+    let publish = move |objects: Vec<UpstreamProvider>| {
+        let mut next = Vec::with_capacity(objects.len());
+        for object in objects {
+            let kept = current
+                .iter()
+                .find(|(old, _)| {
+                    old.metadata.name == object.metadata.name && old.spec == object.spec
+                })
+                .map(|(_, provider)| Arc::clone(provider));
+            let provider = kept.unwrap_or_else(|| Arc::new(configured_provider(&object, &secrets)));
+            next.push((object, provider));
+        }
+        providers.set_configured(next.iter().map(|(_, p)| Arc::clone(p)).collect());
+        tracing::info!(
+            providers = ?next.iter().map(|(_, p)| p.id()).collect::<Vec<_>>(),
+            "configured upstream providers"
+        );
+        current = next;
+    };
+    tokio::select! {
+        () = zeabur_identity_k8s::upstream::watch(objects, publish) => {}
+        _ = shutdown.wait_for(|stop| *stop) => {}
+    }
+}
+
+/// The provider an `UpstreamProvider` describes. Its client secret is read at each code exchange.
+fn configured_provider(object: &UpstreamProvider, secrets: &Api<Secret>) -> Provider {
+    let spec = &object.spec;
+    let secrets = secrets.clone();
+    let key = spec.client_secret_key.clone();
+    let fetch = ClientSecret::Fetch(Arc::new(move || {
+        let (secrets, key) = (secrets.clone(), key.clone());
+        Box::pin(async move { zeabur_identity_k8s::upstream::client_secret(&secrets, &key).await })
+    }));
+    let id = object.metadata.name.clone().unwrap_or_default();
+    let label = spec.display_name.clone();
+    let client_id = spec.client_id.clone();
+    match spec.kind {
+        ProviderType::GitHub => {
+            Provider::github(client_id, fetch, Endpoints::github()).named(id, label)
+        }
+        ProviderType::Google => {
+            Provider::google(client_id, fetch, Endpoints::google()).named(id, label)
+        }
+        ProviderType::Oidc => Provider::oidc(
+            id,
+            label,
+            spec.issuer.clone().unwrap_or_default(),
+            client_id,
+            fetch,
+        ),
+    }
 }
 
 /// Maps load shedding to an immediate retryable response; unexpected errors retain diagnostics.
@@ -224,6 +267,7 @@ fn limits(router: axum::Router) -> axum::Router {
 async fn run<S: KeyStore, D: Directory, G: GrantStore, K: CredentialStore, T: SetupStore>(
     config: &ServeConfig,
     (keys, directory, grants, credentials, setup): (S, D, G, K, T),
+    providers: Arc<Providers>,
     mut background: Vec<JoinHandle<()>>,
     (listener, resolver, secrets): (TlsListener, Arc<Resolver>, Api<Secret>),
     shutdown_tx: watch::Sender<bool>,
@@ -266,8 +310,6 @@ async fn run<S: KeyStore, D: Directory, G: GrantStore, K: CredentialStore, T: Se
         used_codes: OneTimeIds::default(),
         used_request_uris: OneTimeIds::default(),
     });
-    let providers = upstream_providers(config)?;
-    let kinds: Vec<Kind> = providers.iter().map(Provider::kind).collect();
     let sign_in = Arc::new(SignIn {
         oauth: Arc::clone(&server),
         passkeys: Passkeys::new(&config.issuer)
@@ -275,9 +317,9 @@ async fn run<S: KeyStore, D: Directory, G: GrantStore, K: CredentialStore, T: Se
         credentials,
         setup,
         used_ceremonies: OneTimeIds::default(),
-        providers: kinds.clone(),
+        providers: Arc::clone(&providers),
     });
-    let mut app = router(AppState::new(
+    let app = router(AppState::new(
         metadata,
         manager.subscribe(),
         config.metadata_max_age,
@@ -286,21 +328,20 @@ async fn run<S: KeyStore, D: Directory, G: GrantStore, K: CredentialStore, T: Se
     .merge(business_limits(zeabur_identity_signin::router(Arc::clone(
         &sign_in,
     ))))
-    .merge(business_limits(pages::router(Arc::clone(&server), &kinds)));
-    if !providers.is_empty() {
-        let roots = zeabur_identity_tls::trust::roots()
-            .map_err(|error| ServeError::Config(error.to_string()))?;
-        let http =
-            HyperClient::new(roots).map_err(|error| ServeError::Config(error.to_string()))?;
-        tracing::info!(providers = ?kinds, "upstream sign-in enabled");
-        app = app.merge(business_limits(upstream::router(Arc::new(Upstream {
+    .merge(business_limits(pages::router(
+        Arc::clone(&server),
+        providers,
+    )));
+    let roots = zeabur_identity_tls::trust::roots()
+        .map_err(|error| ServeError::Config(error.to_string()))?;
+    let http = HyperClient::new(roots).map_err(|error| ServeError::Config(error.to_string()))?;
+    let app = limits(
+        app.merge(business_limits(upstream::router(Arc::new(Upstream {
             sign_in,
-            providers,
             http,
             used_states: OneTimeIds::default(),
-        }))));
-    }
-    let app = limits(app);
+        })))),
+    );
     let listener = TcpListener::bind(config.listen).await?;
     tracing::info!(address = %listener.local_addr()?, issuer = %config.issuer, "listening");
 

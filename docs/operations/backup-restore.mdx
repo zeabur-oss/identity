@@ -3,7 +3,7 @@ title: Back up and restore Zeabur Identity
 description: Back up Zeabur Identity data and keys, restore service based on your backup type, and practice recovering identities, passkeys, and access permissions.
 ---
 
-Back up the cluster's datastore, Zeabur Identity resources, private keys, and related configuration. Restoring the datastore preserves everyone's identity and passkeys. Rebuilding resources from exports creates new identities. Everyone must register new passkeys and relink their GitHub or Google accounts, and applications must migrate their user mappings.
+Back up the cluster's datastore, Zeabur Identity resources, private keys, and related configuration. Restoring the datastore preserves everyone's identity and passkeys. Rebuilding resources from exports creates new identities. Everyone must register new passkeys and relink their GitHub, Google or OpenID Connect accounts, and applications must migrate their user mappings.
 
 ## What to back up
 
@@ -13,7 +13,7 @@ Zeabur Identity identifies each person by the UID of their `User` object. Every 
 |---|---|---|
 | User UID | Preserved | Regenerated |
 | Existing passkeys | Continue to work | Everyone must register new passkeys |
-| Linked GitHub and Google accounts | Continue to work | Everyone must relink their accounts |
+| Linked GitHub, Google and OpenID Connect accounts | Continue to work | Everyone must relink their accounts |
 | Applications that track users by `sub` | Recognize the same person | Recognize a new user |
 | Sessions | Delete them, then everyone signs in again | Don't restore |
 
@@ -38,12 +38,13 @@ Keep the following data together. Record the backup date, Zeabur Identity image 
 | Backup item | Purpose |
 |---|---|
 | The cluster's datastore backup, plus the server token, encryption keys, and cluster certificates that your distribution needs to open it | This is the only way to preserve UIDs and passkeys. You can't restore a snapshot that you can't decrypt. |
-| `users`, `credentials`, and `oauthclients` (`*.identity.zeabur.com`) | Preserve users and groups, passkey records, linked GitHub or Google accounts, and registered clients. |
+| `users`, `credentials`, and `oauthclients` (`*.identity.zeabur.com`) | Preserve users and groups, passkey records, linked GitHub, Google or OpenID Connect accounts, and registered clients. |
 | Secret `zeabur-identity-signing-keys` | Preserves all private signing keys, including keys scheduled for activation and retired keys. Other data can't reconstruct these keys. |
 | Secret `zeabur-identity-internal-ca` | Preserves the root CA and private key. cert-manager uses it to issue the certificate that kube-apiserver verifies when it connects to the internal address. Keep this Secret with the authentication files on every control plane machine. cert-manager uses it to reissue `zeabur-identity-internal-tls`. |
 | Deployment, Service, ServiceAccount, Role, and RoleBinding `zeabur-identity`, plus ClusterRoleBinding `zeabur-identity-cluster-admins` | Preserve how Zeabur Identity runs and its admin permissions. Also back up any RoleBindings you created for other applications. |
 | ConfigMap `zeabur-identity-settings`, if you created it | Preserves the `teams` and `admin-aal3` settings. Without it, all settings return to their defaults. |
-| Secrets mounted into Zeabur Identity, such as `zeabur-identity-config` | Preserve GitHub and Google client secrets. Also keep the upstream application registrations. |
+| Secrets mounted into Zeabur Identity with `--config-secret` | Preserve files the Deployment reads. |
+| `upstreamproviders` and the Secret `zeabur-identity-upstream` | Preserve sign-in providers (GitHub, Google and OpenID Connect) and their client secrets. Also keep the registrations at each provider. |
 | Public TLS and routing | The quickstart installation uses Secret `zeabur-identity-tls` and Ingress `zeabur-identity`. Sign-in rate limiting also uses Ingress `zeabur-identity-rate-limited`, Middleware `zeabur-identity-rate-limit`, and HelmChartConfig `traefik` in `kube-system`. |
 | kube-apiserver configuration on every control plane machine | k3s uses `/etc/rancher/k3s/zeabur-identity/authn.yaml` and the configuration that loads this file. |
 | Client secrets in each confidential client application's secret store | Zeabur Identity stores only hashes. |
@@ -101,12 +102,14 @@ kubectl -n "$NS" scale deploy/zeabur-identity --replicas=0
 kubectl -n "$NS" wait --for=delete pod \
   -l app.kubernetes.io/name=zeabur-identity --timeout=180s
 
-for resource in users credentials oauthclients grants invitations; do
+for resource in users credentials oauthclients grants invitations upstreamproviders; do
   kubectl -n "$NS" get "$resource.identity.zeabur.com" -o json \
     > "$BACKUP/$resource.json"
 done
 kubectl -n "$NS" get secret zeabur-identity-signing-keys zeabur-identity-internal-ca -o json \
   > "$BACKUP/identity-secrets.json"
+kubectl -n "$NS" get secret zeabur-identity-upstream -o json --ignore-not-found \
+  > "$BACKUP/upstream-secret.json"
 kubectl -n "$NS" get svc zeabur-identity -o json > "$BACKUP/service.json"
 kubectl -n "$NS" get serviceaccount/zeabur-identity role/zeabur-identity rolebinding/zeabur-identity -o json \
   > "$BACKUP/namespaced-rbac.json"
@@ -116,7 +119,8 @@ kubectl -n "$NS" get configmap zeabur-identity-settings -o json --ignore-not-fou
   > "$BACKUP/settings.json"
 kubectl get crd users.identity.zeabur.com credentials.identity.zeabur.com \
   oauthclients.identity.zeabur.com grants.identity.zeabur.com \
-  invitations.identity.zeabur.com -o json > "$BACKUP/crds.json"
+  invitations.identity.zeabur.com upstreamproviders.identity.zeabur.com \
+  -o json > "$BACKUP/crds.json"
 
 # Save every Secret mounted into Zeabur Identity, whatever it's called.
 jq -r '.spec.template.spec.volumes[]? | .secret.secretName // empty' \
@@ -334,11 +338,12 @@ Don't start Zeabur Identity yet, or it will create new signing keys.
 
 Review `users.json` and `oauthclients.json`. Remove users and clients that shouldn't return. Edit working copies and leave the original archive unchanged.
 
-The following script removes metadata from the old cluster and creates every user in a disabled state to prevent accidental access:
+The following script removes metadata from the old cluster creates every user in a disabled state to prevent accidental access, and creates the clients and OpenID Connect providers:
 
 ```sh
 NS=zeabur-identity   # the namespace you are restoring into
-for resource in users oauthclients; do
+for resource in users oauthclients upstreamproviders; do
+  [ "$(jq '.items | length' "$resource.json")" -gt 0 ] || continue
   jq --arg ns "$NS" '
     {apiVersion:"v1", kind:"List", items:[.items[] |
       {apiVersion, kind,
@@ -363,8 +368,8 @@ If `create` fails, stop and investigate. Don't switch to a forced apply or delet
 Before starting Zeabur Identity, restore the signing keys, internal CA, public TLS, and configuration Secrets:
 
 ```sh
-for file in identity-secrets.json mounted-secret-*.json public-tls.json; do
-  [ -e "$file" ] || continue
+for file in identity-secrets.json mounted-secret-*.json upstream-secret.json public-tls.json; do
+  [ -s "$file" ] || continue
   jq --arg ns "$NS" '
     {apiVersion:"v1", kind:"List", items:[(if .kind == "List" then .items[] else . end) |
       {apiVersion, kind, type, data,
@@ -391,7 +396,7 @@ Don't create any objects from `credentials.json`, `grants.json`, or `invitations
 
 Old passkeys can't work with new UIDs. Old sessions refer to accounts by username, so an old refresh token can obtain tokens for whoever currently uses that name.
 
-Users can relink their GitHub or Google accounts when they register again.
+Users can relink their GitHub, Google or OpenID Connect accounts when they register again.
 
 </Step>
 

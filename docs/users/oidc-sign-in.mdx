@@ -1,0 +1,123 @@
+---
+title: Let users sign in with your identity provider
+description: Add an OpenID Connect provider such as Keycloak, Microsoft Entra ID or Okta, and link user accounts so regular accounts can sign in to Zeabur Identity with it.
+---
+
+Add your organization's OpenID Connect provider, then link its accounts to Zeabur Identity users. Users can then select **Continue with** and the provider's name on the sign-in page. Keycloak, Authentik, Microsoft Entra ID, Okta and other providers that publish an OpenID Connect discovery document work this way. SAML isn't supported.
+
+Admin accounts can only sign in with passkeys and can't link accounts from a provider.
+
+## Before you begin
+
+- Install Zeabur Identity in the `zeabur-identity` Namespace, and run `kubectl` with a cluster administrator's kubeconfig.
+- Confirm that the Zeabur Identity Pod can reach the provider over HTTPS, and that the provider's certificate is signed by a public certificate authority.
+- Find the provider's issuer URL. It's the `issuer` value in `<issuer>/.well-known/openid-configuration`. For example, a Keycloak realm's issuer is `https://keycloak.example.com/realms/<realm>`.
+- The provider must sign ID tokens with `RS256` or `ES256`. Most providers use `RS256` by default.
+
+The examples below use `https://identity.example.com` as the Issuer of Zeabur Identity, and `acme` as the provider's ID.
+
+Users must link their accounts to Zeabur Identity users before they can sign in. Zeabur Identity doesn't create users on first sign-in or match accounts by email address or name. Groups and display names come from `User`, not from the provider.
+
+## Add the provider
+
+<Steps>
+
+<Step>
+
+### Register Zeabur Identity at the provider
+
+Create a confidential client (Keycloak: **Client authentication** on; Entra ID: a web app registration) with these settings:
+
+- Redirect URI: `https://identity.example.com/upstream/acme/callback`. Replace the domain with your Issuer and `acme` with the ID you choose; the next step uses the same ID.
+- Grant type: authorization code. Zeabur Identity sends a PKCE challenge with `S256`.
+- Scope: `openid`. Zeabur Identity uses only the account's `sub`, so no other scope is needed.
+
+Save the client ID and the client secret.
+
+</Step>
+
+<Step>
+
+### Store the client secret
+
+Every provider's client secret is a key in one Secret, `zeabur-identity-upstream`. Zeabur Identity can read this Secret and no other. Run the following commands to keep the secret out of your shell history and process list:
+
+```sh
+read -rs ACME_SECRET     # paste the client secret, then Enter
+printf %s "$ACME_SECRET" | kubectl -n zeabur-identity create secret generic zeabur-identity-upstream \
+  --from-file=acme=/dev/stdin
+unset ACME_SECRET
+```
+
+If the Secret already exists, add a key to it with a secret management tool, or with `kubectl -n zeabur-identity edit secret zeabur-identity-upstream`. Its values use base64 encoding.
+
+</Step>
+
+<Step>
+
+### Create the UpstreamProvider
+
+```yaml
+apiVersion: identity.zeabur.com/v1alpha1
+kind: UpstreamProvider
+metadata:
+  name: acme                      # the ID in the redirect URI
+  namespace: zeabur-identity
+spec:
+  type: OIDC
+  displayName: Acme SSO           # shown as "Continue with Acme SSO"
+  issuer: https://keycloak.example.com/realms/acme
+  clientId: zeabur-identity
+  clientSecretKey: acme           # the key in the Secret zeabur-identity-upstream
+```
+
+Apply it with `kubectl apply -f`. The sign-in page shows **Continue with Acme SSO** within seconds, without a restart.
+
+</Step>
+
+<Step>
+
+### Link accounts
+
+Choose a linking method based on the user's current status:
+
+- A regular account that can already sign in: Open the account page, verify your identity with a passkey, and select the provider. See [Manage users](./manage-users.mdx) for account page instructions.
+- A new user: Send an invitation as described in [Manage users](./manage-users.mdx). The user opens the setup link and selects the provider.
+- An existing user who can't sign in yet: Send another invitation with the same username, with `--reset` if the user already has a passkey or linked account. See [Sign out, recover, and remove users](./offboarding.mdx).
+
+<Callout type="warn">
+
+Anyone with the setup link can control that Zeabur Identity user. Give the link to the correct person. An account at a provider can link to only one user at a time.
+
+</Callout>
+
+</Step>
+
+</Steps>
+
+## Verify the result
+
+Sign out, open the sign-in page from an application such as `kubectl`, select **Continue with Acme SSO**, and sign in with a linked regular account. If you use the `kubectl` configuration from [Install and sign in on k3s](../get-started/quickstart.mdx), clear the cached session first:
+
+```sh
+rm -rf ~/.kube/cache/oidc-login
+kubectl auth whoami
+```
+
+## Change or remove the provider
+
+- **Rotate the client secret.** Update the key in `zeabur-identity-upstream`. Zeabur Identity reads the Secret at each sign-in, so no restart is needed.
+- **Change the provider.** Edit the `UpstreamProvider`. A new issuer is a different provider: accounts linked under the old issuer no longer sign in, and users link again.
+- **Remove the provider.** Delete the `UpstreamProvider`. Its button goes away, but linked accounts and existing sessions stay. The account page still lists each linked account by the provider's issuer, so users can remove it. To revoke access, remove the credentials and sign the user out as described in [Sign out, recover, and remove users](./offboarding.mdx).
+
+When someone leaves, disabling the account at the provider stops new sign-ins, but Zeabur Identity doesn't ask the provider again while a session refreshes. A session ends after 1 hour unused or 12 hours after sign-in. To end it at once, sign the user out as described in [Sign out, recover, and remove users](./offboarding.mdx).
+
+## Troubleshooting
+
+| Screen or result | What to do next |
+| --- | --- |
+| No button on the sign-in page | Check the `UpstreamProvider` with `kubectl -n zeabur-identity get upstreamproviders`, and the logs for `configured upstream providers`. |
+| "The sign-in provider can't be reached" when selecting the button | The discovery document couldn't be read, or its `issuer` differs from `spec.issuer`. The two must match exactly, including any trailing slash. Check the logs for `provider_discovery_failed`. |
+| The provider shows a redirect URI error | Register `<issuer>/upstream/<name>/callback` exactly, with the `UpstreamProvider`'s name. |
+| **This account is not linked to any user here** | Link the account with an invitation or from the account page. |
+| Sign-in fails after returning from the provider | Run `kubectl -n zeabur-identity logs deploy/zeabur-identity`. `client secret unavailable` means the Secret or its key is missing; `the provider's ID token is not valid` names the claim that failed. A signature failure can mean the provider signs with an algorithm other than `RS256` or `ES256`. |

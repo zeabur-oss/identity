@@ -1,5 +1,6 @@
 {
   "apiVersion": "v1",
+  "kind": "List",
   "items": [
     {
       "apiVersion": "apiextensions.k8s.io/v1",
@@ -176,7 +177,7 @@
                     "description": "A way for a `User` to sign in.\n\nThe object name is derived from the credential's unique key (`c-` + hex SHA-256 of the\npasskey credential ID, or of the upstream issuer and subject), so creating a duplicate fails\nwith `409 AlreadyExists`. That is the uniqueness check WebAuthn Level 3 §7.1 asks for, and\nit holds across replicas. The spec is immutable; revoking is deleting. `status` holds what\nthe user may change (the label) and when the credential was last used.",
                     "properties": {
                       "external": {
-                        "description": "Upstream identity, when `type` is `GitHub` or `Google`.",
+                        "description": "Upstream identity, when `type` is `GitHub`, `Google` or `OIDC`.",
                         "nullable": true,
                         "properties": {
                           "issuer": {
@@ -244,7 +245,8 @@
                         "enum": [
                           "Passkey",
                           "GitHub",
-                          "Google"
+                          "Google",
+                          "OIDC"
                         ],
                         "type": "string"
                       },
@@ -270,7 +272,7 @@
                         "rule": "(self.type == 'Passkey') == has(self.passkey)"
                       },
                       {
-                        "message": "external is set exactly when type is GitHub or Google",
+                        "message": "external is set exactly when type is GitHub, Google or OIDC",
                         "rule": "(self.type != 'Passkey') == has(self.external)"
                       }
                     ]
@@ -789,7 +791,121 @@
           }
         ]
       }
+    },
+    {
+      "apiVersion": "apiextensions.k8s.io/v1",
+      "kind": "CustomResourceDefinition",
+      "metadata": {
+        "name": "upstreamproviders.identity.zeabur.com"
+      },
+      "spec": {
+        "group": "identity.zeabur.com",
+        "names": {
+          "categories": [
+            "zeabur-identity"
+          ],
+          "kind": "UpstreamProvider",
+          "plural": "upstreamproviders",
+          "singular": "upstreamprovider"
+        },
+        "scope": "Namespaced",
+        "versions": [
+          {
+            "additionalPrinterColumns": [
+              {
+                "jsonPath": ".spec.type",
+                "name": "Type",
+                "type": "string"
+              },
+              {
+                "jsonPath": ".spec.issuer",
+                "name": "Issuer",
+                "type": "string"
+              },
+              {
+                "jsonPath": ".metadata.creationTimestamp",
+                "name": "Age",
+                "type": "date"
+              }
+            ],
+            "name": "v1alpha1",
+            "schema": {
+              "openAPIV3Schema": {
+                "description": "GitHub, Google or an OpenID Connect provider people can sign in to Zeabur Identity with.",
+                "properties": {
+                  "spec": {
+                    "description": "A provider people sign in with.\n\nThe object name is the provider's ID in Zeabur Identity's URLs: register\n`<issuer>/upstream/<name>/callback` as the redirect URI at the provider.",
+                    "properties": {
+                      "clientId": {
+                        "description": "The client ID registered at the provider.",
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "pattern": "^[!-~]+$",
+                        "type": "string"
+                      },
+                      "clientSecretKey": {
+                        "description": "The key holding the client secret in the Secret `zeabur-identity-upstream`, in the same\nnamespace.",
+                        "maxLength": 253,
+                        "minLength": 1,
+                        "pattern": "^[-._a-zA-Z0-9]+$",
+                        "type": "string"
+                      },
+                      "displayName": {
+                        "description": "Name on the \"Continue with …\" button.",
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "issuer": {
+                        "description": "`OIDC` only: the provider's issuer URL, exactly as its ID tokens' `iss` claim. Its\ndiscovery document is read from `<issuer>/.well-known/openid-configuration`.",
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "nullable": true,
+                        "type": "string",
+                        "x-kubernetes-validations": [
+                          {
+                            "message": "the issuer must be https:// with a host; printable ASCII, no user information, query or fragment",
+                            "rule": "self.matches('^[!-~]+$') && isURL(self) && !self.matches('^[^/]*//[^/?]*@') && !self.contains('?') && !self.contains('#') && url(self).getScheme() == 'https' && url(self).getHostname() != ''"
+                          }
+                        ]
+                      },
+                      "type": {
+                        "description": "Which provider: `GitHub` (an OAuth app), `Google` (an OAuth client), or `OIDC`, any\nOpenID Connect provider at `issuer`.",
+                        "enum": [
+                          "GitHub",
+                          "Google",
+                          "OIDC"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "clientId",
+                      "clientSecretKey",
+                      "displayName",
+                      "type"
+                    ],
+                    "type": "object",
+                    "x-kubernetes-validations": [
+                      {
+                        "message": "issuer is required for OIDC providers and not allowed for GitHub or Google",
+                        "rule": "(self.type == 'OIDC') == has(self.issuer)"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "spec"
+                ],
+                "title": "UpstreamProvider",
+                "type": "object"
+              }
+            },
+            "served": true,
+            "storage": true
+          }
+        ]
+      }
     }
-  ],
-  "kind": "List"
+  ]
 }

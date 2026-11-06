@@ -98,6 +98,8 @@ If the data requires migration and no migration method exists, don't upgrade.
 
 Replace the first four lines with your settings. The following `manifests` command matches the one in [Install and sign in on k3s](../get-started/quickstart.mdx) and enables invitations. Add every option you used during installation. If you didn't enable invitations in the original installation, remove `--serve-arg=--invitations`.
 
+GitHub and Google sign-in used to be the `--github-*` and `--google-*` options. They're now `UpstreamProvider` objects, like other providers, and `manifests` refuses these options. Leave them out; the next step moves them.
+
 ```sh
 NS=zeabur-identity
 NEXT_ZEABUR_IDENTITYCTL=/path/to/new/zeabur-identityctl
@@ -119,10 +121,13 @@ jq '.items |= map(select(.kind != "Secret"))' upgrade-record/manifests.next.json
 
 Read `upgrade-record/crds.next.json` and `upgrade-record/manifests.upgrade.json` before applying them.
 
+`upstream migrate` reads the `--github-*` and `--google-*` options from the running Deployment, creates the providers `github` and `google`, and copies their client secrets into the Secret `zeabur-identity-upstream`. Callback URLs and linked accounts stay the same. Without these options, it does nothing. Run it before you apply the new manifests, which remove the options. Add `--dry-run` to see what it would create.
+
 If a conflict occurs when you apply the manifests, find the cause first. Don't add `--force-conflicts`. Don't delete and recreate a CRD to resolve an error. That deletes every object of that type.
 
 ```sh
 kubectl apply --server-side -f upgrade-record/crds.next.json
+"$NEXT_ZEABUR_IDENTITYCTL" upstream migrate --namespace "$NS"
 kubectl apply --server-side -f upgrade-record/manifests.upgrade.json
 kubectl -n "$NS" rollout status deployment/zeabur-identity --timeout=5m
 kubectl -n "$NS" logs deployment/zeabur-identity --tail=200
