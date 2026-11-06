@@ -1,7 +1,6 @@
 ---
 title: 保留不經過 Zeabur Identity 的入口
 description: 備妥管理員 kubeconfig 與每台控制平面主機的 SSH 或主控台入口，在 Zeabur Identity 或 kube-apiserver 故障時還原叢集存取。
-source: "39f00a7f124a"
 ---
 
 先記下 kube-apiserver 的現有設定，並確認使用用戶端憑證的管理員 kubeconfig 可用。保留這份 kubeconfig，以及每台控制平面主機的 SSH 或主控台入口。Zeabur Identity 或登入頁故障時，你仍能存取叢集。kube-apiserver 無法啟動時，你也能直接在主機上修復設定。
