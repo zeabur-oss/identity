@@ -1,7 +1,6 @@
 ---
 title: 保留不经过 Zeabur Identity 的入口
 description: 准备好管理员 kubeconfig 和控制平面主机的访问方式，在 Zeabur Identity 或 kube-apiserver 故障时恢复集群访问。
-source: "39f00a7f124a"
 ---
 
 先记录 kube-apiserver 的现有配置，并确认使用客户端证书的管理员 kubeconfig 可用。保留这份 kubeconfig，以及每台控制平面主机的 SSH 或控制台入口。Zeabur Identity 或登录页故障时，你仍能访问集群；kube-apiserver 无法启动时，你也能直接在主机上修复配置。
