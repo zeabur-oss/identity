@@ -42,6 +42,10 @@ Replace the example URL with your own issuer. `zeabur-identityctl` reads `ZEABUR
   prints an `OAuthClient` after checking it against the same rules as the CRD schema. A
   confidential client gets a generated 256-bit secret, printed once on stderr; the object holds
   only its hash. See [Registering clients](../../docs/users/clients.mdx).
+- `zeabur-identityctl upstream migrate [--dry-run]`: turns the running Deployment's removed
+  `--github-*` and `--google-*` server options into the `UpstreamProvider` objects `github` and
+  `google`, and copies their client secrets into the Secret `zeabur-identity-upstream`. Run it
+  when upgrading, before applying the new manifests; running it again changes nothing.
 
 Results (JSON, YAML or a link) go to stdout and messages to stderr, so commands compose with
 `kubectl apply -f -`.

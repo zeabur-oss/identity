@@ -64,13 +64,14 @@ metadata:
   name: acme                      # the ID in the redirect URI
   namespace: zeabur-identity
 spec:
+  type: OIDC
   displayName: Acme SSO           # shown as "Continue with Acme SSO"
   issuer: https://keycloak.example.com/realms/acme
   clientId: zeabur-identity
   clientSecretKey: acme           # the key in the Secret zeabur-identity-upstream
 ```
 
-用 `kubectl apply -f` 应用这个文件。几秒内登录页就会出现 **Continue with Acme SSO**，无需重启。`github` 和 `google` 已由内置提供方使用，不能用作名称。
+用 `kubectl apply -f` 应用这个文件。几秒内登录页就会出现 **Continue with Acme SSO**，无需重启。
 
 </Step>
 
@@ -115,7 +116,7 @@ kubectl auth whoami
 
 | 页面或结果 | 下一步 |
 | --- | --- |
-| 登录页没有按钮 | 用 `kubectl -n zeabur-identity get upstreamproviders` 检查 `UpstreamProvider`，并在日志中查找 `configured upstream providers`。名称为 `github` 或 `google` 的提供方会被忽略。 |
+| 登录页没有按钮 | 用 `kubectl -n zeabur-identity get upstreamproviders` 检查 `UpstreamProvider`，并在日志中查找 `configured upstream providers`。 |
 | 选择按钮后显示“The sign-in provider can't be reached” | 无法读取发现文档，或文档中的 `issuer` 与 `spec.issuer` 不同。两者必须完全一致，包括末尾的斜杠。在日志中查找 `provider_discovery_failed`。 |
 | 提供方显示重定向 URI 错误 | 注册的 URI 必须正好是 `<issuer>/upstream/<name>/callback`，`<name>` 是 `UpstreamProvider` 的名称。 |
 | **This account is not linked to any user here** | 通过邀请或账号页面关联这个账号。 |

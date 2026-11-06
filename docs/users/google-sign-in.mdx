@@ -7,7 +7,7 @@ Configure a Google OAuth client, then link Google accounts to Zeabur Identity us
 
 ## Before you begin
 
-- Install Zeabur Identity in the `zeabur-identity` Namespace, and run `zeabur-identityctl` and `kubectl` with a cluster administrator's kubeconfig.
+- Install Zeabur Identity in the `zeabur-identity` Namespace, and run `kubectl` with a cluster administrator's kubeconfig.
 - Have a real public domain ready. Google only accepts redirect URIs on public domains. See [Google's URI validation rules](https://developers.google.com/identity/protocols/oauth2/web-server#uri-validation). The local name `identity.example.test` used in [Install and sign in on k3s](../get-started/quickstart.mdx) won't work.
 - Confirm that your browser can reach Zeabur Identity at that domain and trusts its TLS certificate.
 - Confirm that the Zeabur Identity Pod can make outbound HTTPS connections to `oauth2.googleapis.com` and `www.googleapis.com`.
@@ -48,38 +48,43 @@ Follow Google's [OpenID Connect setup documentation](https://developers.google.c
 
 <Step>
 
-### Store the client secret and enable Google sign-in
+### Store the client secret
 
-Zeabur Identity reads secrets from Kubernetes Secret files mounted at `/etc/zeabur-identity`. Run the following commands to keep the secret out of your shell history and process list:
+Every sign-in provider's client secret is a key in one Secret, `zeabur-identity-upstream`. Zeabur Identity can read this Secret and no other. Run the following commands to keep the secret out of your shell history and process list:
 
 ```sh
 read -rs GOOGLE_SECRET     # paste the client secret, then Enter
-printf %s "$GOOGLE_SECRET" | kubectl -n zeabur-identity create secret generic zeabur-identity-config \
-  --from-file=google-client-secret=/dev/stdin
+printf %s "$GOOGLE_SECRET" | kubectl -n zeabur-identity create secret generic zeabur-identity-upstream \
+  --from-file=google=/dev/stdin
 unset GOOGLE_SECRET
 ```
 
-If `zeabur-identity-config` already exists, for example, because it stores the secret for [Sign in with GitHub](./github-sign-in.mdx), add the `google-client-secret` key to the existing Secret. Use a secret management tool, or run the following command to edit the Secret. Its values use base64 encoding:
+If `zeabur-identity-upstream` already exists, for example, because it stores the secret for [Sign in with GitHub](./github-sign-in.mdx), add the `google` key with a secret management tool, or with `kubectl -n zeabur-identity edit secret zeabur-identity-upstream`. Its values use base64 encoding.
+
+</Step>
+
+<Step>
+
+### Create the Google provider
+
+Replace `clientId` with your client ID:
 
 ```sh
-kubectl -n zeabur-identity edit secret zeabur-identity-config
+kubectl apply -f - <<'EOF'
+apiVersion: identity.zeabur.com/v1alpha1
+kind: UpstreamProvider
+metadata:
+  name: google                # the ID in the redirect URI
+  namespace: zeabur-identity
+spec:
+  type: Google
+  displayName: Google         # shown as "Continue with Google"
+  clientId: 1234567890-example.apps.googleusercontent.com
+  clientSecretKey: google     # the key in the Secret zeabur-identity-upstream
+EOF
 ```
 
-Next, regenerate the Deployment with the Secret and the two Google options. `zeabur-identityctl manifests` doesn't remember previous options. Keep all the settings you used during installation, including the image, Namespace, and other `--serve-arg` options. Keep `--invitations` as well; the next step needs it.
-
-```sh
-GOOGLE_CLIENT_ID=1234567890-example.apps.googleusercontent.com   # replace with your client ID
-ZEABUR_IDENTITY_IMAGE=$(kubectl -n zeabur-identity get deployment zeabur-identity -o jsonpath='{.spec.template.spec.containers[0].image}')
-zeabur-identityctl manifests --image "$ZEABUR_IDENTITY_IMAGE" \
-  --config-secret zeabur-identity-config \
-  --serve-arg=--invitations \
-  --serve-arg=--google-client-id=$GOOGLE_CLIENT_ID \
-  --serve-arg=--google-client-secret-file=/etc/zeabur-identity/google-client-secret \
-  | kubectl apply --server-side -f -
-kubectl -n zeabur-identity rollout status deploy/zeabur-identity
-```
-
-After the rollout finishes, the sign-in page displays **Continue with Google**.
+The sign-in page shows **Continue with Google** within seconds, without a restart. To link new users in the next step, invitations must be on (`--serve-arg=--invitations`, as in [Install and sign in on k3s](../get-started/quickstart.mdx)).
 
 </Step>
 
@@ -126,16 +131,11 @@ To end existing sessions, you also need to sign the user out. To revoke all acce
 
 ### Rotate the client secret
 
-Zeabur Identity reads the client secret only at startup. After updating the Secret, restart Zeabur Identity:
-
-```sh
-kubectl -n zeabur-identity rollout restart deploy/zeabur-identity
-kubectl -n zeabur-identity rollout status deploy/zeabur-identity
-```
+Update the `google` key in `zeabur-identity-upstream`. Zeabur Identity reads the Secret at each sign-in, so no restart is needed.
 
 ### Disable Google sign-in
 
-Regenerate the Deployment without the two `--google-*` options, and keep the other options. If you no longer need the OAuth client, delete it in Google Cloud Console as well.
+Delete the provider with `kubectl -n zeabur-identity delete upstreamprovider google`. If you no longer need the OAuth client, delete it in Google Cloud Console as well.
 
 Disabling Google sign-in doesn't remove linked accounts or end existing sessions. To revoke access, follow the procedure above to remove credentials and sign the user out.
 
@@ -147,5 +147,5 @@ Disabling Google sign-in doesn't remove linked accounts or end existing sessions
 | `org_internal` or a Google access policy error | Check the application's **Audience** and the policies of the account's organization. See [Google's audience rules](https://support.google.com/cloud/answer/15549945). |
 | **This account is not linked to any user here** | Use an invitation to link the selected Google account to a user. Zeabur Identity doesn't match accounts by email address or name. |
 | **Use a passkey for this account** | The Google account maps to an admin account. Admins can only sign in with passkeys. |
-| No Google button on the sign-in page, or the Pod can't read the secret | Check the two `--google-*` options, `--config-secret zeabur-identity-config`, the `google-client-secret` key in the Secret, and the file path. If you customized the Pod's security context, keep the generated `fsGroup`. |
-| Sign-in fails after returning from Google | Run `kubectl -n zeabur-identity logs deploy/zeabur-identity` to view the logs, and check whether the Pod can reach the token and signing key hosts over HTTPS: `oauth2.googleapis.com` and `www.googleapis.com`. |
+| No Google button on the sign-in page | Run `kubectl -n zeabur-identity get upstreamproviders` and check that the `google` provider exists. |
+| Sign-in fails after returning from Google | Run `kubectl -n zeabur-identity logs deploy/zeabur-identity`. `client secret unavailable` means the Secret `zeabur-identity-upstream` or its `google` key is missing. Otherwise, check whether the Pod can reach the token and signing key hosts over HTTPS: `oauth2.googleapis.com` and `www.googleapis.com`. |
