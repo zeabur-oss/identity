@@ -34,15 +34,21 @@ mod tests {
     }
 
     async fn app_with(kinds: &[Kind]) -> Router {
-        let mut builtin = Vec::new();
+        let mut providers = Vec::new();
         for kind in kinds {
-            builtin.push(match kind {
-                Kind::GitHub => Provider::github("id".into(), "secret".into(), Endpoints::github()),
-                Kind::Google => Provider::google("id".into(), "secret".into(), Endpoints::google()),
-                Kind::Oidc => unreachable!("configured providers are added with set_configured"),
+            providers.push(match kind {
+                Kind::GitHub => {
+                    Provider::github("id".into(), "secret".to_owned(), Endpoints::github())
+                }
+                Kind::Google => {
+                    Provider::google("id".into(), "secret".to_owned(), Endpoints::google())
+                }
+                Kind::Oidc => {
+                    unreachable!("OpenID Connect providers are added with set_configured")
+                }
             });
         }
-        app_with_providers(Arc::new(Providers::new(builtin))).await
+        app_with_providers(Arc::new(Providers::new(providers))).await
     }
 
     async fn app_with_providers(providers: Arc<Providers>) -> Router {
@@ -601,7 +607,7 @@ mod tests {
     }
 
     /// A provider configured while the server runs appears on the next page, and goes when its
-    /// object is deleted; one using a built-in provider's ID never appears.
+    /// object is deleted. GitHub and Google are objects too, under any name.
     #[tokio::test]
     async fn configured_providers_change_without_a_restart() {
         let providers = Arc::new(Providers::default());
@@ -622,11 +628,14 @@ mod tests {
                 ClientSecret::Fixed("secret".into()),
             ))
         };
-        providers.set_configured(vec![oidc("acme", "Acme SSO"), oidc("github", "Not GitHub")]);
+        let github = Provider::github("id".into(), "secret".to_owned(), Endpoints::github())
+            .named("work-github".into(), "GitHub (work)".into());
+        providers.set_configured(vec![oidc("acme", "Acme SSO"), Arc::new(github)]);
         let page = get(&app, "/setup", &[]).await;
         assert!(page.body.contains(r#"data-provider="acme""#));
         assert!(page.body.contains("Continue with Acme SSO"));
-        assert!(!page.body.contains("Not GitHub"));
+        assert!(page.body.contains(r#"data-provider="work-github""#));
+        assert!(page.body.contains("Continue with GitHub (work)"));
 
         providers.set_configured(Vec::new());
         assert!(

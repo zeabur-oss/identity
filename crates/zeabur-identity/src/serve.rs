@@ -24,7 +24,7 @@ use zeabur_identity_core::clock::SystemClock;
 use zeabur_identity_core::crypto::Sealer;
 use zeabur_identity_k8s::crd::grant::Grant;
 use zeabur_identity_k8s::crd::invitation::Invitation;
-use zeabur_identity_k8s::crd::upstream::UpstreamProvider;
+use zeabur_identity_k8s::crd::upstream::{ProviderType, UpstreamProvider};
 use zeabur_identity_k8s::credentials::KubeCredentialStore;
 use zeabur_identity_k8s::directory::KubeDirectory;
 use zeabur_identity_k8s::gc;
@@ -38,9 +38,7 @@ use zeabur_identity_oauth::metadata::{AppState, router};
 use zeabur_identity_oauth::{AuthorizationServer, OneTimeIds, endpoints};
 use zeabur_identity_signin::passkeys::Passkeys;
 use zeabur_identity_signin::upstream::http::HyperClient;
-use zeabur_identity_signin::upstream::provider::{
-    ClientSecret, Endpoints, Kind, Provider, Providers,
-};
+use zeabur_identity_signin::upstream::provider::{ClientSecret, Endpoints, Provider, Providers};
 use zeabur_identity_signin::upstream::{self, Upstream};
 use zeabur_identity_signin::{SignIn, pages};
 use zeabur_identity_store::{CredentialStore, Directory, GrantStore, SetupStore};
@@ -129,7 +127,7 @@ pub async fn serve(config: ServeConfig) -> Result<(), ServeError> {
             }
         }));
     }
-    let providers = Arc::new(Providers::new(upstream_providers(&config)?));
+    let providers = Arc::new(Providers::default());
     background.push(tokio::spawn(watch_providers(
         Api::namespaced(client.clone(), &namespace),
         Api::namespaced(client.clone(), &namespace),
@@ -152,7 +150,7 @@ pub async fn serve(config: ServeConfig) -> Result<(), ServeError> {
     .await
 }
 
-/// Keeps the configured OpenID Connect providers in `providers` current until shutdown. A
+/// Keeps the providers in `providers` current until shutdown. A
 /// provider whose object did not change is kept, with its cached discovery document and keys.
 async fn watch_providers(
     objects: Api<UpstreamProvider>,
@@ -195,42 +193,24 @@ fn configured_provider(object: &UpstreamProvider, secrets: &Api<Secret>) -> Prov
         let (secrets, key) = (secrets.clone(), key.clone());
         Box::pin(async move { zeabur_identity_k8s::upstream::client_secret(&secrets, &key).await })
     }));
-    Provider::oidc(
-        object.metadata.name.clone().unwrap_or_default(),
-        spec.display_name.clone(),
-        spec.issuer.clone(),
-        spec.client_id.clone(),
-        fetch,
-    )
-}
-
-/// The built-in upstream providers, with their client secrets read from files.
-fn upstream_providers(config: &ServeConfig) -> Result<Vec<Provider>, ServeError> {
-    config
-        .upstream
-        .iter()
-        .map(|upstream| {
-            let secret = std::fs::read_to_string(&upstream.client_secret_file)
-                .map_err(|error| {
-                    ServeError::Config(format!(
-                        "{}: {error}",
-                        upstream.client_secret_file.display()
-                    ))
-                })?
-                .trim()
-                .to_owned();
-            let client_id = upstream.client_id.clone();
-            Ok(match upstream.kind {
-                Kind::GitHub => Provider::github(client_id, secret, Endpoints::github()),
-                Kind::Google => Provider::google(client_id, secret, Endpoints::google()),
-                Kind::Oidc => {
-                    return Err(ServeError::Config(
-                        "OpenID Connect providers are UpstreamProvider objects".to_owned(),
-                    ));
-                }
-            })
-        })
-        .collect()
+    let id = object.metadata.name.clone().unwrap_or_default();
+    let label = spec.display_name.clone();
+    let client_id = spec.client_id.clone();
+    match spec.kind {
+        ProviderType::GitHub => {
+            Provider::github(client_id, fetch, Endpoints::github()).named(id, label)
+        }
+        ProviderType::Google => {
+            Provider::google(client_id, fetch, Endpoints::google()).named(id, label)
+        }
+        ProviderType::Oidc => Provider::oidc(
+            id,
+            label,
+            spec.issuer.clone().unwrap_or_default(),
+            client_id,
+            fetch,
+        ),
+    }
 }
 
 /// Maps load shedding to an immediate retryable response; unexpected errors retain diagnostics.

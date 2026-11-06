@@ -56,6 +56,33 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: ClientCommand,
     },
+    /// Manage the providers people sign in with.
+    Upstream {
+        /// The upstream command to run.
+        #[command(subcommand)]
+        command: UpstreamCommand,
+    },
+}
+
+/// `zeabur-identityctl upstream` subcommands.
+#[derive(Debug, Subcommand)]
+pub(crate) enum UpstreamCommand {
+    /// Turn the Deployment's removed `--github-*` and `--google-*` options into `UpstreamProvider`
+    /// objects `github` and `google`, and copy their client secrets into the Secret
+    /// `zeabur-identity-upstream`. Linked accounts and the callback URLs registered at GitHub and
+    /// Google keep working. Uses your own kubeconfig; running it again changes nothing.
+    Migrate(UpstreamMigrateArgs),
+}
+
+/// Arguments of `zeabur-identityctl upstream migrate`.
+#[derive(Debug, Args)]
+pub(crate) struct UpstreamMigrateArgs {
+    /// Print the objects it would create, without creating them.
+    #[arg(long)]
+    pub dry_run: bool,
+    /// Namespace Zeabur Identity runs in.
+    #[arg(long, env = "ZEABUR_IDENTITY_NAMESPACE", default_value = zeabur_identity_k8s::rbac::DEFAULT_NAMESPACE)]
+    pub namespace: String,
 }
 
 /// `zeabur-identityctl client` subcommands.
