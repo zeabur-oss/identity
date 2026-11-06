@@ -1,0 +1,122 @@
+---
+title: 让用户用组织的身份提供方登录
+description: 添加 Keycloak、Microsoft Entra ID 或 Okta 等 OpenID Connect 提供方并关联用户账号，让普通账号用它登录 Zeabur Identity。
+---
+
+添加组织使用的 OpenID Connect 提供方，再将提供方的账号关联到 Zeabur Identity 用户，用户就能在登录页选择 **Continue with** 加提供方名称的按钮。Keycloak、Authentik、Microsoft Entra ID、Okta 以及其他会公开 OpenID Connect 发现文档的提供方都适用。不支持 SAML。
+
+管理员账号只能用通行密钥登录，不能关联提供方的账号。
+
+## 开始前
+
+- 将 Zeabur Identity 安装在 `zeabur-identity` Namespace，并使用集群管理员的 kubeconfig 执行 `kubectl`。
+- 确认 Zeabur Identity 的 Pod 能通过 HTTPS 连接提供方，且提供方的证书由公共证书颁发机构签发。
+- 找到提供方的 issuer URL，即 `<issuer>/.well-known/openid-configuration` 中的 `issuer` 值。例如 Keycloak realm 的 issuer 是 `https://keycloak.example.com/realms/<realm>`。
+- 提供方必须用 `RS256` 或 `ES256` 签名 ID token。大多数提供方默认使用 `RS256`。
+
+以下示例以 `https://identity.example.com` 作为 Zeabur Identity 的 Issuer，以 `acme` 作为提供方的 ID。
+
+账号必须先关联到 Zeabur Identity 用户，才能登录。Zeabur Identity 不会在首次登录时创建用户，也不会根据电子邮件地址或名称匹配账号。用户的组和显示名称取自 `User`，不取自提供方。
+
+## 添加提供方
+
+<Steps>
+
+<Step>
+
+### 在提供方注册 Zeabur Identity
+
+创建一个机密客户端（在 Keycloak 中打开 **Client authentication**；在 Entra ID 中注册 Web 应用），配置如下：
+
+- 重定向 URI：`https://identity.example.com/upstream/acme/callback`。将域名替换成你的 Issuer，将 `acme` 替换成你选定的 ID；下一步使用同一个 ID。
+- 授权类型：授权码（authorization code）。Zeabur Identity 会以 `S256` 发送 PKCE challenge。
+- 范围：`openid`。Zeabur Identity 只使用账号的 `sub`，不需要其他范围。
+
+记下客户端 ID 和客户端密钥。
+
+</Step>
+
+<Step>
+
+### 保存客户端密钥
+
+所有提供方的客户端密钥都保存在同一个 Secret `zeabur-identity-upstream` 中，每个提供方一个键。Zeabur Identity 只能读取这个 Secret，读不到其他 Secret。执行以下命令，避免密钥出现在 shell 历史记录和进程列表中：
+
+```sh
+read -rs ACME_SECRET     # paste the client secret, then Enter
+printf %s "$ACME_SECRET" | kubectl -n zeabur-identity create secret generic zeabur-identity-upstream \
+  --from-file=acme=/dev/stdin
+unset ACME_SECRET
+```
+
+如果 Secret 已存在，用密钥管理工具添加新的键，或执行 `kubectl -n zeabur-identity edit secret zeabur-identity-upstream`。Secret 中的值使用 base64 编码。
+
+</Step>
+
+<Step>
+
+### 创建 UpstreamProvider
+
+```yaml
+apiVersion: identity.zeabur.com/v1alpha1
+kind: UpstreamProvider
+metadata:
+  name: acme                      # the ID in the redirect URI
+  namespace: zeabur-identity
+spec:
+  displayName: Acme SSO           # shown as "Continue with Acme SSO"
+  issuer: https://keycloak.example.com/realms/acme
+  clientId: zeabur-identity
+  clientSecretKey: acme           # the key in the Secret zeabur-identity-upstream
+```
+
+用 `kubectl apply -f` 应用这个文件。几秒内登录页就会出现 **Continue with Acme SSO**，无需重启。`github` 和 `google` 已由内置提供方使用，不能用作名称。
+
+</Step>
+
+<Step>
+
+### 关联账号
+
+根据用户当前的状态选择关联方式：
+
+- 已能登录的普通账号：打开账号页面，用通行密钥验证身份，再选择该提供方。账号页面的操作见[管理用户](./manage-users.mdx)。
+- 新用户：按[管理用户](./manage-users.mdx)的流程发送邀请。用户打开设置链接后选择该提供方。
+- 尚无法登录的现有用户：用相同的用户名再次发送邀请。如果用户已有通行密钥或已关联账号，需要加上 `--reset`。详见[退出用户登录、找回账号与移除用户](./offboarding.mdx)。
+
+<Callout type="warn">
+
+拿到设置链接的人就能控制该 Zeabur Identity 用户，务必将链接交给正确的人。提供方的同一个账号同一时间只能关联一个用户。
+
+</Callout>
+
+</Step>
+
+</Steps>
+
+## 确认结果
+
+先退出登录，再从 `kubectl` 等应用打开登录页，选择 **Continue with Acme SSO**，用已关联的普通账号登录。如果你使用[在 k3s 上安装并登录](../get-started/quickstart.mdx)的 `kubectl` 配置，先清除缓存的会话：
+
+```sh
+rm -rf ~/.kube/cache/oidc-login
+kubectl auth whoami
+```
+
+## 修改或移除提供方
+
+- **轮换客户端密钥。**更新 `zeabur-identity-upstream` 中对应的键。Zeabur Identity 每次登录时都会读取该 Secret，无需重启。
+- **修改提供方。**编辑 `UpstreamProvider`。issuer 变了就是另一个提供方：关联在旧 issuer 下的账号无法再登录，用户需要重新关联。
+- **移除提供方。**删除 `UpstreamProvider`。登录按钮会消失，但已关联的账号和现有会话仍然存在。账号页面会改用提供方的 issuer 列出这些账号，用户仍可自行移除。要撤销访问权限，按[退出用户登录、找回账号与移除用户](./offboarding.mdx)移除凭据并退出用户登录。
+
+有人离开组织时，在提供方那边停用账号可以阻止新的登录，但刷新会话的 token 时，Zeabur Identity 不会再向提供方确认。会话闲置 1 小时或登录满 12 小时后结束。要立即结束，按[退出用户登录、找回账号与移除用户](./offboarding.mdx)退出该用户的登录。
+
+## 故障排查
+
+| 页面或结果 | 下一步 |
+| --- | --- |
+| 登录页没有按钮 | 用 `kubectl -n zeabur-identity get upstreamproviders` 检查 `UpstreamProvider`，并在日志中查找 `configured upstream providers`。名称为 `github` 或 `google` 的提供方会被忽略。 |
+| 选择按钮后显示“The sign-in provider can't be reached” | 无法读取发现文档，或文档中的 `issuer` 与 `spec.issuer` 不同。两者必须完全一致，包括末尾的斜杠。在日志中查找 `provider_discovery_failed`。 |
+| 提供方显示重定向 URI 错误 | 注册的 URI 必须正好是 `<issuer>/upstream/<name>/callback`，`<name>` 是 `UpstreamProvider` 的名称。 |
+| **This account is not linked to any user here** | 通过邀请或账号页面关联这个账号。 |
+| 从提供方返回后登录失败 | 执行 `kubectl -n zeabur-identity logs deploy/zeabur-identity`。`client secret unavailable` 表示 Secret 或其中的键不存在；`the provider's ID token is not valid` 会指出哪一项检查失败。签名失败可能是提供方使用了 `RS256` 或 `ES256` 以外的算法。 |

@@ -397,6 +397,11 @@ impl CredentialStore for KubeCredentialStore {
                 .map(|object| LinkedSummary {
                     name: object.name_any(),
                     kind: object.spec.kind,
+                    issuer: object
+                        .spec
+                        .external
+                        .as_ref()
+                        .map_or_else(String::new, |external| external.issuer.clone()),
                     created_at: object
                         .metadata
                         .creation_timestamp

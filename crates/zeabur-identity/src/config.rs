@@ -16,10 +16,10 @@ pub struct Store {
     pub key_secret: String,
 }
 
-/// An upstream identity provider's client registration.
+/// A built-in upstream identity provider's client registration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpstreamConfig {
-    /// Which provider.
+    /// GitHub or Google.
     pub kind: zeabur_identity_signin::upstream::provider::Kind,
     /// OAuth client ID.
     pub client_id: String,
@@ -40,7 +40,7 @@ pub struct ServeConfig {
     pub metadata_max_age: Duration,
     /// Whether invitations are accepted.
     pub invitations: bool,
-    /// Enabled upstream identity providers.
+    /// Enabled built-in upstream identity providers.
     pub upstream: Vec<UpstreamConfig>,
     /// Where the internal TLS listener binds (Kubernetes store only).
     pub internal_listen: SocketAddr,

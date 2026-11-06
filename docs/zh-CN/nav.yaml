@@ -11,6 +11,7 @@
     offboarding: 退出登录、找回账号与移除用户
     github-sign-in: 用 GitHub 登录
     google-sign-in: 用 Google 登录
+    oidc-sign-in: 用组织的身份提供方登录
     provisioning: 从目录同步用户
     clients: 注册客户端
 - group: operations

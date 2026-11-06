@@ -11,6 +11,7 @@
     offboarding: 登出、救援與移除使用者
     github-sign-in: 用 GitHub 登入
     google-sign-in: 用 Google 登入
+    oidc-sign-in: 用組織的身分提供者登入
     provisioning: 從目錄同步使用者
     clients: 註冊用戶端
 - group: operations

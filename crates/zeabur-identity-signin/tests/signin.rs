@@ -175,7 +175,7 @@ mod tests {
             credentials: MemoryCredentialStore::default(),
             setup,
             used_ceremonies: OneTimeIds::default(),
-            providers: Vec::new(),
+            providers: Arc::default(),
         });
         let app =
             endpoints::router(oauth).merge(zeabur_identity_signin::router(Arc::clone(&service)));
