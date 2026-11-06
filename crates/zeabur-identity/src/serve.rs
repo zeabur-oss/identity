@@ -219,10 +219,10 @@ fn upstream_providers(config: &ServeConfig) -> Result<Vec<Provider>, ServeError>
                 })?
                 .trim()
                 .to_owned();
-            let id = upstream.client_id.clone();
+            let client_id = upstream.client_id.clone();
             Ok(match upstream.kind {
-                Kind::GitHub => Provider::github(id, secret, Endpoints::github()),
-                Kind::Google => Provider::google(id, secret, Endpoints::google()),
+                Kind::GitHub => Provider::github(client_id, secret, Endpoints::github()),
+                Kind::Google => Provider::google(client_id, secret, Endpoints::google()),
                 Kind::Oidc => {
                     return Err(ServeError::Config(
                         "OpenID Connect providers are UpstreamProvider objects".to_owned(),
