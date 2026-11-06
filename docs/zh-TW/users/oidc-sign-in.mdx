@@ -123,7 +123,7 @@ spec:
 - 選用只有管理員能修改的宣告。能設定 `preferred_username` 的人就能決定使用者名稱，也就取得了已綁定到這個名稱的角色。
 - 要阻止某人登入，請停用對方的 `User`，或在提供者端把對方移出群組。只刪除 `User` 不夠，對方下次登入時會再建立一次。
 
-如果使用 Google Workspace，把 Google 新增為 `UpstreamProvider`：issuer 填 `https://accounts.google.com`，名稱不能用 `google`，`claim` 設為 `hd`，`values` 填你的網域。
+Google 提供者也能建立使用者，請參閱[讓使用者用 Google 登入](./google-sign-in.mdx)。GitHub 不會發 ID token，所以 GitHub 提供者不能建立使用者。
 
 ## 修改或移除提供者
 

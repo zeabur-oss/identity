@@ -123,7 +123,7 @@ spec:
 - Use claims that only your administrators can change. Whoever controls `preferred_username` chooses the username, and with it any role already bound to that name.
 - To stop someone, disable their `User` or remove them from the group at the provider. Deleting the `User` isn't enough: their next sign-in creates it again.
 
-For Google Workspace, add Google as an `UpstreamProvider` with the issuer `https://accounts.google.com` and a name other than `google`, set `claim` to `hd`, and list your domain in `values`.
+Google providers can create users too; see [Let users sign in with Google](./google-sign-in.mdx). GitHub sends no ID token, so a GitHub provider can't.
 
 ## Change or remove the provider
 

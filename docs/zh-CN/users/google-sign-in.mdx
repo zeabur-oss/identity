@@ -21,7 +21,7 @@ export ZEABUR_IDENTITY_ISSUER=https://identity.example.com
 
 Issuer 在安装时就已固定。Zeabur Identity 的 Deployment、TLS 证书和 kube-apiserver 配置必须使用相同名称。安装后修改 shell 里的 `ZEABUR_IDENTITY_ISSUER` 不会更改现有安装的 Issuer。
 
-Google 账号必须先关联到 Zeabur Identity 用户，才能登录。Zeabur Identity 不会在首次登录时创建用户，也不会根据电子邮件地址、姓名或 Workspace 域名匹配账号。用户的组和显示名称都取自 `User`。
+Google 账号必须先关联到 Zeabur Identity 用户，才能登录；也可以按下文说明，让 Zeabur Identity 为你的 Workspace 域名创建用户。Zeabur Identity 不会根据电子邮件地址或姓名匹配账号。用户的组和显示名称都取自 `User`。
 
 ## 配置 Google 登录
 
@@ -34,7 +34,7 @@ Google 账号必须先关联到 Zeabur Identity 用户，才能登录。Zeabur I
 按照 Google 的 [OpenID Connect 配置文档](https://developers.google.com/identity/openid-connect/openid-connect)和[同意屏幕配置指南](https://developers.google.com/workspace/guides/configure-oauth-consent)，在 Google Cloud Console 完成以下配置：
 
 1. 选择或创建项目。在 **Google Auth platform → Branding** 配置应用名称、支持电子邮件地址和联系信息。
-2. 在 **Audience** 选择 **Internal**，仅允许你的 Google Workspace 组织使用；或选择 **External**，允许任何 Google 账号使用。两种配置都要求用户先关联 Zeabur Identity 账号。[Google 的发布规则](https://support.google.com/cloud/answer/15549945)会限制测试模式中的应用，但只请求 `openid` 的应用不受此限制，Zeabur Identity 就属于这种情况。
+2. 在 **Audience** 选择 **Internal**，仅允许你的 Google Workspace 组织使用；或选择 **External**，允许任何 Google 账号使用。[Google 的发布规则](https://support.google.com/cloud/answer/15549945)会限制测试模式中的应用，但只请求 `openid` 的应用不受此限制，Zeabur Identity 就属于这种情况。
 3. 在 **Data Access** 只声明 `openid` 范围，不需要 Google API 数据访问权限。
 4. 在 **Clients → Create Client** 选择 **Web application**，配置名称，并在 **Authorized redirect URI** 添加以下 URI。将域名替换成你的 Issuer：
 
@@ -139,6 +139,20 @@ kubectl auth whoami          # choose "Continue with Google"
 执行 `kubectl -n zeabur-identity delete upstreamprovider google` 删除提供方。如果不再需要该 OAuth 客户端，也在 Google Cloud Console 删除这个客户端。
 
 关闭 Google 登录不会移除已关联的账号，也不会结束现有会话。需要撤销访问权限时，按上方流程移除凭据并让用户退出登录。
+
+## 为 Workspace 域名创建用户
+
+不想逐个关联账号的话，可以让 Zeabur Identity 在你的 Google Workspace 域名成员首次登录时，自动创建普通账号的 `User`。在 `google` 提供方中添加 `provisioning`，`values` 填你的域名：
+
+```yaml
+spec:
+  # type, displayName, clientId and clientSecretKey as above
+  provisioning:
+    claim: hd                     # the account's Workspace domain
+    values: [example.com]
+```
+
+此时 Zeabur Identity 会向 Google 请求 `openid profile email`，所以也要在 **Data Access** 中声明 `email` 和 `profile`。用户名取电子邮件地址 `@` 之前的部分。创建用户的规则与其他提供方相同，启用前请先阅读[让用户用组织的身份提供方登录](./oidc-sign-in.mdx)中的“首次登录时创建用户”。
 
 ## 遇到问题
 
