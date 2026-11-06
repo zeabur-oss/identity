@@ -1,6 +1,6 @@
 //! Custom resources in the `identity.zeabur.com` API group.
 //!
-//! Zeabur Identity's long-term state lives in five namespaced kinds; private key material lives in
+//! Zeabur Identity's long-term state lives in six namespaced kinds; private key material lives in
 //! Secrets ([`crate::keys`], [`crate::setup`], [`crate::internal_tls`]). Short-lived state
 //! (pre-login flows, WebAuthn challenges, authorization codes) never reaches the API server.
 //! Each kind exists because a native object cannot do its job:
@@ -20,6 +20,9 @@
 //!   keys. A grant holds only hashes; `kubectl get grants` shows who is signed in.
 //! - [`invitation::Invitation`]: written by an admin, redeemed by Zeabur Identity. As Secrets,
 //!   pending invitations could only be found with `list` on Secrets.
+//! - [`upstream::UpstreamProvider`]: configuration written in GitOps repositories, checked at
+//!   `kubectl apply` (an `https` issuer) and watched, so a new provider needs no restart. Client
+//!   secrets stay in one Secret ([`upstream::SECRET`]).
 //!
 //! Format rules (lengths, patterns, list sizes) are `OpenAPI` `maxLength`, `pattern` and
 //! `maxItems`, which cost nothing against the CEL cost budget; CEL rules
@@ -49,6 +52,7 @@ pub mod client;
 pub mod credential;
 pub mod grant;
 pub mod invitation;
+pub mod upstream;
 pub mod user;
 
 use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
@@ -79,6 +83,7 @@ pub fn definitions() -> Vec<CustomResourceDefinition> {
         client::OAuthClient::crd(),
         grant::Grant::crd(),
         invitation::Invitation::crd(),
+        upstream::UpstreamProvider::crd(),
     ]
 }
 
@@ -102,7 +107,7 @@ mod tests {
     use super::*;
 
     /// The committed manifest must match the code. Regenerate with
-    /// `cargo run -q -- crds > deploy/crds.json`.
+    /// `cargo run -q --bin zeabur-identityctl -- crds > deploy/crds.json`.
     #[test]
     fn committed_manifest_is_current() {
         let committed = include_str!("../../../deploy/crds.json");
@@ -112,7 +117,7 @@ mod tests {
         let parse = |s: &str| serde_json::from_str::<serde_json::Value>(s).unwrap();
         assert!(
             committed.ends_with('\n') && parse(committed) == parse(&definitions_json().unwrap()),
-            "deploy/crds.json is stale: run `cargo run -q -- crds > deploy/crds.json`"
+            "deploy/crds.json is stale: run `cargo run -q --bin zeabur-identityctl -- crds > deploy/crds.json`"
         );
     }
 }

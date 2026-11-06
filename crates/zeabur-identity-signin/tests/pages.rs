@@ -20,7 +20,9 @@ mod tests {
     use zeabur_identity_oauth::endpoints::{self, FLOW_COOKIE};
     use zeabur_identity_oauth::{AuthorizationServer, Lifetimes, OneTimeIds};
     use zeabur_identity_signin::pages;
-    use zeabur_identity_signin::upstream::provider::Kind;
+    use zeabur_identity_signin::upstream::provider::{
+        ClientSecret, Endpoints, Kind, Provider, Providers,
+    };
     use zeabur_identity_store::{Client, ClientType, MemoryDirectory, MemoryGrantStore};
     use zeabur_identity_ui::CSP;
 
@@ -31,7 +33,19 @@ mod tests {
         app_with(&[]).await
     }
 
-    async fn app_with(providers: &[Kind]) -> Router {
+    async fn app_with(kinds: &[Kind]) -> Router {
+        let mut builtin = Vec::new();
+        for kind in kinds {
+            builtin.push(match kind {
+                Kind::GitHub => Provider::github("id".into(), "secret".into(), Endpoints::github()),
+                Kind::Google => Provider::google("id".into(), "secret".into(), Endpoints::google()),
+                Kind::Oidc => unreachable!("configured providers are added with set_configured"),
+            });
+        }
+        app_with_providers(Arc::new(Providers::new(builtin))).await
+    }
+
+    async fn app_with_providers(providers: Arc<Providers>) -> Router {
         let manager = KeyManager::new(
             MemoryKeyStore::default(),
             SystemClock,
@@ -584,5 +598,42 @@ mod tests {
             .to_owned();
         let page = get(&app, "/login", &[("cookie", &cookie)]).await;
         assert!(page.body.contains("data-provider"));
+    }
+
+    /// A provider configured while the server runs appears on the next page, and goes when its
+    /// object is deleted; one using a built-in provider's ID never appears.
+    #[tokio::test]
+    async fn configured_providers_change_without_a_restart() {
+        let providers = Arc::new(Providers::default());
+        let app = app_with_providers(Arc::clone(&providers)).await;
+        assert!(
+            !get(&app, "/setup", &[])
+                .await
+                .body
+                .contains("data-provider")
+        );
+
+        let oidc = |id: &str, label: &str| {
+            Arc::new(Provider::oidc(
+                id.into(),
+                label.into(),
+                "https://idp.example.com".into(),
+                "client".into(),
+                ClientSecret::Fixed("secret".into()),
+            ))
+        };
+        providers.set_configured(vec![oidc("acme", "Acme SSO"), oidc("github", "Not GitHub")]);
+        let page = get(&app, "/setup", &[]).await;
+        assert!(page.body.contains(r#"data-provider="acme""#));
+        assert!(page.body.contains("Continue with Acme SSO"));
+        assert!(!page.body.contains("Not GitHub"));
+
+        providers.set_configured(Vec::new());
+        assert!(
+            !get(&app, "/setup", &[])
+                .await
+                .body
+                .contains("data-provider")
+        );
     }
 }

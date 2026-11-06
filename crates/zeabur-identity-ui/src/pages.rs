@@ -13,11 +13,11 @@ use super::i18n::{ErrorText, Lang, Messages};
 
 /// A "Continue with …" button for an upstream identity provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ProviderButton {
+pub struct ProviderButton<'a> {
     /// Path segment of the provider's routes, for example `github`.
-    pub id: &'static str,
+    pub id: &'a str,
     /// Name shown on the button.
-    pub label: &'static str,
+    pub label: &'a str,
     /// Icon name (see `templates/icons.html`).
     pub icon: &'static str,
 }
@@ -137,7 +137,7 @@ struct LoginPage<'a> {
     expires_in: Option<u64>,
     subtitle: String,
     login_hint: Option<&'a str>,
-    providers: &'a [ProviderButton],
+    providers: &'a [ProviderButton<'a>],
     apps: &'a [AppLink<'a>],
     reset_command: &'static str,
 }
@@ -150,7 +150,7 @@ struct SetupPage<'a> {
     m: &'static Messages,
     assets: &'a Versions,
     client: Option<&'a str>,
-    providers: &'a [ProviderButton],
+    providers: &'a [ProviderButton<'a>],
     apps: &'a [AppLink<'a>],
     setup_link_command: &'static str,
     invite_command: &'static str,
@@ -258,7 +258,7 @@ pub fn login_page(
     lang: Lang,
     request: Option<(&str, Duration)>,
     login_hint: Option<&str>,
-    providers: &[ProviderButton],
+    providers: &[ProviderButton<'_>],
     apps: &[AppLink<'_>],
 ) -> Response {
     let m = lang.messages();
@@ -292,7 +292,7 @@ pub fn login_page(
 pub fn setup_page(
     lang: Lang,
     client: Option<&str>,
-    providers: &[ProviderButton],
+    providers: &[ProviderButton<'_>],
     apps: &[AppLink<'_>],
 ) -> Response {
     let page = SetupPage {
@@ -343,7 +343,7 @@ pub struct LinkedRow<'a> {
     /// `Credential` object name.
     pub name: &'a str,
     /// The provider's name and icon.
-    pub provider: ProviderButton,
+    pub provider: ProviderButton<'a>,
     /// When it was linked, in Unix seconds.
     pub linked: Option<u64>,
 }
@@ -375,7 +375,7 @@ pub struct AccountView<'a> {
     /// The user's linked upstream accounts.
     pub linked: &'a [LinkedRow<'a>],
     /// The upstream providers the user may link.
-    pub providers: &'a [ProviderButton],
+    pub providers: &'a [ProviderButton<'a>],
     /// An admin account, which cannot link upstream accounts.
     pub admin: bool,
     /// The user's sessions and app grants.
@@ -431,7 +431,7 @@ struct PasskeyItem<'a> {
 
 struct LinkedItem<'a> {
     name: &'a str,
-    provider: ProviderButton,
+    provider: ProviderButton<'a>,
     linked: Option<Date>,
 }
 
@@ -448,7 +448,7 @@ struct AccountItems<'a> {
     csrf: &'a str,
     passkeys: Vec<PasskeyItem<'a>>,
     linked: Vec<LinkedItem<'a>>,
-    providers: &'a [ProviderButton],
+    providers: &'a [ProviderButton<'a>],
     admin: bool,
     sessions: Vec<SessionItem<'a>>,
 }

@@ -20,6 +20,7 @@
 //! Unlinking needs it too. It revokes every session and grant that signed in with the account,
 //! and the user's last credential cannot be unlinked (see `CredentialStore::unlink`).
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Router;
@@ -40,9 +41,9 @@ use zeabur_identity_core::clock::{Clock, UnixTime};
 use zeabur_identity_core::crypto::{CryptoError, ct_eq, hash_secret, hex, random, sha256};
 use zeabur_identity_oauth::Use;
 use zeabur_identity_store::{
-    AccountEvent, Classification, CreateCredential, CreateGrant, CredentialStore, Directory, Grant,
-    GrantStore, LinkedSummary, NewGrant, PasskeySummary, Removal, Rename, SetupStore, Unlink, User,
-    Verification, classify,
+    AccountEvent, Classification, CreateCredential, CreateGrant, CredentialStore, CredentialType,
+    Directory, Grant, GrantStore, LinkedSummary, NewGrant, PasskeySummary, Removal, Rename,
+    SetupStore, Unlink, User, Verification, classify,
 };
 use zeabur_identity_ui::pages::{
     AccountView, ErrorReason, LinkedRow, PasskeyRow, ProviderButton, SessionRow, Storage,
@@ -52,7 +53,7 @@ use zeabur_identity_ui::pages::{
 use crate::device::Requester;
 use crate::passkeys::{authenticator, backup_flags};
 use crate::problem::Problem;
-use crate::upstream::provider::Kind;
+use crate::upstream::provider::{Kind, Provider, Providers};
 use crate::{
     Accepted, BAD_REQUEST, CEREMONY_COOKIE, CEREMONY_EXPIRED, CEREMONY_LIFETIME, Ceremony,
     PASSKEY_AMR, PASSKEY_FAILED, Refused, SignIn, Verified, accepted, check_account, check_request,
@@ -116,7 +117,7 @@ const LAST_CREDENTIAL: Problem = Problem::new(
     "This is your only way to sign in. Add a passkey before unlinking it.",
 );
 
-type Shared<D, G, C, K, S> = std::sync::Arc<SignIn<D, G, C, K, S>>;
+type Shared<D, G, C, K, S> = Arc<SignIn<D, G, C, K, S>>;
 
 /// The account routes and `/.well-known/passkey-endpoints`.
 pub(crate) fn routes<D, G, C, K, S>() -> Router<Shared<D, G, C, K, S>>
@@ -529,17 +530,49 @@ where
     response
 }
 
-fn linked_rows(linked: &[LinkedSummary]) -> Vec<LinkedRow<'_>> {
-    linked
-        .iter()
-        .filter_map(|account| {
-            Some(LinkedRow {
-                name: &account.name,
-                provider: Kind::from_credential_type(account.kind)?.button(),
-                linked: account.created_at.map(UnixTime::as_secs),
-            })
-        })
-        .collect()
+/// The provider of each linked account, if it is still enabled.
+fn linked_providers(providers: &Providers, linked: &[LinkedSummary]) -> Vec<Option<Arc<Provider>>> {
+    let mut found = Vec::with_capacity(linked.len());
+    for account in linked {
+        found.push(providers.for_credential(account.kind, &account.issuer));
+    }
+    found
+}
+
+/// One row per linked account. One whose provider is no longer enabled is still listed, so it
+/// can be removed: by the provider's name, or by its issuer for an OpenID Connect provider.
+fn linked_rows<'a>(
+    linked: &'a [LinkedSummary],
+    providers: &'a [Option<Arc<Provider>>],
+) -> Vec<LinkedRow<'a>> {
+    let mut rows = Vec::with_capacity(linked.len());
+    for (account, provider) in linked.iter().zip(providers) {
+        let button = match (provider, account.kind) {
+            (Some(provider), _) => provider.button(),
+            (None, CredentialType::GitHub) => ProviderButton {
+                id: "github",
+                label: "GitHub",
+                icon: Kind::GitHub.icon(),
+            },
+            (None, CredentialType::Google) => ProviderButton {
+                id: "google",
+                label: "Google",
+                icon: Kind::Google.icon(),
+            },
+            (None, CredentialType::Oidc) => ProviderButton {
+                id: "",
+                label: &account.issuer,
+                icon: Kind::Oidc.icon(),
+            },
+            (None, CredentialType::Passkey) => continue,
+        };
+        rows.push(LinkedRow {
+            name: &account.name,
+            provider: button,
+            linked: account.created_at.map(UnixTime::as_secs),
+        });
+    }
+    rows
 }
 
 async fn page<D, G, C, K, S>(
@@ -627,9 +660,10 @@ where
                     current: grant.spec.name == account.session.spec.name,
                 })
                 .collect();
-            let linked_rows = linked_rows(&linked);
-            let providers: Vec<ProviderButton> =
-                service.providers.iter().map(|kind| kind.button()).collect();
+            let sources = linked_providers(&service.providers, &linked);
+            let linked_rows = linked_rows(&linked, &sources);
+            let enabled = service.providers.all();
+            let providers: Vec<ProviderButton<'_>> = enabled.iter().map(|p| p.button()).collect();
             let csrf = account.token.csrf();
             account_page(
                 lang,

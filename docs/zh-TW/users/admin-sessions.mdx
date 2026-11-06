@@ -16,7 +16,7 @@ source: "55e2a5c129fb"
 
 <Callout type="warn">
 
-每位管理員都應另外建立一個一般帳號，供日常工作使用。只有變更叢集時才使用管理員帳號。管理員帳號無法使用 GitHub 或 Google 登入，也無法連結這兩種帳號。登入頁面會顯示 **Use a passkey for this account**。
+每位管理員都應另外建立一個一般帳號，供日常工作使用。只有變更叢集時才使用管理員帳號。管理員帳號無法使用 GitHub、Google 或 OpenID Connect 提供者登入，也無法連結這些帳號。登入頁面會顯示 **Use a passkey for this account**。
 
 </Callout>
 
@@ -51,7 +51,7 @@ kubectl -n zeabur-identity patch zbuser alice --type merge -p '{"spec":{"account
 kubectl -n zeabur-identity get zbuser            # the Type column shows the account type
 ```
 
-變更會在使用者下次登入或更新權杖時生效。已核發的存取權杖在到期前仍然有效，最長為 5 分鐘或 10 分鐘。帳號改為管理員後，原有的 GitHub 和 Google 工作階段會在下次更新權杖時結束。
+變更會在使用者下次登入或更新權杖時生效。已核發的存取權杖在到期前仍然有效，最長為 5 分鐘或 10 分鐘。帳號改為管理員後，原有的 GitHub、Google 和 OpenID Connect 工作階段會在下次更新權杖時結束。
 
 目錄同步不會變更帳號的管理員身分，詳見[從目錄同步使用者](./provisioning.mdx)。
 
@@ -67,7 +67,7 @@ kubectl -n zeabur-identity get zbuser            # the Type column shows the acc
 | 管理員，單一團隊 | 5 分鐘 | 1 小時 | 登入後 12 小時 |
 | 管理員，多個團隊或啟用 AAL3 | 5 分鐘 | 15 分鐘 | 登入後 12 小時 |
 
-這 12 小時從使用通行密鑰、GitHub 或 Google 登入時起算，更新權杖不會重設這個時限。
+這 12 小時從使用通行密鑰、GitHub、Google 或 OpenID Connect 提供者登入時起算，更新權杖不會重設這個時限。
 
 Zeabur Identity 不保留單一登入工作階段，所以每次授權請求都會顯示登入頁面。權杖回應中的 `refresh_expires_in` 是更新權杖距離閒置逾時還剩的秒數。
 

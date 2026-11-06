@@ -15,7 +15,7 @@ Regular accounts have only the permissions you bind to their groups. They have n
 
 <Callout type="warn">
 
-Each admin should also have a regular account for daily work. Use admin accounts only to make changes to the cluster. Admin accounts can't sign in with GitHub or Google or link either type of account. The sign-in page displays **Use a passkey for this account**.
+Each admin should also have a regular account for daily work. Use admin accounts only to make changes to the cluster. Admin accounts can't sign in with GitHub, Google or an OpenID Connect provider, or link accounts from them. The sign-in page displays **Use a passkey for this account**.
 
 </Callout>
 
@@ -50,7 +50,7 @@ kubectl -n zeabur-identity patch zbuser alice --type merge -p '{"spec":{"account
 kubectl -n zeabur-identity get zbuser            # the Type column shows the account type
 ```
 
-Changes take effect the next time the user signs in or refreshes their token. Previously issued access tokens remain valid until they expire, for up to 5 minutes or 10 minutes. After an account becomes an admin account, its existing GitHub and Google sessions end at the next token refresh.
+Changes take effect the next time the user signs in or refreshes their token. Previously issued access tokens remain valid until they expire, for up to 5 minutes or 10 minutes. After an account becomes an admin account, its existing GitHub, Google and OpenID Connect sessions end at the next token refresh.
 
 Directory sync doesn't change an account's admin status. See [Sync users from a directory](./provisioning.mdx).
 

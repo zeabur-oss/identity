@@ -9,10 +9,10 @@ k3s and RKE2 use the same configuration. CI tests cover k3s.
 
 ## Security properties
 
-- **No passwords.** Passkeys are the primary credentials. They use WebAuthn and require user verification. For regular access, users can also link a GitHub or Google account as an alternative sign-in method.
+- **No passwords.** Passkeys are the primary credentials. They use WebAuthn and require user verification. For regular access, users can also link a GitHub, Google or OpenID Connect account as an alternative sign-in method.
 - **Only admin accounts receive admin privileges.** Only a `User` with `accountType: Admin` receives the `zeabur:admins` group, which is bound to `cluster-admin`. Admin accounts can only sign in with passkeys. Their tokens expire after five minutes by default, and inactivity can end their sessions earlier. If the installation configuration enables AAL3, admin accounts must also use device-bound passkeys. Regular accounts receive only the permissions bound to their groups. All sessions end 12 hours after sign-in.
 - **Tokens are short-lived.** They are bound to an audience, and signing keys rotate regularly.
-- **Users manage their own sign-in methods.** Adding or removing a passkey, or linking or unlinking a GitHub or Google account, requires the user to authenticate again with a passkey. Users can't remove their last passkey or unlink their last sign-in method.
+- **Users manage their own sign-in methods.** Adding or removing a passkey, or linking or unlinking a GitHub, Google or OpenID Connect account, requires the user to authenticate again with a passkey. Users can't remove their last passkey or unlink their last sign-in method.
 - **Kubernetes stores the state.** Custom resources store users, credentials, clients, sessions, and invitations. No database is required. For the order of access revocation and data deletion, see [Sign out, recover access, and remove users](../users/offboarding.mdx).
 
 [Specification conformance](./conformance.mdx) lists the specification requirements Zeabur Identity implements, along with the corresponding code and verification tests.

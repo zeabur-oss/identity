@@ -31,6 +31,9 @@ pub enum CredentialType {
     GitHub,
     /// A Google account.
     Google,
+    /// An account at an OpenID Connect provider configured with an `UpstreamProvider`.
+    #[serde(rename = "OIDC")]
+    Oidc,
 }
 
 /// A storage backend failed or answered ambiguously.
@@ -659,6 +662,8 @@ pub struct LinkedSummary {
     pub name: String,
     /// The provider.
     pub kind: CredentialType,
+    /// The provider's issuer, which tells OpenID Connect providers apart.
+    pub issuer: String,
     /// When it was linked, if the backend records it.
     pub created_at: Option<UnixTime>,
 }
@@ -899,7 +904,7 @@ pub trait SetupStore: Send + Sync + 'static {
 #[derive(Debug, Default)]
 pub struct MemoryCredentialStore {
     passkeys: Mutex<HashMap<String, MemoryPasskey>>,
-    externals: Mutex<HashMap<String, (LinkedAccount, CredentialType)>>,
+    externals: Mutex<HashMap<String, (LinkedAccount, CredentialType, String)>>,
     events: Mutex<Vec<AccountEvent>>,
 }
 
@@ -983,6 +988,7 @@ impl CredentialStore for MemoryCredentialStore {
                         user_subject: Some(external.user_subject.clone()),
                     },
                     external.kind,
+                    external.issuer.clone(),
                 ),
             );
             CreateCredential::Created
@@ -999,7 +1005,7 @@ impl CredentialStore for MemoryCredentialStore {
             .externals
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        future::ready(Ok(externals.get(name).map(|(linked, _)| linked.clone())))
+        future::ready(Ok(externals.get(name).map(|(linked, ..)| linked.clone())))
     }
 
     fn passkeys(
@@ -1078,10 +1084,11 @@ impl CredentialStore for MemoryCredentialStore {
             .unwrap_or_else(PoisonError::into_inner);
         let mut list: Vec<LinkedSummary> = externals
             .iter()
-            .filter(|(_, (linked, _))| linked.signs_in_as(user))
-            .map(|(name, (_, kind))| LinkedSummary {
+            .filter(|(_, (linked, ..))| linked.signs_in_as(user))
+            .map(|(name, (_, kind, issuer))| LinkedSummary {
                 name: name.clone(),
                 kind: *kind,
+                issuer: issuer.clone(),
                 created_at: None,
             })
             .collect();
@@ -1107,9 +1114,12 @@ impl CredentialStore for MemoryCredentialStore {
             .count()
             + externals
                 .iter()
-                .filter(|(other, (linked, _))| other.as_str() != name && owned(linked))
+                .filter(|(other, (linked, ..))| other.as_str() != name && owned(linked))
                 .count();
-        let outcome = if !externals.get(name).is_some_and(|(linked, _)| owned(linked)) {
+        let outcome = if !externals
+            .get(name)
+            .is_some_and(|(linked, ..)| owned(linked))
+        {
             Unlink::NotFound
         } else if others == 0 {
             Unlink::LastCredential

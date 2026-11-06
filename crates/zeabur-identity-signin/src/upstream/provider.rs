@@ -1,19 +1,33 @@
-//! GitHub (OAuth 2.0) and Google (OpenID Connect) as upstream identity providers.
+//! Upstream identity providers: GitHub (OAuth 2.0), Google, and any OpenID Connect provider an
+//! admin configures.
 //!
 //! Each yields one thing: the provider's stable identifier for the account (GitHub's numeric user
-//! ID, Google's `sub`), never a login name or email address, which can change hands.
+//! ID, the `sub` of an OpenID Connect provider), never a login name or email address, which can
+//! change hands. A linked account is keyed by the issuer and that identifier.
 //!
-//! Google's ID token is validated as OpenID Connect Core 1.0 §3.1.3.7 requires of a client:
-//! signature with a key from Google's published JWK set, `iss` one of Google's issuer strings,
-//! `aud` exactly the client ID (no other audience is trusted) and `azp`, if present, equal to it,
-//! not expired, and `nonce` equal to the one sent. Codes are exchanged with PKCE (RFC 7636) for
-//! both providers, and the client authenticates with `client_secret_post` (RFC 6749 §2.3.1).
+//! An ID token is validated as OpenID Connect Core 1.0 §3.1.3.7 requires of a client: signature
+//! with a key from the provider's published JWK set, `iss` the provider's issuer, `aud` exactly
+//! the client ID (no other audience is trusted) and `azp`, if present, equal to it, not expired,
+//! and `nonce` equal to the one sent. Codes are exchanged with PKCE (RFC 7636).
+//!
+//! A configured OpenID Connect provider's endpoints come from its discovery document
+//! ([OpenID Connect Discovery 1.0] §4), whose `issuer` must equal the configured issuer exactly
+//! (§4.3), so a document cannot point sign-in at another issuer's tokens. The client
+//! authenticates with `client_secret_basic`, which every authorization server supports
+//! (RFC 6749 §2.3.1), unless the document lists only `client_secret_post`. GitHub and Google take
+//! `client_secret_post`.
+//!
+//! [OpenID Connect Discovery 1.0]: https://openid.net/specs/openid-connect-discovery-1_0.html
 
-use std::sync::Mutex;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 use axum::body::Bytes;
-use axum::http::{Method, Request, StatusCode, header};
+use axum::http::{HeaderValue, Method, Request, StatusCode, header};
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use serde::Deserialize;
 use thiserror::Error;
 use zeabur_identity_core::clock::UnixTime;
@@ -24,7 +38,9 @@ use zeabur_identity_ui::pages::ProviderButton;
 
 use super::http::{HttpClient, HttpError};
 
-/// How long Google's JWK set is reused before it is fetched again.
+/// How long a discovery document is reused before it is fetched again.
+const DISCOVERY_MAX_AGE: Duration = Duration::from_hours(1);
+/// How long a JWK set is reused before it is fetched again.
 const JWKS_MAX_AGE: Duration = Duration::from_hours(1);
 /// An unknown `kid` refetches the set, but not more often than this.
 const JWKS_MIN_REFRESH: Duration = Duration::from_mins(1);
@@ -38,36 +54,13 @@ pub enum Kind {
     GitHub,
     /// Google.
     Google,
+    /// An OpenID Connect provider configured by an admin.
+    Oidc,
 }
 
 impl Kind {
-    /// The path segment and CLI name.
-    #[must_use]
-    pub const fn id(self) -> &'static str {
-        match self {
-            Self::GitHub => "github",
-            Self::Google => "google",
-        }
-    }
-
-    /// Parses [`Kind::id`].
-    #[must_use]
-    pub fn from_id(id: &str) -> Option<Self> {
-        match id {
-            "github" => Some(Self::GitHub),
-            "google" => Some(Self::Google),
-            _ => None,
-        }
-    }
-
-    /// The name shown on buttons.
-    #[must_use]
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::GitHub => "GitHub",
-            Self::Google => "Google",
-        }
-    }
+    /// The built-in providers' IDs, which a configured provider cannot take.
+    pub const RESERVED: [&'static str; 2] = ["github", "google"];
 
     /// The icon on its button.
     #[must_use]
@@ -75,16 +68,7 @@ impl Kind {
         match self {
             Self::GitHub => "GithubLogo",
             Self::Google => "GoogleLogo",
-        }
-    }
-
-    /// Its button on the sign-in pages.
-    #[must_use]
-    pub const fn button(self) -> ProviderButton {
-        ProviderButton {
-            id: self.id(),
-            label: self.label(),
-            icon: self.icon(),
+            Self::Oidc => "IdentificationBadge",
         }
     }
 
@@ -94,30 +78,22 @@ impl Kind {
         match self {
             Self::GitHub => CredentialType::GitHub,
             Self::Google => CredentialType::Google,
-        }
-    }
-
-    /// The provider of a linked account's `Credential` type. `None` for a passkey.
-    #[must_use]
-    pub const fn from_credential_type(kind: CredentialType) -> Option<Self> {
-        match kind {
-            CredentialType::GitHub => Some(Self::GitHub),
-            CredentialType::Google => Some(Self::Google),
-            CredentialType::Passkey => None,
-        }
-    }
-
-    /// The issuer recorded with a linked account.
-    #[must_use]
-    pub const fn issuer(self) -> &'static str {
-        match self {
-            Self::GitHub => "https://github.com",
-            Self::Google => "https://accounts.google.com",
+            Self::Oidc => CredentialType::Oidc,
         }
     }
 }
 
-/// Where a provider's endpoints are. Fixed for the real providers; tests point them elsewhere.
+/// How the client authenticates at the token endpoint (RFC 6749 §2.3.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TokenAuth {
+    /// `client_secret_basic`: HTTP Basic.
+    Basic,
+    /// `client_secret_post`: in the form body.
+    Post,
+}
+
+/// Where a provider's endpoints are. Fixed for GitHub and Google, discovered for configured
+/// providers; tests point them elsewhere.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Endpoints {
     /// Authorization endpoint.
@@ -128,8 +104,10 @@ pub struct Endpoints {
     pub user: Option<String>,
     /// Google: the JWK set.
     pub jwks: Option<String>,
-    /// Google: accepted `iss` values.
+    /// Accepted `iss` values.
     pub issuers: Vec<String>,
+    /// Client authentication at the token endpoint.
+    pub token_auth: TokenAuth,
 }
 
 impl Endpoints {
@@ -142,6 +120,7 @@ impl Endpoints {
             user: Some("https://api.github.com/user".to_owned()),
             jwks: None,
             issuers: Vec::new(),
+            token_auth: TokenAuth::Post,
         }
     }
 
@@ -158,23 +137,68 @@ impl Endpoints {
                 "https://accounts.google.com".to_owned(),
                 "accounts.google.com".to_owned(),
             ],
+            token_auth: TokenAuth::Post,
         }
     }
 }
 
+/// A future yielding a client secret, or why it could not be read.
+pub type SecretFuture = Pin<Box<dyn Future<Output = Result<String, String>> + Send>>;
+
+/// Where a provider's client secret comes from.
+#[derive(Clone)]
+pub enum ClientSecret {
+    /// Read once at startup.
+    Fixed(String),
+    /// Read at each code exchange, so a rotated secret applies without a restart.
+    Fetch(Arc<dyn Fn() -> SecretFuture + Send + Sync>),
+}
+
+impl std::fmt::Debug for ClientSecret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Fixed(_) => "ClientSecret::Fixed",
+            Self::Fetch(_) => "ClientSecret::Fetch",
+        })
+    }
+}
+
+impl ClientSecret {
+    async fn read(&self) -> Result<String, UpstreamError> {
+        match self {
+            Self::Fixed(secret) => Ok(secret.clone()),
+            Self::Fetch(fetch) => fetch().await.map_err(|error| {
+                tracing::error!(reason = "client_secret_unavailable", %error, "reading the upstream client secret failed");
+                UpstreamError::Protocol("client secret unavailable")
+            }),
+        }
+    }
+}
+
+/// Where a provider's endpoints come from.
+#[derive(Debug)]
+enum Source {
+    Fixed(Endpoints),
+    Discovered(Mutex<Option<(UnixTime, Endpoints)>>),
+}
+
 /// A configured provider.
 pub struct Provider {
+    id: String,
+    label: String,
     kind: Kind,
+    issuer: String,
     client_id: String,
-    client_secret: String,
-    endpoints: Endpoints,
+    client_secret: ClientSecret,
+    endpoints: Source,
     jwks: Mutex<Option<(UnixTime, Vec<VerificationKey>)>>,
 }
 
 impl std::fmt::Debug for Provider {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Provider")
-            .field("kind", &self.kind)
+            .field("id", &self.id)
+            .field("issuer", &self.issuer)
             .field("client_id", &self.client_id)
             .finish_non_exhaustive()
     }
@@ -200,6 +224,19 @@ struct TokenResponse {
     access_token: Option<String>,
     #[serde(default)]
     id_token: Option<String>,
+}
+
+/// The fields of a discovery document this client uses ([OpenID Connect Discovery 1.0] §3).
+///
+/// [OpenID Connect Discovery 1.0]: https://openid.net/specs/openid-connect-discovery-1_0.html
+#[derive(Deserialize)]
+struct Discovery {
+    issuer: String,
+    authorization_endpoint: String,
+    token_endpoint: String,
+    jwks_uri: String,
+    #[serde(default)]
+    token_endpoint_auth_methods_supported: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -237,38 +274,195 @@ pub struct Exchange<'a> {
     pub verifier: &'a str,
     /// The redirect URI the code was issued for.
     pub redirect_uri: &'a str,
-    /// The nonce sent (Google).
+    /// The nonce sent (OpenID Connect).
     pub nonce: &'a str,
 }
 
 impl Provider {
-    /// A provider with its client registration.
+    /// GitHub, with its OAuth app. `endpoints` are [`Endpoints::github`] outside tests.
     #[must_use]
-    pub const fn new(
+    pub fn github(client_id: String, client_secret: String, endpoints: Endpoints) -> Self {
+        Self::builtin(
+            Kind::GitHub,
+            "GitHub",
+            "https://github.com",
+            client_id,
+            client_secret,
+            endpoints,
+        )
+    }
+
+    /// Google, with its OAuth client. `endpoints` are [`Endpoints::google`] outside tests.
+    #[must_use]
+    pub fn google(client_id: String, client_secret: String, endpoints: Endpoints) -> Self {
+        Self::builtin(
+            Kind::Google,
+            "Google",
+            "https://accounts.google.com",
+            client_id,
+            client_secret,
+            endpoints,
+        )
+    }
+
+    fn builtin(
         kind: Kind,
+        label: &str,
+        issuer: &str,
         client_id: String,
         client_secret: String,
         endpoints: Endpoints,
     ) -> Self {
         Self {
+            id: label.to_ascii_lowercase(),
+            label: label.to_owned(),
             kind,
+            issuer: issuer.to_owned(),
             client_id,
-            client_secret,
-            endpoints,
+            client_secret: ClientSecret::Fixed(client_secret),
+            endpoints: Source::Fixed(endpoints),
             jwks: Mutex::new(None),
         }
     }
 
-    /// Which provider.
+    /// An OpenID Connect provider whose endpoints are discovered from `issuer`.
+    #[must_use]
+    pub const fn oidc(
+        id: String,
+        label: String,
+        issuer: String,
+        client_id: String,
+        client_secret: ClientSecret,
+    ) -> Self {
+        Self {
+            id,
+            label,
+            kind: Kind::Oidc,
+            issuer,
+            client_id,
+            client_secret,
+            endpoints: Source::Discovered(Mutex::new(None)),
+            jwks: Mutex::new(None),
+        }
+    }
+
+    /// Which kind of provider.
     #[must_use]
     pub const fn kind(&self) -> Kind {
         self.kind
+    }
+
+    /// The path segment of its routes.
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// The name shown on buttons.
+    #[must_use]
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+
+    /// The issuer recorded with a linked account.
+    #[must_use]
+    pub fn issuer(&self) -> &str {
+        &self.issuer
+    }
+
+    /// The client ID registered at the provider.
+    #[must_use]
+    pub fn client_id(&self) -> &str {
+        &self.client_id
+    }
+
+    /// Its button on the sign-in pages.
+    #[must_use]
+    pub fn button(&self) -> ProviderButton<'_> {
+        ProviderButton {
+            id: &self.id,
+            label: &self.label,
+            icon: self.kind.icon(),
+        }
+    }
+
+    /// The provider's endpoints: fixed, or from its discovery document.
+    ///
+    /// # Errors
+    ///
+    /// [`UpstreamError`] if the discovery document cannot be read or names another issuer.
+    pub async fn endpoints<H: HttpClient>(
+        &self,
+        http: &H,
+        now: UnixTime,
+    ) -> Result<Endpoints, UpstreamError> {
+        let cache = match &self.endpoints {
+            Source::Fixed(endpoints) => return Ok(endpoints.clone()),
+            Source::Discovered(cache) => cache,
+        };
+        let cached = cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        if let Some((fetched, endpoints)) = cached
+            && now.as_secs().saturating_sub(fetched.as_secs()) < DISCOVERY_MAX_AGE.as_secs()
+        {
+            return Ok(endpoints);
+        }
+        let url = format!(
+            "{}/.well-known/openid-configuration",
+            self.issuer.trim_end_matches('/')
+        );
+        let request = Request::builder()
+            .uri(&url)
+            .header(header::ACCEPT, "application/json")
+            .body(Bytes::new())
+            .map_err(|_request| UpstreamError::Protocol("discovery URL"))?;
+        let response = http.send(request).await?;
+        if response.status() != StatusCode::OK {
+            return Err(UpstreamError::Protocol("the discovery request was refused"));
+        }
+        let endpoints = self.discovered(response.body())?;
+        *cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((now, endpoints.clone()));
+        Ok(endpoints)
+    }
+
+    /// Checks a discovery document and takes its endpoints.
+    fn discovered(&self, body: &[u8]) -> Result<Endpoints, UpstreamError> {
+        let document: Discovery = serde_json::from_slice(body)
+            .map_err(|_json| UpstreamError::Protocol("discovery document"))?;
+        // §4.3: "MUST be identical to the Issuer URL that was used as the prefix".
+        if document.issuer != self.issuer {
+            return Err(UpstreamError::Protocol(
+                "the discovery document names another issuer",
+            ));
+        }
+        let token_auth = match document.token_endpoint_auth_methods_supported.as_deref() {
+            Some(methods)
+                if !methods.iter().any(|m| m == "client_secret_basic")
+                    && methods.iter().any(|m| m == "client_secret_post") =>
+            {
+                TokenAuth::Post
+            }
+            _ => TokenAuth::Basic,
+        };
+        Ok(Endpoints {
+            authorize: document.authorization_endpoint,
+            token: document.token_endpoint,
+            user: None,
+            jwks: Some(document.jwks_uri),
+            issuers: vec![document.issuer],
+            token_auth,
+        })
     }
 
     /// The authorization request URL.
     #[must_use]
     pub fn authorize_url(
         &self,
+        endpoints: &Endpoints,
         redirect_uri: &str,
         state: &str,
         nonce: &str,
@@ -293,13 +487,18 @@ impl Provider {
                     .append_pair("nonce", nonce)
                     .append_pair("prompt", "select_account");
             }
+            Kind::Oidc => {
+                query
+                    .append_pair("scope", "openid")
+                    .append_pair("nonce", nonce);
+            }
         }
-        let separator = if self.endpoints.authorize.contains('?') {
+        let separator = if endpoints.authorize.contains('?') {
             '&'
         } else {
             '?'
         };
-        format!("{}{separator}{}", self.endpoints.authorize, query.finish())
+        format!("{}{separator}{}", endpoints.authorize, query.finish())
     }
 
     /// Exchanges the code and returns the account's stable identifier.
@@ -313,21 +512,9 @@ impl Provider {
         exchange: Exchange<'_>,
         now: UnixTime,
     ) -> Result<String, UpstreamError> {
-        let form = form_urlencoded::Serializer::new(String::new())
-            .append_pair("grant_type", "authorization_code")
-            .append_pair("code", exchange.code)
-            .append_pair("redirect_uri", exchange.redirect_uri)
-            .append_pair("code_verifier", exchange.verifier)
-            .append_pair("client_id", &self.client_id)
-            .append_pair("client_secret", &self.client_secret)
-            .finish();
-        let request = Request::builder()
-            .method(Method::POST)
-            .uri(&self.endpoints.token)
-            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-            .header(header::ACCEPT, "application/json")
-            .body(Bytes::from(form))
-            .map_err(|_request| UpstreamError::Protocol("token endpoint URL"))?;
+        let endpoints = self.endpoints(http, now).await?;
+        let secret = self.client_secret.read().await?;
+        let request = self.token_request(&endpoints, exchange, &secret)?;
         let response = http.send(request).await?;
         if response.status() != StatusCode::OK {
             return Err(UpstreamError::Protocol("the token request was refused"));
@@ -339,25 +526,59 @@ impl Provider {
                 let access = tokens
                     .access_token
                     .ok_or(UpstreamError::Protocol("no access token"))?;
-                self.github_user(http, &access).await
+                self.github_user(http, &endpoints, &access).await
             }
-            Kind::Google => {
+            Kind::Google | Kind::Oidc => {
                 let id_token = tokens
                     .id_token
                     .ok_or(UpstreamError::Protocol("no ID token"))?;
-                self.google_subject(http, &id_token, exchange.nonce, now)
+                self.id_token_subject(http, &endpoints, &id_token, exchange.nonce, now)
                     .await
             }
         }
     }
 
+    /// The token request for `exchange`, with the client's credentials.
+    fn token_request(
+        &self,
+        endpoints: &Endpoints,
+        exchange: Exchange<'_>,
+        secret: &str,
+    ) -> Result<Request<Bytes>, UpstreamError> {
+        let mut form = form_urlencoded::Serializer::new(String::new());
+        form.append_pair("grant_type", "authorization_code")
+            .append_pair("code", exchange.code)
+            .append_pair("redirect_uri", exchange.redirect_uri)
+            .append_pair("code_verifier", exchange.verifier);
+        let mut request = Request::builder()
+            .method(Method::POST)
+            .uri(&endpoints.token)
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .header(header::ACCEPT, "application/json");
+        match endpoints.token_auth {
+            TokenAuth::Post => {
+                form.append_pair("client_id", &self.client_id)
+                    .append_pair("client_secret", secret);
+            }
+            TokenAuth::Basic => {
+                request = request.header(
+                    header::AUTHORIZATION,
+                    basic_authorization(&self.client_id, secret)?,
+                );
+            }
+        }
+        request
+            .body(Bytes::from(form.finish()))
+            .map_err(|_request| UpstreamError::Protocol("token endpoint URL"))
+    }
+
     async fn github_user<H: HttpClient>(
         &self,
         http: &H,
+        endpoints: &Endpoints,
         access_token: &str,
     ) -> Result<String, UpstreamError> {
-        let url = self
-            .endpoints
+        let url = endpoints
             .user
             .as_deref()
             .ok_or(UpstreamError::Protocol("no user endpoint"))?;
@@ -382,6 +603,7 @@ impl Provider {
     async fn keys<H: HttpClient>(
         &self,
         http: &H,
+        endpoints: &Endpoints,
         now: UnixTime,
         refresh: bool,
     ) -> Result<Vec<VerificationKey>, UpstreamError> {
@@ -398,8 +620,7 @@ impl Provider {
                 return Ok(keys.clone());
             }
         }
-        let url = self
-            .endpoints
+        let url = endpoints
             .jwks
             .as_deref()
             .ok_or(UpstreamError::Protocol("no JWK set"))?;
@@ -420,19 +641,20 @@ impl Provider {
         Ok(keys)
     }
 
-    async fn google_subject<H: HttpClient>(
+    async fn id_token_subject<H: HttpClient>(
         &self,
         http: &H,
+        endpoints: &Endpoints,
         id_token: &str,
         nonce: &str,
         now: UnixTime,
     ) -> Result<String, UpstreamError> {
         const ALGORITHMS: [Algorithm; 2] = [Algorithm::Rs256, Algorithm::Es256];
-        let keys = self.keys(http, now, false).await?;
+        let keys = self.keys(http, endpoints, now, false).await?;
         let verified = match verify_compact(id_token, &keys, &ALGORITHMS) {
             Err(zeabur_identity_keys::verify::VerifyError::UnknownKey) => {
                 // Keys rotate: fetch again once.
-                let keys = self.keys(http, now, true).await?;
+                let keys = self.keys(http, endpoints, now, true).await?;
                 verify_compact(id_token, &keys, &ALGORITHMS)
             }
             other => other,
@@ -441,7 +663,7 @@ impl Provider {
             verified.map_err(|_invalid| UpstreamError::IdToken("signature"))?;
         let claims: IdClaims =
             serde_json::from_slice(&payload).map_err(|_json| UpstreamError::IdToken("claims"))?;
-        if !self.endpoints.issuers.contains(&claims.iss) {
+        if !endpoints.issuers.contains(&claims.iss) {
             return Err(UpstreamError::IdToken("issuer"));
         }
         // This client trusts no other audience, so the only acceptable `aud` is its own client ID
@@ -474,5 +696,84 @@ impl Provider {
             return Err(UpstreamError::IdToken("subject"));
         }
         Ok(claims.sub)
+    }
+}
+
+/// `Authorization: Basic` for `client_secret_basic`: each part form-urlencoded first
+/// (RFC 6749 §2.3.1).
+fn basic_authorization(client_id: &str, secret: &str) -> Result<HeaderValue, UpstreamError> {
+    let encode = |part: &str| form_urlencoded::byte_serialize(part.as_bytes()).collect::<String>();
+    let credentials = format!("{}:{}", encode(client_id), encode(secret));
+    HeaderValue::try_from(format!("Basic {}", STANDARD.encode(credentials)))
+        .map_err(|_header| UpstreamError::Protocol("client credentials"))
+}
+
+/// The enabled providers: GitHub and Google from the command line, and the configured OpenID
+/// Connect providers, which change while the server runs.
+#[derive(Debug, Default)]
+pub struct Providers {
+    builtin: Vec<Arc<Provider>>,
+    configured: RwLock<Vec<Arc<Provider>>>,
+}
+
+impl Providers {
+    /// The built-in providers, and no configured ones yet.
+    #[must_use]
+    pub fn new(builtin: Vec<Provider>) -> Self {
+        Self {
+            builtin: builtin.into_iter().map(Arc::new).collect(),
+            configured: RwLock::default(),
+        }
+    }
+
+    /// Replaces the configured providers. One whose ID is a built-in provider's is left out.
+    pub fn set_configured(&self, providers: Vec<Arc<Provider>>) {
+        let mut kept = Vec::with_capacity(providers.len());
+        for provider in providers {
+            if Kind::RESERVED.contains(&provider.id()) {
+                tracing::warn!(
+                    provider = provider.id(),
+                    "an UpstreamProvider cannot use the ID of a built-in provider; ignored"
+                );
+            } else {
+                kept.push(provider);
+            }
+        }
+        *self
+            .configured
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = kept;
+    }
+
+    /// The configured providers.
+    #[must_use]
+    pub fn configured(&self) -> Vec<Arc<Provider>> {
+        self.configured
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Every enabled provider, built-in first, in a stable order.
+    #[must_use]
+    pub fn all(&self) -> Vec<Arc<Provider>> {
+        let mut all = self.builtin.clone();
+        all.extend(self.configured());
+        all
+    }
+
+    /// The provider with this ID.
+    #[must_use]
+    pub fn find(&self, id: &str) -> Option<Arc<Provider>> {
+        self.all().into_iter().find(|provider| provider.id() == id)
+    }
+
+    /// The provider a linked account came from, by its `Credential` type and issuer.
+    #[must_use]
+    pub fn for_credential(&self, kind: CredentialType, issuer: &str) -> Option<Arc<Provider>> {
+        self.all().into_iter().find(|provider| {
+            provider.kind().credential_type() == kind
+                && (kind != CredentialType::Oidc || provider.issuer() == issuer)
+        })
     }
 }

@@ -20,7 +20,7 @@ and restarting a deployment is refused with 403 for an account without that righ
 ## Why Zeabur Identity
 
 - **Passkeys, not passwords.** Touch ID, Windows Hello or a security key. Teammates can also
-  link a GitHub or Google account for everyday access.
+  link a GitHub, Google or OpenID Connect account for everyday access.
 - **Admin rights belong to admin accounts.** Keep a separate admin account for cluster changes.
   It signs in with a passkey only, its tokens last 5 minutes, and its sessions are shorter.
   Everyday accounts get only the rights you bind to their groups.

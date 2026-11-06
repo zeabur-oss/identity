@@ -4,7 +4,7 @@ description: 備份 Zeabur Identity 的資料與金鑰，依備份類型還原�
 source: "11952ef751f7"
 ---
 
-備份叢集的資料存放區、Zeabur Identity 資源、私密金鑰與相關設定。還原資料存放區可以保留所有人的身分與通行密鑰。如果從匯出檔重建資源，所有人都會取得新身分，必須重新註冊通行密鑰、連結 GitHub 或 Google 帳號。應用程式也要遷移使用者的帳號對應。
+備份叢集的資料存放區、Zeabur Identity 資源、私密金鑰與相關設定。還原資料存放區可以保留所有人的身分與通行密鑰。如果從匯出檔重建資源，所有人都會取得新身分，必須重新註冊通行密鑰、連結 GitHub、Google 或 OpenID Connect 帳號。應用程式也要遷移使用者的帳號對應。
 
 ## 要備份什麼
 
@@ -14,7 +14,7 @@ Zeabur Identity 用 `User` 物件的 UID 識別每個人。每個權杖的 `sub`
 |---|---|---|
 | 使用者 UID | 保留 | 重新產生 |
 | 既有通行密鑰 | 繼續使用 | 所有人重新註冊 |
-| 已連結的 GitHub 與 Google 帳號 | 繼續使用 | 所有人重新連結 |
+| 已連結的 GitHub、Google 與 OpenID Connect 帳號 | 繼續使用 | 所有人重新連結 |
 | 用 `sub` 追蹤使用者的應用程式 | 辨識為同一個人 | 辨識為新使用者 |
 | 工作階段 | 刪除後，所有人重新登入 | 不還原 |
 
@@ -39,12 +39,13 @@ Zeabur Identity 用 `User` 物件的 UID 識別每個人。每個權杖的 `sub`
 | 備份項目 | 用途 |
 |---|---|
 | 叢集的資料存放區備份，以及發行版開啟備份所需的伺服器權杖、加密金鑰與叢集憑證 | 只有這種備份能保留 UID 與通行密鑰。快照如果無法解密，就無法用來還原。 |
-| `users`、`credentials`、`oauthclients`（`*.identity.zeabur.com`） | 儲存使用者與群組、通行密鑰紀錄、已連結的 GitHub 或 Google 帳號，以及已註冊的用戶端。 |
+| `users`、`credentials`、`oauthclients`（`*.identity.zeabur.com`） | 儲存使用者與群組、通行密鑰紀錄、已連結的 GitHub、Google 或 OpenID Connect 帳號，以及已註冊的用戶端。 |
 | Secret `zeabur-identity-signing-keys` | 儲存所有私密簽署金鑰，包含即將啟用與已退役的金鑰。其他資料無法重建這些金鑰。 |
 | Secret `zeabur-identity-internal-ca` | 儲存根 CA 與私密金鑰。cert-manager 用它簽發憑證，供 kube-apiserver 連線到內部位址時驗證。這份 Secret 要與每台控制平面機器上的驗證檔案一起儲存。cert-manager 會用它重新簽發 `zeabur-identity-internal-tls`。 |
 | Deployment、Service、ServiceAccount、Role 與 RoleBinding `zeabur-identity`，以及 ClusterRoleBinding `zeabur-identity-cluster-admins` | 儲存 Zeabur Identity 的執行方式與管理員權限。也要備份你為其他應用程式建立的 RoleBinding。 |
 | ConfigMap `zeabur-identity-settings`，如果你有建立 | 儲存 `teams` 與 `admin-aal3` 設定。缺少它時，所有設定都會回到預設值。 |
 | 掛載到 Zeabur Identity 的 Secret，例如 `zeabur-identity-config` | 儲存 GitHub 與 Google 的用戶端密鑰。也要保留上游應用程式的註冊資料。 |
+| `upstreamproviders` 與 Secret `zeabur-identity-upstream` | 儲存 OpenID Connect 提供者及其用戶端密鑰。 |
 | 公開 TLS 與路由 | 入門安裝使用 Secret `zeabur-identity-tls` 與 Ingress `zeabur-identity`。登入速率限制另外使用 Ingress `zeabur-identity-rate-limited`、Middleware `zeabur-identity-rate-limit`，以及 `kube-system` 中的 HelmChartConfig `traefik`。 |
 | 每台控制平面機器上的 kube-apiserver 設定 | k3s 使用 `/etc/rancher/k3s/zeabur-identity/authn.yaml`，以及載入這份檔案的設定。 |
 | 機密用戶端應用程式各自密鑰儲存區中的用戶端密鑰 | Zeabur Identity 只儲存雜湊值。 |
@@ -102,12 +103,14 @@ kubectl -n "$NS" scale deploy/zeabur-identity --replicas=0
 kubectl -n "$NS" wait --for=delete pod \
   -l app.kubernetes.io/name=zeabur-identity --timeout=180s
 
-for resource in users credentials oauthclients grants invitations; do
+for resource in users credentials oauthclients grants invitations upstreamproviders; do
   kubectl -n "$NS" get "$resource.identity.zeabur.com" -o json \
     > "$BACKUP/$resource.json"
 done
 kubectl -n "$NS" get secret zeabur-identity-signing-keys zeabur-identity-internal-ca -o json \
   > "$BACKUP/identity-secrets.json"
+kubectl -n "$NS" get secret zeabur-identity-upstream -o json --ignore-not-found \
+  > "$BACKUP/upstream-secret.json"
 kubectl -n "$NS" get svc zeabur-identity -o json > "$BACKUP/service.json"
 kubectl -n "$NS" get serviceaccount/zeabur-identity role/zeabur-identity rolebinding/zeabur-identity -o json \
   > "$BACKUP/namespaced-rbac.json"
@@ -117,7 +120,8 @@ kubectl -n "$NS" get configmap zeabur-identity-settings -o json --ignore-not-fou
   > "$BACKUP/settings.json"
 kubectl get crd users.identity.zeabur.com credentials.identity.zeabur.com \
   oauthclients.identity.zeabur.com grants.identity.zeabur.com \
-  invitations.identity.zeabur.com -o json > "$BACKUP/crds.json"
+  invitations.identity.zeabur.com upstreamproviders.identity.zeabur.com \
+  -o json > "$BACKUP/crds.json"
 
 # Save every Secret mounted into Zeabur Identity, whatever it's called.
 jq -r '.spec.template.spec.volumes[]? | .secret.secretName // empty' \
@@ -335,11 +339,12 @@ kubectl -n "$NS" delete secret zeabur-identity-setup --ignore-not-found
 
 檢查 `users.json` 與 `oauthclients.json`，移除不該還原的使用者與用戶端。只編輯工作複本，保留原始封存檔不變。
 
-以下腳本會移除舊叢集的中繼資料，並將每位使用者建立為停用狀態，避免有人意外取得存取權限：
+以下腳本會移除舊叢集的中繼資料，將每位使用者建立為停用狀態，避免有人意外取得存取權限，再建立用戶端與 OpenID Connect 提供者：
 
 ```sh
 NS=zeabur-identity   # the namespace you are restoring into
-for resource in users oauthclients; do
+for resource in users oauthclients upstreamproviders; do
+  [ "$(jq '.items | length' "$resource.json")" -gt 0 ] || continue
   jq --arg ns "$NS" '
     {apiVersion:"v1", kind:"List", items:[.items[] |
       {apiVersion, kind,
@@ -364,8 +369,8 @@ done
 啟動 Zeabur Identity 前，先還原簽署金鑰、內部 CA、公開 TLS 與設定 Secret：
 
 ```sh
-for file in identity-secrets.json mounted-secret-*.json public-tls.json; do
-  [ -e "$file" ] || continue
+for file in identity-secrets.json mounted-secret-*.json upstream-secret.json public-tls.json; do
+  [ -s "$file" ] || continue
   jq --arg ns "$NS" '
     {apiVersion:"v1", kind:"List", items:[(if .kind == "List" then .items[] else . end) |
       {apiVersion, kind, type, data,
@@ -392,7 +397,7 @@ done
 
 舊通行密鑰無法搭配新 UID。舊工作階段依使用者名稱指向帳號，因此舊更新權杖能替目前使用該名稱的人取得權杖。
 
-使用者重新註冊時，再自行連結 GitHub 或 Google 帳號。
+使用者重新註冊時，再自行連結 GitHub、Google 或 OpenID Connect 帳號。
 
 </Step>
 
