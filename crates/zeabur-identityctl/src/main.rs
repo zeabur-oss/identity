@@ -12,7 +12,7 @@ use zeabur_identity_k8s::crd::user::AccountType;
 
 use crate::cli::{
     AccountTypeArg, AccountTypeArgs, Cli, ClientCommand, ClientCreateArgs, ClientKind, Command,
-    InviteArgs, KubeConfigArgs, SetupLinkArgs, SigningAlg,
+    InviteArgs, KubeConfigArgs, SetupLinkArgs, SigningAlg, UpstreamCommand, UpstreamMigrateArgs,
 };
 
 fn main() -> ExitCode {
@@ -21,6 +21,15 @@ fn main() -> ExitCode {
         Command::Crds => print_json(zeabur_identity_k8s::crd::definitions_json()),
         Command::Rbac { namespace } => {
             print_json(zeabur_identity_k8s::rbac::manifests_json(&namespace))
+        }
+        Command::Manifests(args) if removed_option(&args.serve_args).is_some() => {
+            output::stderr(&format!(
+                "error: {} no longer exists: GitHub and Google sign-in are UpstreamProvider \
+                 objects now. Run `zeabur-identityctl upstream migrate` with the old Deployment \
+                 still installed, then leave out the --github-* and --google-* options.",
+                removed_option(&args.serve_args).unwrap_or_default()
+            ));
+            ExitCode::FAILURE
         }
         Command::Manifests(args) => print_json(zeabur_identity_k8s::deployment::manifests_json(
             &args.namespace,
@@ -38,7 +47,77 @@ fn main() -> ExitCode {
         Command::Client {
             command: ClientCommand::Create(args),
         } => client_create(args),
+        Command::Upstream {
+            command: UpstreamCommand::Migrate(args),
+        } => upstream_migrate(&args),
     }
+}
+
+/// The first removed server option in `serve_args`.
+fn removed_option(serve_args: &[String]) -> Option<&'static str> {
+    use zeabur_identity_k8s::migrate::REMOVED_OPTIONS;
+    for arg in serve_args {
+        let flag = arg.split_once('=').map_or(arg.as_str(), |(flag, _)| flag);
+        if let Some(removed) = REMOVED_OPTIONS.iter().find(|removed| **removed == flag) {
+            return Some(removed);
+        }
+    }
+    None
+}
+
+fn upstream_migrate(args: &UpstreamMigrateArgs) -> ExitCode {
+    let Some(runtime) = current_thread_runtime() else {
+        return ExitCode::FAILURE;
+    };
+    let result = runtime.block_on(async {
+        let client = kube::Client::try_default().await?;
+        let migrations =
+            zeabur_identity_k8s::migrate::plan(client.clone(), &args.namespace).await?;
+        if !args.dry_run {
+            zeabur_identity_k8s::migrate::apply(client, &args.namespace, &migrations).await?;
+        }
+        Ok::<_, Box<dyn std::error::Error>>(migrations)
+    });
+    let migrations = match result {
+        Ok(migrations) => migrations,
+        Err(error) => {
+            output::stderr(&format!("error: {error}"));
+            return ExitCode::FAILURE;
+        }
+    };
+    if migrations.is_empty() {
+        output::stderr(
+            "The Deployment uses none of the --github-* or --google-* options; nothing to do.",
+        );
+        return ExitCode::SUCCESS;
+    }
+    let verb = if args.dry_run {
+        "Would create"
+    } else {
+        "Created"
+    };
+    for migration in &migrations {
+        let (secret, key) = &migration.source;
+        output::stderr(&format!(
+            "{verb} UpstreamProvider {}, with its client secret copied from key {key} of Secret {secret} to key {} of Secret {}.",
+            migration
+                .provider
+                .metadata
+                .name
+                .as_deref()
+                .unwrap_or_default(),
+            migration.provider.spec.client_secret_key,
+            zeabur_identity_k8s::upstream::SECRET,
+        ));
+    }
+    if args.dry_run {
+        let objects: Vec<_> = migrations.iter().map(|m| &m.provider).collect();
+        return print_json(serde_json::to_string_pretty(&objects));
+    }
+    output::stderr(
+        "Next, regenerate the manifests without the --github-* and --google-* options and apply them.",
+    );
+    ExitCode::SUCCESS
 }
 
 fn resources() -> ExitCode {
@@ -289,7 +368,21 @@ fn print_json(json: serde_json::Result<String>) -> ExitCode {
 mod tests {
     use std::time::Duration;
 
-    use super::span;
+    use super::{removed_option, span};
+
+    #[test]
+    fn manifests_refuse_the_removed_sign_in_options() {
+        let args = |list: &[&str]| list.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        assert_eq!(
+            removed_option(&args(&["--invitations", "--github-client-id=Ov23li"])),
+            Some("--github-client-id")
+        );
+        assert_eq!(
+            removed_option(&args(&["--google-client-secret-file", "/etc/x"])),
+            Some("--google-client-secret-file")
+        );
+        assert_eq!(removed_option(&args(&["--invitations"])), None);
+    }
 
     #[test]
     fn spans_use_the_largest_exact_unit() {
