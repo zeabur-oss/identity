@@ -1,4 +1,4 @@
-//! `UpstreamProvider`: an OpenID Connect provider people sign in with.
+//! `UpstreamProvider`: GitHub, Google or an OpenID Connect provider people sign in with.
 
 #![expect(
     unreachable_pub,
@@ -30,11 +30,14 @@ pub const SCOPE_PATTERN: &str = r"^[!#-\[\]-~]+$";
 /// A key in a Secret's `data` (Kubernetes allows these characters).
 pub const SECRET_KEY_PATTERN: &str = r"^[-._a-zA-Z0-9]+$";
 
-/// An OpenID Connect provider.
+/// A provider people sign in with.
 ///
 /// The object name is the provider's ID in Zeabur Identity's URLs: register
-/// `<issuer>/upstream/<name>/callback` as the redirect URI at the provider. `github` and `google`
-/// are taken by the built-in providers.
+/// `<issuer>/upstream/<name>/callback` as the redirect URI at the provider.
+#[expect(
+    clippy::duplicated_attributes,
+    reason = "repeated printcolumn arguments such as `type_ = \"string\"` are distinct columns"
+)]
 #[derive(CustomResource, KubeSchema, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[kube(
     group = "identity.zeabur.com",
@@ -42,27 +45,40 @@ pub const SECRET_KEY_PATTERN: &str = r"^[-._a-zA-Z0-9]+$";
     kind = "UpstreamProvider",
     namespaced,
     category = "zeabur-identity",
+    printcolumn(name = "Type", type_ = "string", json_path = ".spec.type"),
     printcolumn(name = "Issuer", type_ = "string", json_path = ".spec.issuer"),
     printcolumn(
         name = "Age",
         type_ = "date",
         json_path = ".metadata.creationTimestamp"
     ),
-    doc = "An OpenID Connect provider people can sign in to Zeabur Identity with."
+    doc = "GitHub, Google or an OpenID Connect provider people can sign in to Zeabur Identity with."
+)]
+#[x_kube(
+    validation = Rule::new("(self.type == 'OIDC') == has(self.issuer)")
+        .message("issuer is required for OIDC providers and not allowed for GitHub or Google"),
+    validation = Rule::new("self.type != 'GitHub' || !has(self.provisioning)")
+        .message("GitHub sends no ID token, so it cannot create users")
 )]
 #[serde(rename_all = "camelCase")]
 pub struct UpstreamProviderSpec {
+    /// Which provider: `GitHub` (an OAuth app), `Google` (an OAuth client), or `OIDC`, any
+    /// OpenID Connect provider at `issuer`.
+    #[serde(rename = "type")]
+    pub kind: ProviderType,
+
     /// Name on the "Continue with …" button.
     #[schemars(length(min = 1, max = MAX_DISPLAY_NAME))]
     pub display_name: String,
 
-    /// The provider's issuer URL, exactly as its ID tokens' `iss` claim. Its discovery document is
-    /// read from `<issuer>/.well-known/openid-configuration`.
+    /// `OIDC` only: the provider's issuer URL, exactly as its ID tokens' `iss` claim. Its
+    /// discovery document is read from `<issuer>/.well-known/openid-configuration`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(length(min = 1, max = MAX_ISSUER))]
     #[x_kube(validation = Rule::new(ISSUER_RULE).message(
         "the issuer must be https:// with a host; printable ASCII, no user information, query or fragment"
     ))]
-    pub issuer: String,
+    pub issuer: Option<String>,
 
     /// The client ID registered at the provider.
     #[schemars(length(min = 1, max = MAX_CLIENT_ID), regex(pattern = r"^[!-~]+$"))]
@@ -73,8 +89,8 @@ pub struct UpstreamProviderSpec {
     #[schemars(length(min = 1, max = 253), regex(pattern = SECRET_KEY_PATTERN))]
     pub client_secret_key: String,
 
-    /// Create a user at an account's first sign-in, when its ID token's `claim` has one of
-    /// `values`. Unset, accounts must be linked first.
+    /// Google and `OIDC` only: create a user at an account's first sign-in, when its ID token's
+    /// `claim` has one of `values`. Unset, accounts must be linked first.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provisioning: Option<Provisioning>,
 }
@@ -95,6 +111,18 @@ pub struct Provisioning {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[schemars(length(max = 8), inner(length(min = 1, max = 64), regex(pattern = SCOPE_PATTERN)))]
     pub scopes: Vec<String>,
+}
+
+/// Which provider an `UpstreamProvider` is.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProviderType {
+    /// GitHub, with an OAuth app.
+    GitHub,
+    /// Google, with an OAuth client.
+    Google,
+    /// An OpenID Connect provider, found by its issuer.
+    #[serde(rename = "OIDC")]
+    Oidc,
 }
 
 #[cfg(test)]
@@ -126,7 +154,15 @@ mod tests {
         required.sort_unstable();
         assert_eq!(
             required,
-            ["clientId", "clientSecretKey", "displayName", "issuer"]
+            ["clientId", "clientSecretKey", "displayName", "type"]
+        );
+        assert_eq!(
+            spec["x-kubernetes-validations"][0]["rule"],
+            "(self.type == 'OIDC') == has(self.issuer)"
+        );
+        assert_eq!(
+            spec["x-kubernetes-validations"][1]["rule"],
+            "self.type != 'GitHub' || !has(self.provisioning)"
         );
     }
 }

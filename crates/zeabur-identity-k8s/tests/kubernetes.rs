@@ -24,7 +24,9 @@ mod tests {
     use zeabur_identity_core::clock::SystemClock;
     use zeabur_identity_k8s::crd::client::{ClientType, OAuthClient, OAuthClientSpec};
     use zeabur_identity_k8s::crd::grant::{Grant, GrantSpec, GrantStatus};
-    use zeabur_identity_k8s::crd::upstream::{UpstreamProvider, UpstreamProviderSpec};
+    use zeabur_identity_k8s::crd::upstream::{
+        ProviderType, Provisioning, UpstreamProvider, UpstreamProviderSpec,
+    };
     use zeabur_identity_k8s::crd::user::{AccountType, User, UserSpec};
     use zeabur_identity_k8s::crd::{EXPIRES_AT_ANNOTATION, EXPIRY_BUCKET_LABEL, definitions};
     use zeabur_identity_k8s::keys::SecretKeyStore;
@@ -476,39 +478,60 @@ mod tests {
         }
 
         let providers: Api<UpstreamProvider> = env.admin_api();
-        let provider = |name: &str, issuer: &str, key: &str| {
+        let provider = |name: &str, kind: ProviderType, issuer: Option<&str>, key: &str| {
             UpstreamProvider::new(
                 name,
                 UpstreamProviderSpec {
+                    kind,
                     display_name: "Acme SSO".into(),
-                    issuer: issuer.into(),
+                    issuer: issuer.map(str::to_owned),
                     client_id: "zeabur-identity".into(),
                     client_secret_key: key.into(),
                     provisioning: None,
                 },
             )
         };
-        providers
-            .create(
-                &pp,
-                &provider("acme", "https://idp.acme.test/realms/staff", "acme"),
-            )
-            .await
-            .unwrap();
-        for (name, issuer, key) in [
-            ("p1", "http://idp.acme.test", "acme"),
-            ("p2", "https://idp.acme.test/?tenant=1", "acme"),
-            ("p3", "https://idp.acme.test/#top", "acme"),
-            ("p4", "https://admin@idp.acme.test", "acme"),
-            ("p5", "idp.acme.test", "acme"),
-            ("p6", "https://idp.acme.test", "a/b"),
+        let oidc = ProviderType::Oidc;
+        for accepted in [
+            provider(
+                "acme",
+                oidc,
+                Some("https://idp.acme.test/realms/staff"),
+                "acme",
+            ),
+            provider("github", ProviderType::GitHub, None, "github"),
+        ] {
+            providers.create(&pp, &accepted).await.unwrap();
+        }
+        for (name, kind, issuer, key) in [
+            ("p1", oidc, Some("http://idp.acme.test"), "acme"),
+            ("p2", oidc, Some("https://idp.acme.test/?tenant=1"), "acme"),
+            ("p3", oidc, Some("https://idp.acme.test/#top"), "acme"),
+            ("p4", oidc, Some("https://admin@idp.acme.test"), "acme"),
+            ("p5", oidc, Some("idp.acme.test"), "acme"),
+            ("p6", oidc, Some("https://idp.acme.test"), "a/b"),
+            ("p7", oidc, None, "acme"),
+            (
+                "p8",
+                ProviderType::Google,
+                Some("https://accounts.google.com"),
+                "google",
+            ),
         ] {
             let error = providers
-                .create(&pp, &provider(name, issuer, key))
+                .create(&pp, &provider(name, kind, issuer, key))
                 .await
                 .unwrap_err();
             assert_eq!(status_code(&error), Some(422), "{name}: {error}");
         }
+        let mut github = provider("p9", ProviderType::GitHub, None, "github");
+        github.spec.provisioning = Some(Provisioning {
+            claim: "hd".into(),
+            values: vec!["acme.test".into()],
+            scopes: Vec::new(),
+        });
+        let error = providers.create(&pp, &github).await.unwrap_err();
+        assert_eq!(status_code(&error), Some(422), "{error}");
 
         let grants: Api<Grant> = env.admin_api();
         let mut stored = grants.create(&pp, &grant("g", None)).await.unwrap();
@@ -705,8 +728,9 @@ mod tests {
         let acme = UpstreamProvider::new(
             "acme",
             UpstreamProviderSpec {
+                kind: ProviderType::Oidc,
                 display_name: "Acme SSO".into(),
-                issuer: "https://idp.acme.test".into(),
+                issuer: Some("https://idp.acme.test".into()),
                 client_id: "zeabur-identity".into(),
                 client_secret_key: "acme".into(),
                 provisioning: None,
@@ -748,6 +772,94 @@ mod tests {
                     .unwrap_err()
             ),
             Some(403)
+        );
+        env.cleanup().await;
+    }
+
+    /// `zeabur-identityctl upstream migrate` turns the removed options of a generated Deployment
+    /// into `UpstreamProvider` objects and copies their secrets, keeping other keys; running it
+    /// again changes nothing.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[ignore = "needs a Kubernetes cluster (KUBECONFIG)"]
+    async fn removed_sign_in_options_migrate_to_upstream_providers() {
+        use k8s_openapi::api::apps::v1::Deployment;
+        use zeabur_identity_k8s::{deployment, migrate};
+
+        let env = Env::new().await;
+        let pp = PostParams::default();
+        let secrets: Api<Secret> = env.admin_api();
+        let secret = |name: &str, data: &[(&str, &str)]| Secret {
+            metadata: ObjectMeta {
+                name: Some(name.into()),
+                ..ObjectMeta::default()
+            },
+            string_data: Some(
+                data.iter()
+                    .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+                    .collect(),
+            ),
+            ..Secret::default()
+        };
+        secrets
+            .create(
+                &pp,
+                &secret(
+                    "zeabur-identity-config",
+                    &[("github-client-secret", "gh-s3cret\n")],
+                ),
+            )
+            .await
+            .unwrap();
+        secrets
+            .create(&pp, &secret(upstream::SECRET, &[("acme", "acme-s3cret")]))
+            .await
+            .unwrap();
+        let issuer =
+            zeabur_identity_core::config::BaseUrl::parse("issuer", "https://id.example.com")
+                .unwrap();
+        let options = deployment::Options {
+            image: "zeabur-identity".into(),
+            serve_args: vec![
+                "--github-client-id=Ov23li".into(),
+                "--github-client-secret-file=/etc/zeabur-identity/github-client-secret".into(),
+            ],
+            config_secret: Some("zeabur-identity-config".into()),
+        };
+        env.admin_api::<Deployment>()
+            .create(
+                &pp,
+                &deployment::deployment(&env.namespace, &issuer, &options),
+            )
+            .await
+            .unwrap();
+
+        for _ in 0..2 {
+            let plan = migrate::plan(env.admin.clone(), &env.namespace)
+                .await
+                .unwrap();
+            migrate::apply(env.admin.clone(), &env.namespace, &plan)
+                .await
+                .unwrap();
+        }
+        let github = env
+            .admin_api::<UpstreamProvider>()
+            .get("github")
+            .await
+            .unwrap();
+        assert_eq!(github.spec.kind, ProviderType::GitHub);
+        assert_eq!(github.spec.client_id, "Ov23li");
+        let identity_secrets: Api<Secret> = env.zeabur_identity_api();
+        assert_eq!(
+            upstream::client_secret(&identity_secrets, "github")
+                .await
+                .unwrap(),
+            "gh-s3cret"
+        );
+        assert_eq!(
+            upstream::client_secret(&identity_secrets, "acme")
+                .await
+                .unwrap(),
+            "acme-s3cret"
         );
         env.cleanup().await;
     }

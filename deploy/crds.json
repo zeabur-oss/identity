@@ -813,6 +813,11 @@
           {
             "additionalPrinterColumns": [
               {
+                "jsonPath": ".spec.type",
+                "name": "Type",
+                "type": "string"
+              },
+              {
                 "jsonPath": ".spec.issuer",
                 "name": "Issuer",
                 "type": "string"
@@ -826,10 +831,10 @@
             "name": "v1alpha1",
             "schema": {
               "openAPIV3Schema": {
-                "description": "An OpenID Connect provider people can sign in to Zeabur Identity with.",
+                "description": "GitHub, Google or an OpenID Connect provider people can sign in to Zeabur Identity with.",
                 "properties": {
                   "spec": {
-                    "description": "An OpenID Connect provider.\n\nThe object name is the provider's ID in Zeabur Identity's URLs: register\n`<issuer>/upstream/<name>/callback` as the redirect URI at the provider. `github` and `google`\nare taken by the built-in providers.",
+                    "description": "A provider people sign in with.\n\nThe object name is the provider's ID in Zeabur Identity's URLs: register\n`<issuer>/upstream/<name>/callback` as the redirect URI at the provider.",
                     "properties": {
                       "clientId": {
                         "description": "The client ID registered at the provider.",
@@ -852,9 +857,10 @@
                         "type": "string"
                       },
                       "issuer": {
-                        "description": "The provider's issuer URL, exactly as its ID tokens' `iss` claim. Its discovery document is\nread from `<issuer>/.well-known/openid-configuration`.",
+                        "description": "`OIDC` only: the provider's issuer URL, exactly as its ID tokens' `iss` claim. Its\ndiscovery document is read from `<issuer>/.well-known/openid-configuration`.",
                         "maxLength": 256,
                         "minLength": 1,
+                        "nullable": true,
                         "type": "string",
                         "x-kubernetes-validations": [
                           {
@@ -864,7 +870,7 @@
                         ]
                       },
                       "provisioning": {
-                        "description": "Create a user at an account's first sign-in, when its ID token's `claim` has one of\n`values`. Unset, accounts must be linked first.",
+                        "description": "Google and `OIDC` only: create a user at an account's first sign-in, when its ID token's\n`claim` has one of `values`. Unset, accounts must be linked first.",
                         "nullable": true,
                         "properties": {
                           "claim": {
@@ -902,15 +908,34 @@
                           "values"
                         ],
                         "type": "object"
+                      },
+                      "type": {
+                        "description": "Which provider: `GitHub` (an OAuth app), `Google` (an OAuth client), or `OIDC`, any\nOpenID Connect provider at `issuer`.",
+                        "enum": [
+                          "GitHub",
+                          "Google",
+                          "OIDC"
+                        ],
+                        "type": "string"
                       }
                     },
                     "required": [
                       "clientId",
                       "clientSecretKey",
                       "displayName",
-                      "issuer"
+                      "type"
                     ],
-                    "type": "object"
+                    "type": "object",
+                    "x-kubernetes-validations": [
+                      {
+                        "message": "issuer is required for OIDC providers and not allowed for GitHub or Google",
+                        "rule": "(self.type == 'OIDC') == has(self.issuer)"
+                      },
+                      {
+                        "message": "GitHub sends no ID token, so it cannot create users",
+                        "rule": "self.type != 'GitHub' || !has(self.provisioning)"
+                      }
+                    ]
                   }
                 },
                 "required": [

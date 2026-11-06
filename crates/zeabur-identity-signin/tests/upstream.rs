@@ -318,7 +318,7 @@ mod tests {
         *fake.published_key.lock().unwrap() = Some(google_key);
         let github = Provider::github(
             "gh-client".into(),
-            "gh-secret".into(),
+            "gh-secret".to_owned(),
             Endpoints {
                 authorize: "https://github.test/authorize".into(),
                 token: "https://github.test/token".into(),
@@ -330,7 +330,7 @@ mod tests {
         );
         let google = Provider::google(
             "google-client".into(),
-            "google-secret".into(),
+            "google-secret".to_owned(),
             Endpoints {
                 authorize: "https://google.test/authorize".into(),
                 token: "https://google.test/token".into(),
@@ -340,8 +340,7 @@ mod tests {
                 token_auth: TokenAuth::Post,
             },
         );
-        let providers = Arc::new(Providers::new(vec![github, google]));
-        providers.set_configured(vec![Arc::new(acme())]);
+        let providers = Arc::new(Providers::new(vec![github, google, acme()]));
         let sign_in = Arc::new(SignIn {
             oauth: Arc::clone(&oauth),
             passkeys: Passkeys::new(&issuer).unwrap(),

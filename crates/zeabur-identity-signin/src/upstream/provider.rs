@@ -1,5 +1,5 @@
-//! Upstream identity providers: GitHub (OAuth 2.0), Google, and any OpenID Connect provider an
-//! admin configures.
+//! Upstream identity providers, each an `UpstreamProvider` object: GitHub (OAuth 2.0), Google,
+//! or any OpenID Connect provider.
 //!
 //! Each yields one thing: the provider's stable identifier for the account (GitHub's numeric user
 //! ID, the `sub` of an OpenID Connect provider), never a login name or email address, which can
@@ -59,9 +59,6 @@ pub enum Kind {
 }
 
 impl Kind {
-    /// The built-in providers' IDs, which a configured provider cannot take.
-    pub const RESERVED: [&'static str; 2] = ["github", "google"];
-
     /// The icon on its button.
     #[must_use]
     pub const fn icon(self) -> &'static str {
@@ -152,6 +149,12 @@ pub enum ClientSecret {
     Fixed(String),
     /// Read at each code exchange, so a rotated secret applies without a restart.
     Fetch(Arc<dyn Fn() -> SecretFuture + Send + Sync>),
+}
+
+impl From<String> for ClientSecret {
+    fn from(secret: String) -> Self {
+        Self::Fixed(secret)
+    }
 }
 
 impl std::fmt::Debug for ClientSecret {
@@ -309,10 +312,15 @@ pub struct Exchange<'a> {
 }
 
 impl Provider {
-    /// GitHub, with its OAuth app. `endpoints` are [`Endpoints::github`] outside tests.
+    /// GitHub, with its OAuth app, as `github`. `endpoints` are [`Endpoints::github`] outside
+    /// tests.
     #[must_use]
-    pub fn github(client_id: String, client_secret: String, endpoints: Endpoints) -> Self {
-        Self::builtin(
+    pub fn github(
+        client_id: String,
+        client_secret: impl Into<ClientSecret>,
+        endpoints: Endpoints,
+    ) -> Self {
+        Self::fixed(
             Kind::GitHub,
             "GitHub",
             "https://github.com",
@@ -322,10 +330,15 @@ impl Provider {
         )
     }
 
-    /// Google, with its OAuth client. `endpoints` are [`Endpoints::google`] outside tests.
+    /// Google, with its OAuth client, as `google`. `endpoints` are [`Endpoints::google`] outside
+    /// tests.
     #[must_use]
-    pub fn google(client_id: String, client_secret: String, endpoints: Endpoints) -> Self {
-        Self::builtin(
+    pub fn google(
+        client_id: String,
+        client_secret: impl Into<ClientSecret>,
+        endpoints: Endpoints,
+    ) -> Self {
+        Self::fixed(
             Kind::Google,
             "Google",
             "https://accounts.google.com",
@@ -335,12 +348,12 @@ impl Provider {
         )
     }
 
-    fn builtin(
+    fn fixed(
         kind: Kind,
         label: &str,
         issuer: &str,
         client_id: String,
-        client_secret: String,
+        client_secret: impl Into<ClientSecret>,
         endpoints: Endpoints,
     ) -> Self {
         Self {
@@ -349,7 +362,7 @@ impl Provider {
             kind,
             issuer: issuer.to_owned(),
             client_id,
-            client_secret: ClientSecret::Fixed(client_secret),
+            client_secret: client_secret.into(),
             endpoints: Source::Fixed(endpoints),
             jwks: Mutex::new(None),
             provisioning: None,
@@ -431,6 +444,14 @@ impl Provider {
             username,
             display_name,
         })
+    }
+
+    /// The same provider under another ID and button name.
+    #[must_use]
+    pub fn named(mut self, id: String, label: String) -> Self {
+        self.id = id;
+        self.label = label;
+        self
     }
 
     /// Which kind of provider.
@@ -568,27 +589,13 @@ impl Provider {
             Kind::GitHub => {
                 query.append_pair("allow_signup", "false");
             }
-            Kind::Google => {
+            Kind::Google | Kind::Oidc => {
                 query
-                    .append_pair("scope", "openid")
-                    .append_pair("nonce", nonce)
-                    .append_pair("prompt", "select_account");
-            }
-            Kind::Oidc => {
-                let scope = self.provisioning.as_ref().map_or_else(
-                    || "openid".to_owned(),
-                    |rule| {
-                        let mut scope = "openid profile email".to_owned();
-                        for extra in &rule.scopes {
-                            scope.push(' ');
-                            scope.push_str(extra);
-                        }
-                        scope
-                    },
-                );
-                query
-                    .append_pair("scope", &scope)
+                    .append_pair("scope", &self.scope())
                     .append_pair("nonce", nonce);
+                if self.kind == Kind::Google {
+                    query.append_pair("prompt", "select_account");
+                }
             }
         }
         let separator = if endpoints.authorize.contains('?') {
@@ -597,6 +604,19 @@ impl Provider {
             '?'
         };
         format!("{}{separator}{}", endpoints.authorize, query.finish())
+    }
+
+    /// `openid` alone, or, to create users, with the profile, email and the rule's scopes.
+    fn scope(&self) -> String {
+        let Some(rule) = &self.provisioning else {
+            return "openid".to_owned();
+        };
+        let mut scope = "openid profile email".to_owned();
+        for extra in &rule.scopes {
+            scope.push(' ');
+            scope.push_str(extra);
+        }
+        scope
     }
 
     /// Exchanges the code and returns the account's stable identifier.
@@ -815,58 +835,36 @@ fn basic_authorization(client_id: &str, secret: &str) -> Result<HeaderValue, Ups
         .map_err(|_header| UpstreamError::Protocol("client credentials"))
 }
 
-/// The enabled providers: GitHub and Google from the command line, and the configured OpenID
-/// Connect providers, which change while the server runs.
+/// The enabled providers, the `UpstreamProvider` objects, which change while the server runs.
 #[derive(Debug, Default)]
 pub struct Providers {
-    builtin: Vec<Arc<Provider>>,
     configured: RwLock<Vec<Arc<Provider>>>,
 }
 
 impl Providers {
-    /// The built-in providers, and no configured ones yet.
+    /// These providers, until [`Providers::set_configured`] replaces them.
     #[must_use]
-    pub fn new(builtin: Vec<Provider>) -> Self {
+    pub fn new(providers: Vec<Provider>) -> Self {
         Self {
-            builtin: builtin.into_iter().map(Arc::new).collect(),
-            configured: RwLock::default(),
+            configured: RwLock::new(providers.into_iter().map(Arc::new).collect()),
         }
     }
 
-    /// Replaces the configured providers. One whose ID is a built-in provider's is left out.
+    /// Replaces the providers.
     pub fn set_configured(&self, providers: Vec<Arc<Provider>>) {
-        let mut kept = Vec::with_capacity(providers.len());
-        for provider in providers {
-            if Kind::RESERVED.contains(&provider.id()) {
-                tracing::warn!(
-                    provider = provider.id(),
-                    "an UpstreamProvider cannot use the ID of a built-in provider; ignored"
-                );
-            } else {
-                kept.push(provider);
-            }
-        }
         *self
             .configured
             .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = kept;
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = providers;
     }
 
-    /// The configured providers.
+    /// Every enabled provider, in a stable order.
     #[must_use]
-    pub fn configured(&self) -> Vec<Arc<Provider>> {
+    pub fn all(&self) -> Vec<Arc<Provider>> {
         self.configured
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
-    }
-
-    /// Every enabled provider, built-in first, in a stable order.
-    #[must_use]
-    pub fn all(&self) -> Vec<Arc<Provider>> {
-        let mut all = self.builtin.clone();
-        all.extend(self.configured());
-        all
     }
 
     /// The provider with this ID.
