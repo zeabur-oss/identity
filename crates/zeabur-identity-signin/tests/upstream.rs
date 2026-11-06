@@ -328,19 +328,7 @@ mod tests {
                 token_auth: TokenAuth::Post,
             },
         );
-        let google = Provider::google(
-            "google-client".into(),
-            "google-secret".to_owned(),
-            Endpoints {
-                authorize: "https://google.test/authorize".into(),
-                token: "https://google.test/token".into(),
-                user: None,
-                jwks: Some("https://google.test/jwks".into()),
-                issuers: Endpoints::google().issuers,
-                token_auth: TokenAuth::Post,
-            },
-        );
-        let providers = Arc::new(Providers::new(vec![github, google, acme()]));
+        let providers = Arc::new(Providers::new(vec![github, google(), acme()]));
         let sign_in = Arc::new(SignIn {
             oauth: Arc::clone(&oauth),
             passkeys: Passkeys::new(&issuer).unwrap(),
@@ -1046,6 +1034,53 @@ mod tests {
             .sign_in
             .providers
             .set_configured(vec![Arc::new(acme().with_provisioning(rule))]);
+    }
+
+    fn google() -> Provider {
+        Provider::google(
+            "google-client".into(),
+            "google-secret".to_owned(),
+            Endpoints {
+                authorize: "https://google.test/authorize".into(),
+                token: "https://google.test/token".into(),
+                user: None,
+                jwks: Some("https://google.test/jwks".into()),
+                issuers: Endpoints::google().issuers,
+                token_auth: TokenAuth::Post,
+            },
+        )
+    }
+
+    /// A Google provider creates users for a Workspace domain through `hd`, and asks for the
+    /// email address the username comes from.
+    #[tokio::test]
+    async fn google_creates_users_for_a_workspace_domain() {
+        let h = harness().await;
+        let rule = Provisioning {
+            claim: "hd".into(),
+            values: vec!["example.com".into()],
+            scopes: Vec::new(),
+        };
+        h.service
+            .sign_in
+            .providers
+            .set_configured(vec![Arc::new(google().with_provisioning(rule))]);
+        *h.fake.id_token_overrides.lock().unwrap() = json!({
+            "hd": "example.com",
+            "email": "Frank@example.com",
+        });
+        let flow = authorize(&h, "openid").await;
+        let started = start(&h, "google", &json!({}), &format!("{FLOW_COOKIE}={flow}")).await;
+        let url = started.json()["redirect_to"].as_str().unwrap().to_owned();
+        let query: HashMap<String, String> =
+            form_urlencoded::parse(url.split_once('?').unwrap().1.as_bytes())
+                .into_owned()
+                .collect();
+        assert_eq!(query["scope"], "openid profile email");
+
+        let reply = sign_in(&h, "google", "code-frank").await;
+        assert_eq!(reply.status, StatusCode::SEE_OTHER, "{}", reply.body);
+        assert!(user(&h, "frank").await.is_some());
     }
 
     async fn user(h: &Harness, name: &str) -> Option<User> {
