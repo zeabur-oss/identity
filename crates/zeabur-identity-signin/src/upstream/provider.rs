@@ -192,6 +192,36 @@ pub struct Provider {
     client_secret: ClientSecret,
     endpoints: Source,
     jwks: Mutex<Option<(UnixTime, Vec<VerificationKey>)>>,
+    provisioning: Option<Provisioning>,
+}
+
+/// Which accounts of a configured provider get a user at first sign-in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Provisioning {
+    /// The ID token claim to check.
+    pub claim: String,
+    /// The values that allow it.
+    pub values: Vec<String>,
+    /// Scopes to ask for besides `openid profile email`.
+    pub scopes: Vec<String>,
+}
+
+/// Who signed in at the provider.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Identity {
+    /// The account's subject.
+    pub subject: String,
+    /// The ID token's claims; empty for GitHub.
+    pub claims: serde_json::Map<String, serde_json::Value>,
+}
+
+/// The user to create for an account at first sign-in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Provisioned {
+    /// From `preferred_username`, or else `email`, up to any `@`, in lowercase.
+    pub username: String,
+    /// From `name`.
+    pub display_name: Option<String>,
 }
 
 impl std::fmt::Debug for Provider {
@@ -322,6 +352,7 @@ impl Provider {
             client_secret: ClientSecret::Fixed(client_secret),
             endpoints: Source::Fixed(endpoints),
             jwks: Mutex::new(None),
+            provisioning: None,
         }
     }
 
@@ -343,7 +374,63 @@ impl Provider {
             client_secret,
             endpoints: Source::Discovered(Mutex::new(None)),
             jwks: Mutex::new(None),
+            provisioning: None,
         }
+    }
+
+    /// Lets first sign-in create a user, for accounts [`Provisioning`] allows.
+    #[must_use]
+    pub fn with_provisioning(mut self, provisioning: Provisioning) -> Self {
+        self.provisioning = Some(provisioning);
+        self
+    }
+
+    /// Whether first sign-in may create a user.
+    #[must_use]
+    pub const fn provisions(&self) -> bool {
+        self.provisioning.is_some()
+    }
+
+    /// The user to create for `identity`, or why there is none: the provider doesn't create
+    /// users, the account's claims don't allow it, or no usable username comes with it.
+    ///
+    /// # Errors
+    ///
+    /// A short reason, for the log.
+    pub fn provisioned(&self, identity: &Identity) -> Result<Provisioned, &'static str> {
+        let rule = self.provisioning.as_ref().ok_or("not_provisioned")?;
+        let allowed = match identity.claims.get(&rule.claim) {
+            Some(serde_json::Value::String(value)) => rule.values.contains(value),
+            Some(serde_json::Value::Array(values)) => values
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .any(|value| rule.values.iter().any(|v| v == value)),
+            _ => false,
+        };
+        if !allowed {
+            return Err("claim_not_allowed");
+        }
+        let text = |name: &str| {
+            identity
+                .claims
+                .get(name)
+                .and_then(serde_json::Value::as_str)
+        };
+        let name = text("preferred_username")
+            .or_else(|| text("email"))
+            .ok_or("no_username")?;
+        let username = name.split('@').next().unwrap_or_default().to_lowercase();
+        if !valid_username(&username) {
+            return Err("unusable_username");
+        }
+        let display_name = text("name")
+            .map(str::trim)
+            .filter(|n| !n.is_empty() && n.chars().count() <= 128)
+            .map(str::to_owned);
+        Ok(Provisioned {
+            username,
+            display_name,
+        })
     }
 
     /// Which kind of provider.
@@ -488,8 +575,19 @@ impl Provider {
                     .append_pair("prompt", "select_account");
             }
             Kind::Oidc => {
+                let scope = self.provisioning.as_ref().map_or_else(
+                    || "openid".to_owned(),
+                    |rule| {
+                        let mut scope = "openid profile email".to_owned();
+                        for extra in &rule.scopes {
+                            scope.push(' ');
+                            scope.push_str(extra);
+                        }
+                        scope
+                    },
+                );
                 query
-                    .append_pair("scope", "openid")
+                    .append_pair("scope", &scope)
                     .append_pair("nonce", nonce);
             }
         }
@@ -511,7 +609,7 @@ impl Provider {
         http: &H,
         exchange: Exchange<'_>,
         now: UnixTime,
-    ) -> Result<String, UpstreamError> {
+    ) -> Result<Identity, UpstreamError> {
         let endpoints = self.endpoints(http, now).await?;
         let secret = self.client_secret.read().await?;
         let request = self.token_request(&endpoints, exchange, &secret)?;
@@ -526,13 +624,17 @@ impl Provider {
                 let access = tokens
                     .access_token
                     .ok_or(UpstreamError::Protocol("no access token"))?;
-                self.github_user(http, &endpoints, &access).await
+                let subject = self.github_user(http, &endpoints, &access).await?;
+                Ok(Identity {
+                    subject,
+                    claims: serde_json::Map::new(),
+                })
             }
             Kind::Google | Kind::Oidc => {
                 let id_token = tokens
                     .id_token
                     .ok_or(UpstreamError::Protocol("no ID token"))?;
-                self.id_token_subject(http, &endpoints, &id_token, exchange.nonce, now)
+                self.id_token_identity(http, &endpoints, &id_token, exchange.nonce, now)
                     .await
             }
         }
@@ -641,14 +743,14 @@ impl Provider {
         Ok(keys)
     }
 
-    async fn id_token_subject<H: HttpClient>(
+    async fn id_token_identity<H: HttpClient>(
         &self,
         http: &H,
         endpoints: &Endpoints,
         id_token: &str,
         nonce: &str,
         now: UnixTime,
-    ) -> Result<String, UpstreamError> {
+    ) -> Result<Identity, UpstreamError> {
         const ALGORITHMS: [Algorithm; 2] = [Algorithm::Rs256, Algorithm::Es256];
         let keys = self.keys(http, endpoints, now, false).await?;
         let verified = match verify_compact(id_token, &keys, &ALGORITHMS) {
@@ -695,7 +797,12 @@ impl Provider {
         if claims.sub.is_empty() || claims.sub.len() > 255 {
             return Err(UpstreamError::IdToken("subject"));
         }
-        Ok(claims.sub)
+        let all =
+            serde_json::from_slice(&payload).map_err(|_json| UpstreamError::IdToken("claims"))?;
+        Ok(Identity {
+            subject: claims.sub,
+            claims: all,
+        })
     }
 }
 
@@ -776,4 +883,26 @@ impl Providers {
                 && (kind != CredentialType::Oidc || provider.issuer() == issuer)
         })
     }
+}
+
+/// A `User` username: a lowercase DNS subdomain of at most 63 characters.
+fn valid_username(name: &str) -> bool {
+    if name.is_empty() || name.len() > 63 {
+        return false;
+    }
+    for label in name.split('.') {
+        let bytes = label.as_bytes();
+        let (Some(first), Some(last)) = (bytes.first(), bytes.last()) else {
+            return false;
+        };
+        if !first.is_ascii_alphanumeric() || !last.is_ascii_alphanumeric() {
+            return false;
+        }
+        for byte in bytes {
+            if !(byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-') {
+                return false;
+            }
+        }
+    }
+    true
 }

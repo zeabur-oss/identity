@@ -26,13 +26,15 @@
 //! [UID]: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids
 
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::StreamExt as _;
 use k8s_openapi::api::core::v1::ConfigMap;
-use kube::api::Api;
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+use kube::api::{Api, PostParams};
 use kube::core::{NamespaceResourceScope, PartialObjectMeta};
 use kube::runtime::reflector::store::Writer;
 use kube::runtime::reflector::{self, ObjectRef, Store};
@@ -42,10 +44,10 @@ use serde::de::DeserializeOwned;
 use tokio::task::JoinHandle;
 use zeabur_identity_core::account::{SETTINGS_CONFIG_MAP, Settings};
 use zeabur_identity_keys::Algorithm;
-use zeabur_identity_store::{App, Client, Directory, StoreError, User};
+use zeabur_identity_store::{App, Client, CreateUser, Directory, NewUser, StoreError, User};
 
 use crate::crd::client::OAuthClient;
-use crate::crd::user::User as UserObject;
+use crate::crd::user::{CREATED_FOR, User as UserObject, UserSpec};
 use crate::watch::relisting_watcher;
 
 /// Maximum startup wait for complete directory metadata snapshots.
@@ -276,6 +278,45 @@ impl Directory for KubeDirectory {
             .map(|object| client(OAuthClient::clone(object)))
             .collect();
         zeabur_identity_store::apps(&clients)
+    }
+
+    async fn create_user(&self, user: &NewUser) -> Result<CreateUser, StoreError> {
+        let object = UserObject {
+            metadata: ObjectMeta {
+                name: Some(user.username.clone()),
+                annotations: Some(BTreeMap::from([(
+                    CREATED_FOR.to_owned(),
+                    user.created_for.clone(),
+                )])),
+                ..ObjectMeta::default()
+            },
+            spec: UserSpec {
+                username: user.username.clone(),
+                display_name: user.display_name.clone(),
+                ..UserSpec::default()
+            },
+        };
+        match self.users.create(&PostParams::default(), &object).await {
+            Ok(created) => convert(created)
+                .map(CreateUser::Created)
+                .ok_or_else(|| StoreError("the created user has no UID".to_owned())),
+            Err(kube::Error::Api(status)) if status.code == 409 => {
+                let existing = self
+                    .users
+                    .get_opt(&user.username)
+                    .await
+                    .map_err(|e| backend(&e))?
+                    .ok_or_else(|| {
+                        StoreError("the user was deleted while being created".to_owned())
+                    })?;
+                let same_account =
+                    existing.annotations().get(CREATED_FOR) == Some(&user.created_for);
+                let user = convert(existing)
+                    .ok_or_else(|| StoreError("the user has no UID".to_owned()))?;
+                Ok(CreateUser::Exists { user, same_account })
+            }
+            Err(error) => Err(backend(&error)),
+        }
     }
 
     async fn user_by_subject(&self, subject: &str) -> Result<Option<User>, StoreError> {

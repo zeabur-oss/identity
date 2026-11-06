@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::future::{self, Future};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
 
 use schemars::JsonSchema;
@@ -171,6 +172,37 @@ pub trait Directory: Send + Sync + 'static {
     /// The install-wide account settings, read from storage on each call. They decide who may
     /// sign in, so a cache could keep a revoked method working.
     fn settings(&self) -> impl Future<Output = Result<Settings, StoreError>> + Send;
+    /// Creates a regular user with no groups, for an account at a provider that allows it.
+    fn create_user(
+        &self,
+        user: &NewUser,
+    ) -> impl Future<Output = Result<CreateUser, StoreError>> + Send;
+}
+
+/// A user to create on first sign-in: always a regular account with no groups.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewUser {
+    /// Login name, also the object name.
+    pub username: String,
+    /// Display name.
+    pub display_name: Option<String>,
+    /// The linked-account credential name ([`external_credential_name`]) the user is created for.
+    pub created_for: String,
+}
+
+/// Outcome of [`Directory::create_user`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CreateUser {
+    /// Created.
+    Created(User),
+    /// A user with that name exists. `same_account` is whether it was created for the same
+    /// linked account, as when linking failed after the user was created.
+    Exists {
+        /// The existing user.
+        user: User,
+        /// Created for [`NewUser::created_for`].
+        same_account: bool,
+    },
 }
 
 /// A refresh-token family to create.
@@ -378,11 +410,15 @@ pub fn rotated(grant: &Grant, next_hash: &str, idle_expires_at: UnixTime) -> Gra
     }
 }
 
+/// UIDs for users [`MemoryDirectory`] creates: never reused, like object UIDs.
+static NEXT_UID: AtomicU64 = AtomicU64::new(1);
+
 /// In-memory directory, for tests.
 #[derive(Debug, Default)]
 pub struct MemoryDirectory {
     clients: Mutex<HashMap<String, Client>>,
     users: Mutex<HashMap<String, User>>,
+    created_for: Mutex<HashMap<String, String>>,
     settings: Mutex<Settings>,
 }
 
@@ -453,6 +489,38 @@ impl Directory for MemoryDirectory {
             .settings
             .lock()
             .unwrap_or_else(PoisonError::into_inner)))
+    }
+
+    fn create_user(
+        &self,
+        user: &NewUser,
+    ) -> impl Future<Output = Result<CreateUser, StoreError>> + Send {
+        let mut users = self.users.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut created_for = self
+            .created_for
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let result = if let Some(existing) = users.get(&user.username) {
+            CreateUser::Exists {
+                user: existing.clone(),
+                same_account: created_for.get(&user.username) == Some(&user.created_for),
+            }
+        } else {
+            let created = User {
+                name: user.username.clone(),
+                subject: format!("created-{}", NEXT_UID.fetch_add(1, Ordering::Relaxed)),
+                username: user.username.clone(),
+                display_name: user.display_name.clone(),
+                groups: Vec::new(),
+                disabled: false,
+                account_type: AccountType::Regular,
+            };
+            users.insert(created.name.clone(), created.clone());
+            created_for.insert(created.name.clone(), user.created_for.clone());
+            CreateUser::Created(created)
+        };
+        drop((users, created_for));
+        future::ready(Ok(result))
     }
 }
 

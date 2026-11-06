@@ -3,7 +3,7 @@
 //!
 //! Generated from code so the deployment manifest and the integration tests use the same rules;
 //! the tests act as the service account through impersonation and show that it cannot list
-//! Secrets, read or create other Secrets, bind `cluster-admin`, create `User`s, or read grants in
+//! Secrets, read or create other Secrets, bind `cluster-admin`, change `User`s, or read grants in
 //! another namespace.
 //!
 //! - **Secrets by name only.** `get`/`update` on the signing keys, `get`/`delete` on the setup
@@ -18,7 +18,10 @@
 //!   by admins or GitOps; Zeabur Identity reads them and creates or deletes credentials when a
 //!   passkey is enrolled, removed or an account is linked. On credentials it may write only
 //!   `status` (the label a user gives a passkey, and when it was last used), never the key
-//!   material. It has no write access to users.
+//!   material. It can create users, for providers that create one at first sign-in, but not change
+//!   or delete them. RBAC cannot keep a created user from being an admin; the code only creates
+//!   regular users with no groups. This adds no power: holding the signing keys and `create` on
+//!   credentials, Zeabur Identity can already act as any user.
 //! - **Account settings.** It reads one `ConfigMap`, [`SETTINGS_CONFIG_MAP`], by name. Admins write
 //!   it.
 //! - **Account events.** It creates core `Event`s about users who change their own passkeys or
@@ -97,6 +100,8 @@ pub fn rules() -> Vec<PolicyRule> {
             &[],
             &["get", "list", "watch"],
         ),
+        // Users created at first sign-in, for providers that allow it.
+        rule(&[GROUP], &["users"], &[], &["create"]),
         // Runtime state Zeabur Identity owns.
         rule(&[GROUP], &["credentials"], &[], &["create", "delete"]),
         rule(&[GROUP], &["credentials/status"], &[], &["update", "patch"]),

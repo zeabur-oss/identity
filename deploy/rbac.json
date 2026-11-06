@@ -114,6 +114,17 @@
             "identity.zeabur.com"
           ],
           "resources": [
+            "users"
+          ],
+          "verbs": [
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            "identity.zeabur.com"
+          ],
+          "resources": [
             "credentials"
           ],
           "verbs": [

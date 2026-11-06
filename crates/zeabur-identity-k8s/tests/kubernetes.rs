@@ -484,6 +484,7 @@ mod tests {
                     issuer: issuer.into(),
                     client_id: "zeabur-identity".into(),
                     client_secret_key: key.into(),
+                    provisioning: None,
                 },
             )
         };
@@ -654,22 +655,30 @@ mod tests {
             ),
             Some(403)
         );
-        // Denied: writing users (configuration is read-only).
+        // Allowed: creating a user (at first sign-in). Denied: changing or deleting one.
         let users: Api<User> = env.zeabur_identity_api();
         let user = User::new(
             "bob",
             UserSpec {
                 username: "bob".into(),
-                display_name: None,
-                groups: vec![],
-                disabled: false,
                 ..UserSpec::default()
             },
+        );
+        let mut created = users.create(&PostParams::default(), &user).await.unwrap();
+        created.spec.groups = vec!["ops".into()];
+        assert_eq!(
+            status_code(
+                &users
+                    .replace("bob", &PostParams::default(), &created)
+                    .await
+                    .unwrap_err()
+            ),
+            Some(403)
         );
         assert_eq!(
             status_code(
                 &users
-                    .create(&PostParams::default(), &user)
+                    .delete("bob", &DeleteParams::default())
                     .await
                     .unwrap_err()
             ),
@@ -700,6 +709,7 @@ mod tests {
                 issuer: "https://idp.acme.test".into(),
                 client_id: "zeabur-identity".into(),
                 client_secret_key: "acme".into(),
+                provisioning: None,
             },
         );
         assert_eq!(

@@ -6,6 +6,7 @@
 )]
 
 use kube::{CustomResource, KubeSchema};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// The Secret holding every provider's client secret, one key per provider. A fixed name lets
@@ -24,6 +25,8 @@ pub const ISSUER_RULE: &str = concat!(
     " && !self.contains('?') && !self.contains('#')",
     " && url(self).getScheme() == 'https' && url(self).getHostname() != ''",
 );
+/// A scope token (RFC 6749 §3.3).
+pub const SCOPE_PATTERN: &str = r"^[!#-\[\]-~]+$";
 /// A key in a Secret's `data` (Kubernetes allows these characters).
 pub const SECRET_KEY_PATTERN: &str = r"^[-._a-zA-Z0-9]+$";
 
@@ -69,6 +72,29 @@ pub struct UpstreamProviderSpec {
     /// namespace.
     #[schemars(length(min = 1, max = 253), regex(pattern = SECRET_KEY_PATTERN))]
     pub client_secret_key: String,
+
+    /// Create a user at an account's first sign-in, when its ID token's `claim` has one of
+    /// `values`. Unset, accounts must be linked first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provisioning: Option<Provisioning>,
+}
+
+/// Which accounts get a user at first sign-in.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Provisioning {
+    /// An ID token claim, such as `hd` or `groups`.
+    #[schemars(length(min = 1, max = 64), regex(pattern = r"^[!-~]+$"))]
+    pub claim: String,
+
+    /// The values that allow it. The claim must be one of them, or, for a list, contain one.
+    #[schemars(length(min = 1, max = 32), inner(length(min = 1, max = 256)))]
+    pub values: Vec<String>,
+
+    /// Scopes to ask for besides `openid profile email`, such as one that adds a groups claim.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(length(max = 8), inner(length(min = 1, max = 64), regex(pattern = SCOPE_PATTERN)))]
+    pub scopes: Vec<String>,
 }
 
 #[cfg(test)]

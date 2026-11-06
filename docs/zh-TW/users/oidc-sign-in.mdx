@@ -16,7 +16,7 @@ description: 加入 Keycloak、Microsoft Entra ID 或 Okta 等 OpenID Connect �
 
 以下範例以 `https://identity.example.com` 作為 Zeabur Identity 的 Issuer，以 `acme` 作為提供者的 ID。
 
-使用者必須先把帳號連結到 Zeabur Identity 使用者，才能登入。Zeabur Identity 不會在首次登入時建立使用者，也不會依電子郵件地址或名稱比對帳號。使用者的群組和顯示名稱取自 `User`，不取自提供者。
+使用者必須先把帳號連結到 Zeabur Identity 使用者，才能登入；如果照下方的說明，讓 Zeabur Identity 在首次登入時建立使用者，就不必連結。Zeabur Identity 不會依電子郵件地址或名稱，把帳號對應到既有的使用者。使用者的群組取自 `User`，不取自提供者。
 
 ## 加入提供者
 
@@ -102,6 +102,27 @@ spec:
 rm -rf ~/.kube/cache/oidc-login
 kubectl auth whoami
 ```
+
+## 首次登入時建立使用者
+
+不想逐一連結帳號時，可以讓 Zeabur Identity 在符合條件的帳號首次登入時，自動建立一般帳號的 `User`。條件依 ID token 中的宣告判斷，例如群組：
+
+```yaml
+spec:
+  # displayName, issuer, clientId and clientSecretKey as above
+  provisioning:
+    claim: groups
+    values: [zeabur-users]
+    scopes: [groups]              # only if the provider adds the claim for a scope
+```
+
+- 宣告的值必須是 `values` 之一；如果宣告是群組這類清單，只要包含其中一個值即可。Zeabur Identity 會要求 `openid profile email` 範圍，再加上 `scopes`。
+- 使用者名稱取自 `preferred_username`，缺少時改用 `email`，取 `@` 之前的部分並轉成小寫。如果名稱不符合使用者名稱的規則，或已有 `User` 使用這個名稱，登入會失敗，也不會連結任何帳號。這時請改用邀請的方式連結該帳號。
+- 新建的 `User` 是一般帳號，沒有群組，顯示名稱取自 `name`，並會記錄 `UserCreated` 事件。要開放存取，把角色綁定到 `zeabur:<username>`，或在 `User` 加上群組。
+- 選用只有管理員能修改的宣告。能設定 `preferred_username` 的人就能決定使用者名稱，也就取得了已綁定到這個名稱的角色。
+- 要阻止某人登入，請停用對方的 `User`，或在提供者端把對方移出群組。只刪除 `User` 不夠，對方下次登入時會再建立一次。
+
+如果使用 Google Workspace，把 Google 新增為 `UpstreamProvider`：issuer 填 `https://accounts.google.com`，名稱不能用 `google`，`claim` 設為 `hd`，`values` 填你的網域。
 
 ## 修改或移除提供者
 

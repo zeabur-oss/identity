@@ -39,7 +39,7 @@ use zeabur_identity_oauth::{AuthorizationServer, OneTimeIds, endpoints};
 use zeabur_identity_signin::passkeys::Passkeys;
 use zeabur_identity_signin::upstream::http::HyperClient;
 use zeabur_identity_signin::upstream::provider::{
-    ClientSecret, Endpoints, Kind, Provider, Providers,
+    ClientSecret, Endpoints, Kind, Provider, Providers, Provisioning,
 };
 use zeabur_identity_signin::upstream::{self, Upstream};
 use zeabur_identity_signin::{SignIn, pages};
@@ -195,13 +195,21 @@ fn configured_provider(object: &UpstreamProvider, secrets: &Api<Secret>) -> Prov
         let (secrets, key) = (secrets.clone(), key.clone());
         Box::pin(async move { zeabur_identity_k8s::upstream::client_secret(&secrets, &key).await })
     }));
-    Provider::oidc(
+    let provider = Provider::oidc(
         object.metadata.name.clone().unwrap_or_default(),
         spec.display_name.clone(),
         spec.issuer.clone(),
         spec.client_id.clone(),
         fetch,
-    )
+    );
+    match &spec.provisioning {
+        Some(rule) => provider.with_provisioning(Provisioning {
+            claim: rule.claim.clone(),
+            values: rule.values.clone(),
+            scopes: rule.scopes.clone(),
+        }),
+        None => provider,
+    }
 }
 
 /// The built-in upstream providers, with their client secrets read from files.
