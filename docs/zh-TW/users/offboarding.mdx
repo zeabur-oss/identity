@@ -71,6 +71,8 @@ kubectl -n zeabur-identity delete zbuser alice
 
 這些物件都綁定原本 `User` 的 UID。即使建立同名的 `User`，新物件也會取得新的 UID。
 
+如果 OpenID Connect 提供者的使用者會在首次登入時自動建立，對方下次登入時會再建立一次 `User`。請改為停用 `User`，或在提供者端移除對方。
+
 使用者手上的權杖到期前仍可使用，最長 10 分鐘。
 
 Kubernetes 垃圾回收機制稍後會刪除相關物件。如果要立即刪除，可以在刪除 `User` 前或後執行：

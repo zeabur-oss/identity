@@ -38,7 +38,9 @@ use zeabur_identity_oauth::metadata::{AppState, router};
 use zeabur_identity_oauth::{AuthorizationServer, OneTimeIds, endpoints};
 use zeabur_identity_signin::passkeys::Passkeys;
 use zeabur_identity_signin::upstream::http::HyperClient;
-use zeabur_identity_signin::upstream::provider::{ClientSecret, Endpoints, Provider, Providers};
+use zeabur_identity_signin::upstream::provider::{
+    ClientSecret, Endpoints, Provider, Providers, Provisioning,
+};
 use zeabur_identity_signin::upstream::{self, Upstream};
 use zeabur_identity_signin::{SignIn, pages};
 use zeabur_identity_store::{CredentialStore, Directory, GrantStore, SetupStore};
@@ -196,7 +198,7 @@ fn configured_provider(object: &UpstreamProvider, secrets: &Api<Secret>) -> Prov
     let id = object.metadata.name.clone().unwrap_or_default();
     let label = spec.display_name.clone();
     let client_id = spec.client_id.clone();
-    match spec.kind {
+    let provider = match spec.kind {
         ProviderType::GitHub => {
             Provider::github(client_id, fetch, Endpoints::github()).named(id, label)
         }
@@ -210,6 +212,14 @@ fn configured_provider(object: &UpstreamProvider, secrets: &Api<Secret>) -> Prov
             client_id,
             fetch,
         ),
+    };
+    match &spec.provisioning {
+        Some(rule) => provider.with_provisioning(Provisioning {
+            claim: rule.claim.clone(),
+            values: rule.values.clone(),
+            scopes: rule.scopes.clone(),
+        }),
+        None => provider,
     }
 }
 

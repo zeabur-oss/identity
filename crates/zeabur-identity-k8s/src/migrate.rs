@@ -86,6 +86,7 @@ pub async fn plan(client: kube::Client, namespace: &str) -> Result<Vec<Migration
                 issuer: None,
                 client_id: legacy.client_id,
                 client_secret_key: legacy.name.to_owned(),
+                provisioning: None,
             },
         );
         provider.metadata.namespace = Some(namespace.to_owned());

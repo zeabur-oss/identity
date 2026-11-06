@@ -64,14 +64,14 @@ use zeabur_identity_oauth::authorize::Authentication;
 use zeabur_identity_oauth::endpoints::{FLOW_COOKIE, complete_authorization, open_flow};
 use zeabur_identity_oauth::{OneTimeIds, Use};
 use zeabur_identity_store::{
-    Consume, CreateCredential, CredentialStore, Directory, GrantStore, NewExternal, SetupStore,
-    User, external_credential_name,
+    Consume, CreateCredential, CreateUser, CredentialStore, Directory, GrantStore, LinkedAccount,
+    NewExternal, NewUser, SetupStore, User, external_credential_name,
 };
 use zeabur_identity_ui::i18n::Lang;
 use zeabur_identity_ui::pages::{ErrorReason, accept_language, error_page, notice_page};
 
 use self::http::HttpClient;
-use self::provider::{Exchange, Provider, UpstreamError};
+use self::provider::{Exchange, Identity, Provider, UpstreamError};
 use crate::account::{Account, Audit, current, log_outcome, record, require_fresh, signed_in};
 use crate::device::Requester;
 use crate::problem::Problem;
@@ -424,6 +424,94 @@ fn failure(lang: Lang, reason: ErrorReason, detail: &str) -> Response {
 /// Why a callback failed: the audit `reason`, what the page says, and a note for the details.
 type Failure = (&'static str, ErrorReason, Option<String>);
 
+/// Creates a user for an account at its first sign-in, if the provider allows it, and links the
+/// account. A user left from an earlier attempt for the same account, whose link failed, is
+/// linked; any other user with the name is never linked.
+async fn provision<D, G, C, K, S>(
+    sign_in: &SignIn<D, G, C, K, S>,
+    provider: &Provider,
+    identity: &Identity,
+    name: &str,
+    requester: &Requester,
+    now: UnixTime,
+) -> Result<LinkedAccount, Failure>
+where
+    D: Directory,
+    G: GrantStore,
+    C: Clock,
+    K: CredentialStore,
+    S: SetupStore,
+{
+    let fields = provider.provisioned(identity).map_err(|reason| {
+        tracing::info!(reason, "first sign-in creates no user");
+        (
+            "account_unlinked",
+            ErrorReason::AccountNotLinked,
+            Some(reason.to_owned()),
+        )
+    })?;
+    let new_user = NewUser {
+        username: fields.username,
+        display_name: fields.display_name,
+        created_for: name.to_owned(),
+    };
+    let created = sign_in
+        .oauth
+        .directory
+        .create_user(&new_user)
+        .await
+        .map_err(|error| {
+            tracing::error!(reason = "user_create_failed", %error, "creating the user failed");
+            ("user_create_failed", ErrorReason::ServerError, None)
+        })?;
+    let user = match created {
+        CreateUser::Created(user) => {
+            let audit = Audit {
+                credential: Some(name.to_owned()),
+                requester: Some(requester),
+                ..Audit::default()
+            };
+            record(sign_in, &user, "UserCreated", &audit, now).await;
+            user
+        }
+        CreateUser::Exists {
+            user,
+            same_account: true,
+        } => user,
+        CreateUser::Exists {
+            user,
+            same_account: false,
+        } => {
+            tracing::warn!(reason = "username_taken", user = %user.name, "first sign-in creates no user: the username is taken");
+            return Err((
+                "username_taken",
+                ErrorReason::AccountNotLinked,
+                Some(format!("username {} is taken", user.name)),
+            ));
+        }
+    };
+    let external = NewExternal {
+        name: name.to_owned(),
+        user: user.name.clone(),
+        kind: provider.kind().credential_type(),
+        issuer: provider.issuer().to_owned(),
+        subject: identity.subject.clone(),
+        user_subject: user.subject.clone(),
+    };
+    match sign_in.credentials.link(&external).await {
+        Ok(CreateCredential::Created | CreateCredential::AlreadyExists) => {}
+        Err(error) => {
+            tracing::error!(reason = "credential_link_failed", %error, "linking the account failed");
+            return Err(("credential_link_failed", ErrorReason::ServerError, None));
+        }
+    }
+    let linked = sign_in.credentials.linked_account(name).await.map_err(|error| {
+        tracing::error!(reason = "credential_lookup_failed", %error, "credential lookup failed");
+        ("credential_lookup_failed", ErrorReason::ServerError, None)
+    })?;
+    linked.ok_or(("account_unlinked", ErrorReason::AccountNotLinked, None))
+}
+
 /// Refuses an admin account: it signs in with a passkey only.
 async fn refuse_admin<D: Directory>(directory: &D, user: &User) -> Result<(), Failure> {
     check_account(directory, user, Method::Upstream)
@@ -536,16 +624,17 @@ where
             redirect_uri: &redirect_uri(oauth.issuer.as_str(), provider),
             nonce: &pending.nonce,
         };
-        let subject = provider
+        let upstream_identity = provider
             .identify(&service.http, exchange, now)
             .await
             .map_err(|error| {
                 tracing::warn!(reason = "provider_verification_failed", %error, "upstream provider verification failed");
                 verification_failure(&error)
             })?;
+        let subject = upstream_identity.subject.clone();
         let issuer = provider.issuer();
         let name = external_credential_name(issuer, &subject);
-        let linked = sign_in
+        let mut linked = sign_in
             .credentials
             .linked_account(&name)
             .await
@@ -570,6 +659,9 @@ where
                 .await;
         }
         let Some(token) = pending.link else {
+            if linked.is_none() && provider.provisions() {
+                linked = Some(provision(sign_in, provider, &upstream_identity, &name, &requester, now).await?);
+            }
             let linked = linked.ok_or(("account_unlinked", ErrorReason::AccountNotLinked, None))?;
             identity = oauth
                 .directory

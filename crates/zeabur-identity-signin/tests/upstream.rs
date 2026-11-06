@@ -36,13 +36,13 @@ mod tests {
     use zeabur_identity_signin::passkeys::Passkeys;
     use zeabur_identity_signin::upstream::http::{HttpClient, HttpError};
     use zeabur_identity_signin::upstream::provider::{
-        ClientSecret, Endpoints, Kind, Provider, Providers, TokenAuth,
+        ClientSecret, Endpoints, Kind, Provider, Providers, Provisioning, TokenAuth,
     };
     use zeabur_identity_signin::upstream::{self, UPSTREAM_COOKIE, Upstream};
     use zeabur_identity_store::{
-        Client, ClientType, CredentialStore as _, Directory as _, GrantStore as _,
+        Client, ClientType, CreateUser, CredentialStore as _, Directory as _, GrantStore as _,
         MemoryCredentialStore, MemoryDirectory, MemoryGrantStore, MemorySetupStore, NewExternal,
-        NewGrant, SetupStore as _, User, external_credential_name,
+        NewGrant, NewUser, SetupStore as _, User, external_credential_name,
     };
     use zeabur_identity_test_support::logging::Capture;
     use zeabur_identity_ui::i18n::Lang;
@@ -328,19 +328,7 @@ mod tests {
                 token_auth: TokenAuth::Post,
             },
         );
-        let google = Provider::google(
-            "google-client".into(),
-            "google-secret".to_owned(),
-            Endpoints {
-                authorize: "https://google.test/authorize".into(),
-                token: "https://google.test/token".into(),
-                user: None,
-                jwks: Some("https://google.test/jwks".into()),
-                issuers: Endpoints::google().issuers,
-                token_auth: TokenAuth::Post,
-            },
-        );
-        let providers = Arc::new(Providers::new(vec![github, google, acme()]));
+        let providers = Arc::new(Providers::new(vec![github, google(), acme()]));
         let sign_in = Arc::new(SignIn {
             oauth: Arc::clone(&oauth),
             passkeys: Passkeys::new(&issuer).unwrap(),
@@ -1033,6 +1021,225 @@ mod tests {
         let reply = sign_in(&h, "acme", "code-other-issuer").await;
         assert_eq!(reply.status, StatusCode::BAD_REQUEST);
         assert_audit(&reply, "auth.sign_in", Some("account_unlinked"), None, None);
+    }
+
+    /// Lets acme create a user at first sign-in for members of the group `staff`.
+    fn provisioning(h: &Harness) {
+        let rule = Provisioning {
+            claim: "groups".into(),
+            values: vec!["staff".into()],
+            scopes: vec!["groups".into()],
+        };
+        h.service
+            .sign_in
+            .providers
+            .set_configured(vec![Arc::new(acme().with_provisioning(rule))]);
+    }
+
+    fn google() -> Provider {
+        Provider::google(
+            "google-client".into(),
+            "google-secret".to_owned(),
+            Endpoints {
+                authorize: "https://google.test/authorize".into(),
+                token: "https://google.test/token".into(),
+                user: None,
+                jwks: Some("https://google.test/jwks".into()),
+                issuers: Endpoints::google().issuers,
+                token_auth: TokenAuth::Post,
+            },
+        )
+    }
+
+    /// A Google provider creates users for a Workspace domain through `hd`, and asks for the
+    /// email address the username comes from.
+    #[tokio::test]
+    async fn google_creates_users_for_a_workspace_domain() {
+        let h = harness().await;
+        let rule = Provisioning {
+            claim: "hd".into(),
+            values: vec!["example.com".into()],
+            scopes: Vec::new(),
+        };
+        h.service
+            .sign_in
+            .providers
+            .set_configured(vec![Arc::new(google().with_provisioning(rule))]);
+        *h.fake.id_token_overrides.lock().unwrap() = json!({
+            "hd": "example.com",
+            "email": "Frank@example.com",
+        });
+        let flow = authorize(&h, "openid").await;
+        let started = start(&h, "google", &json!({}), &format!("{FLOW_COOKIE}={flow}")).await;
+        let url = started.json()["redirect_to"].as_str().unwrap().to_owned();
+        let query: HashMap<String, String> =
+            form_urlencoded::parse(url.split_once('?').unwrap().1.as_bytes())
+                .into_owned()
+                .collect();
+        assert_eq!(query["scope"], "openid profile email");
+
+        let reply = sign_in(&h, "google", "code-frank").await;
+        assert_eq!(reply.status, StatusCode::SEE_OTHER, "{}", reply.body);
+        assert!(user(&h, "frank").await.is_some());
+    }
+
+    async fn user(h: &Harness, name: &str) -> Option<User> {
+        h.service.sign_in.oauth.directory.user(name).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn first_sign_in_creates_a_regular_user_when_the_claim_allows_it() {
+        let h = harness().await;
+        provisioning(&h);
+        *h.fake.id_token_overrides.lock().unwrap() = json!({
+            "preferred_username": "Erin",
+            "name": "Erin Example",
+            "groups": ["dev", "staff"],
+        });
+        let flow = authorize(&h, "openid").await;
+        let started = start(&h, "acme", &json!({}), &format!("{FLOW_COOKIE}={flow}")).await;
+        let url = started.json()["redirect_to"].as_str().unwrap().to_owned();
+        let query: HashMap<String, String> =
+            form_urlencoded::parse(url.split_once('?').unwrap().1.as_bytes())
+                .into_owned()
+                .collect();
+        assert_eq!(query["scope"], "openid profile email groups");
+
+        let reply = sign_in(&h, "acme", "code-first").await;
+        assert_eq!(reply.status, StatusCode::SEE_OTHER, "{}", reply.body);
+        let erin = user(&h, "erin").await.unwrap();
+        assert_eq!(erin.display_name.as_deref(), Some("Erin Example"));
+        assert_eq!(erin.groups, Vec::<String>::new());
+        assert_eq!(erin.account_type, AccountType::Regular);
+        assert_audit(
+            &reply,
+            "auth.sign_in",
+            None,
+            Some("erin"),
+            Some(&erin.subject),
+        );
+
+        // The next sign-in uses the link, not a new user.
+        let reply = sign_in(&h, "acme", "code-next").await;
+        assert_eq!(reply.status, StatusCode::SEE_OTHER, "{}", reply.body);
+        assert_audit(
+            &reply,
+            "auth.sign_in",
+            None,
+            Some("erin"),
+            Some(&erin.subject),
+        );
+    }
+
+    #[tokio::test]
+    async fn first_sign_in_creates_no_user_unless_the_claim_allows_it() {
+        for (i, claims) in [
+            json!({ "preferred_username": "erin", "groups": ["dev"] }),
+            json!({ "preferred_username": "erin", "groups": "dev" }),
+            json!({ "preferred_username": "erin", "groups": [{ "name": "staff" }] }),
+            json!({ "preferred_username": "erin" }),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let h = harness().await;
+            provisioning(&h);
+            *h.fake.id_token_overrides.lock().unwrap() = claims.clone();
+            let reply = sign_in(&h, "acme", &format!("code-{i}")).await;
+            assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{claims}");
+            assert_audit(&reply, "auth.sign_in", Some("account_unlinked"), None, None);
+            assert!(user(&h, "erin").await.is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn the_username_comes_from_preferred_username_or_email() {
+        for (claims, expected) in [
+            (json!({ "email": "Frank@Acme.test" }), Some("frank")),
+            (
+                json!({ "preferred_username": "erin@acme.test", "email": "x@acme.test" }),
+                Some("erin"),
+            ),
+            (
+                json!({ "preferred_username": "erin.example" }),
+                Some("erin.example"),
+            ),
+            (json!({ "preferred_username": "erin example" }), None),
+            (json!({ "preferred_username": "-erin" }), None),
+            (json!({ "preferred_username": "é" }), None),
+            (json!({ "preferred_username": "a".repeat(64) }), None),
+            (json!({}), None),
+        ] {
+            let h = harness().await;
+            provisioning(&h);
+            let mut claims = claims;
+            claims["groups"] = json!("staff");
+            *h.fake.id_token_overrides.lock().unwrap() = claims.clone();
+            let reply = sign_in(&h, "acme", "code-name").await;
+            if let Some(name) = expected {
+                assert_eq!(reply.status, StatusCode::SEE_OTHER, "{claims}");
+                assert!(user(&h, name).await.is_some(), "{claims}");
+            } else {
+                assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{claims}");
+                assert_audit(&reply, "auth.sign_in", Some("account_unlinked"), None, None);
+            }
+        }
+    }
+
+    /// A username that is taken is never linked to the account: that would hand over the user.
+    #[tokio::test]
+    async fn first_sign_in_never_takes_an_existing_user() {
+        let h = harness().await;
+        provisioning(&h);
+        for name in ["alice", "zed"] {
+            *h.fake.id_token_overrides.lock().unwrap() =
+                json!({ "preferred_username": name, "groups": ["staff"] });
+            let reply = sign_in(&h, "acme", &format!("code-{name}")).await;
+            assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{name}");
+            assert_audit(&reply, "auth.sign_in", Some("username_taken"), None, None);
+        }
+        let name = external_credential_name(ACME_ISSUER, ACME_SUB);
+        let linked = h
+            .service
+            .sign_in
+            .credentials
+            .linked_account(&name)
+            .await
+            .unwrap();
+        assert!(linked.is_none());
+    }
+
+    /// A user created for this account whose link failed is linked on the next attempt.
+    #[tokio::test]
+    async fn a_user_created_for_the_account_is_linked_on_retry() {
+        let h = harness().await;
+        provisioning(&h);
+        let created = h
+            .service
+            .sign_in
+            .oauth
+            .directory
+            .create_user(&NewUser {
+                username: "erin".into(),
+                display_name: None,
+                created_for: external_credential_name(ACME_ISSUER, ACME_SUB),
+            })
+            .await
+            .unwrap();
+        let CreateUser::Created(erin) = created else {
+            panic!("{created:?}");
+        };
+        *h.fake.id_token_overrides.lock().unwrap() =
+            json!({ "preferred_username": "erin", "groups": ["staff"] });
+        let reply = sign_in(&h, "acme", "code-retry").await;
+        assert_eq!(reply.status, StatusCode::SEE_OTHER, "{}", reply.body);
+        assert_audit(
+            &reply,
+            "auth.sign_in",
+            None,
+            Some("erin"),
+            Some(&erin.subject),
+        );
     }
 
     /// The account page names a linked account by its provider, and by the issuer once the
