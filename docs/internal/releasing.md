@@ -113,7 +113,7 @@ when finished. It needs access to GHCR, Sigstore, the GitHub API, the k3s image 
 To rehearse one platform's build locally, without publishing:
 `nix develop --command bun scripts/release.ts build v0.1.1 linux <amd64|arm64> dist`.
 
-For a local build, follow [Building from source](https://github.com/zeabur-oss/identity/blob/main/CONTRIBUTING.md#building-from-source).
+For a local build, follow [Building from source](../../CONTRIBUTING.md#building-from-source).
 
 Before publishing a new version, follow the [installation checklist](release-check.md)
 to check the guide, browser sign-in and account recovery with the release artifacts.
