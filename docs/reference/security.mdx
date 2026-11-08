@@ -1,6 +1,6 @@
 ---
 title: Security and support policy
-description: Learn how to report security vulnerabilities privately and which alpha releases receive security patches and support.
+description: Learn how to report security vulnerabilities privately and which releases receive security patches.
 ---
 
 If you find a security vulnerability, report it privately with **Report a vulnerability** on this repository’s GitHub page. Don’t open a public issue for security problems.
@@ -9,18 +9,13 @@ If you find a security vulnerability, report it privately with **Report a vulner
 
 Select **Report a vulnerability** on this repository’s GitHub page to submit the issue through GitHub’s private vulnerability reporting feature.
 
-## Alpha support scope
+## Supported versions
 
-Zeabur Identity `v0.1.1` is an alpha release for evaluation on disposable, self-managed clusters.
-
-- Only the latest alpha release receives security patches.
-- After a security patch ships, upgrade to the latest alpha release.
+Only the latest release receives security patches. After a security patch ships, upgrade to it.
 
 ## Prepare for upgrades
 
-Alpha releases may introduce breaking changes, including changes to Kubernetes resources. The project doesn’t guarantee schema migrations, upgrades, or rollbacks.
-
-Keep separate cluster administrator credentials and backups that you’ve tested by restoring them:
+Before an upgrade, read its release notes. Keep separate cluster administrator credentials and backups that you’ve tested by restoring them:
 
 - Follow [Keep an access path independent of Zeabur Identity](../operations/emergency-access.mdx) to maintain a separate administrative access path.
 - Follow [Backup and restore](../operations/backup-restore.mdx) to prepare and test backups.
