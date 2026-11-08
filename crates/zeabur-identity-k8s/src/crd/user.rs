@@ -9,7 +9,12 @@ use kube::{CustomResource, KubeSchema};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// A person who can sign in. The admin (or GitOps) owns `spec`; Zeabur Identity only reads it.
+/// On a user Zeabur Identity created at first sign-in: the linked-account credential it was
+/// created for.
+pub const CREATED_FOR: &str = "identity.zeabur.com/created-for";
+
+/// A person who can sign in. The admin (or GitOps) owns `spec`; Zeabur Identity only reads it,
+/// except that it creates regular users with no groups when a provider allows it.
 ///
 /// Kubernetes sees the user as `zeabur:<username>` with groups `zeabur:<group>`, plus
 /// `zeabur:admins` for an admin account.

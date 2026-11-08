@@ -20,7 +20,7 @@ export ZEABUR_IDENTITY_ISSUER=https://identity.example.com
 
 Installation fixes the Issuer. The Zeabur Identity Deployment, TLS certificate, and kube-apiserver configuration must use the same name. Changing `ZEABUR_IDENTITY_ISSUER` in your shell afterward doesn't change the Issuer of an existing installation.
 
-Users must link their Google accounts to Zeabur Identity users before they can sign in. Zeabur Identity doesn't create users on first sign-in or match accounts by email address, name, or Workspace domain. Groups and display names come from `User`.
+Users must link their Google accounts to Zeabur Identity users before they can sign in, unless you have Zeabur Identity create users for your Workspace domain, as described below. Zeabur Identity doesn't match accounts by email address or name. Groups and display names come from `User`.
 
 ## Configure Google sign-in
 
@@ -33,7 +33,7 @@ Users must link their Google accounts to Zeabur Identity users before they can s
 Follow Google's [OpenID Connect setup documentation](https://developers.google.com/identity/openid-connect/openid-connect) and [consent screen configuration guide](https://developers.google.com/workspace/guides/configure-oauth-consent) to complete these settings in Google Cloud Console:
 
 1. Select or create a project. Under **Google Auth platform → Branding**, set the application name, support email, and contact information.
-2. Under **Audience**, select **Internal** to restrict access to your Google Workspace organization, or select **External** to accept any Google account. Both settings require users to link their Zeabur Identity accounts first. [Google's publishing rules](https://support.google.com/cloud/answer/15549945) restrict applications in testing mode, but applications that only request `openid`, such as Zeabur Identity, are exempt.
+2. Under **Audience**, select **Internal** to restrict access to your Google Workspace organization, or select **External** to accept any Google account. [Google's publishing rules](https://support.google.com/cloud/answer/15549945) restrict applications in testing mode, but applications that only request `openid`, such as Zeabur Identity, are exempt.
 3. Under **Data Access**, declare only the `openid` scope. No Google API data access is required.
 4. Under **Clients → Create Client**, select **Web application**, set a name, and add the following URI under **Authorized redirect URI**. Replace the domain with your Issuer:
 
@@ -138,6 +138,20 @@ Update the `google` key in `zeabur-identity-upstream`. Zeabur Identity reads the
 Delete the provider with `kubectl -n zeabur-identity delete upstreamprovider google`. If you no longer need the OAuth client, delete it in Google Cloud Console as well.
 
 Disabling Google sign-in doesn't remove linked accounts or end existing sessions. To revoke access, follow the procedure above to remove credentials and sign the user out.
+
+## Create users for your Workspace domain
+
+Instead of linking every account, you can have Zeabur Identity create a regular `User` the first time someone from your Google Workspace domain signs in. Add `provisioning` to the `google` provider, with your domain in `values`:
+
+```yaml
+spec:
+  # type, displayName, clientId and clientSecretKey as above
+  provisioning:
+    claim: hd                     # the account's Workspace domain
+    values: [example.com]
+```
+
+Zeabur Identity then asks Google for `openid profile email`, so also declare `email` and `profile` under **Data Access**. The username is the part of the email address before the `@`. The rules for created users are the same as for other providers; read "Create users at first sign-in" in [Let users sign in with your identity provider](./oidc-sign-in.mdx) before you turn this on.
 
 ## Troubleshooting
 

@@ -25,7 +25,7 @@ mod tests {
     use zeabur_identity_k8s::crd::client::{ClientType, OAuthClient, OAuthClientSpec};
     use zeabur_identity_k8s::crd::grant::{Grant, GrantSpec, GrantStatus};
     use zeabur_identity_k8s::crd::upstream::{
-        ProviderType, UpstreamProvider, UpstreamProviderSpec,
+        ProviderType, Provisioning, UpstreamProvider, UpstreamProviderSpec,
     };
     use zeabur_identity_k8s::crd::user::{AccountType, User, UserSpec};
     use zeabur_identity_k8s::crd::{EXPIRES_AT_ANNOTATION, EXPIRY_BUCKET_LABEL, definitions};
@@ -487,6 +487,7 @@ mod tests {
                     issuer: issuer.map(str::to_owned),
                     client_id: "zeabur-identity".into(),
                     client_secret_key: key.into(),
+                    provisioning: None,
                 },
             )
         };
@@ -523,6 +524,14 @@ mod tests {
                 .unwrap_err();
             assert_eq!(status_code(&error), Some(422), "{name}: {error}");
         }
+        let mut github = provider("p9", ProviderType::GitHub, None, "github");
+        github.spec.provisioning = Some(Provisioning {
+            claim: "hd".into(),
+            values: vec!["acme.test".into()],
+            scopes: Vec::new(),
+        });
+        let error = providers.create(&pp, &github).await.unwrap_err();
+        assert_eq!(status_code(&error), Some(422), "{error}");
 
         let grants: Api<Grant> = env.admin_api();
         let mut stored = grants.create(&pp, &grant("g", None)).await.unwrap();
@@ -669,22 +678,30 @@ mod tests {
             ),
             Some(403)
         );
-        // Denied: writing users (configuration is read-only).
+        // Allowed: creating a user (at first sign-in). Denied: changing or deleting one.
         let users: Api<User> = env.zeabur_identity_api();
         let user = User::new(
             "bob",
             UserSpec {
                 username: "bob".into(),
-                display_name: None,
-                groups: vec![],
-                disabled: false,
                 ..UserSpec::default()
             },
+        );
+        let mut created = users.create(&PostParams::default(), &user).await.unwrap();
+        created.spec.groups = vec!["ops".into()];
+        assert_eq!(
+            status_code(
+                &users
+                    .replace("bob", &PostParams::default(), &created)
+                    .await
+                    .unwrap_err()
+            ),
+            Some(403)
         );
         assert_eq!(
             status_code(
                 &users
-                    .create(&PostParams::default(), &user)
+                    .delete("bob", &DeleteParams::default())
                     .await
                     .unwrap_err()
             ),
@@ -716,6 +733,7 @@ mod tests {
                 issuer: Some("https://idp.acme.test".into()),
                 client_id: "zeabur-identity".into(),
                 client_secret_key: "acme".into(),
+                provisioning: None,
             },
         );
         assert_eq!(

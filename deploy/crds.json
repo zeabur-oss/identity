@@ -52,7 +52,7 @@
                 "description": "A person who can sign in to Zeabur Identity.",
                 "properties": {
                   "spec": {
-                    "description": "A person who can sign in. The admin (or GitOps) owns `spec`; Zeabur Identity only reads it.\n\nKubernetes sees the user as `zeabur:<username>` with groups `zeabur:<group>`, plus\n`zeabur:admins` for an admin account.",
+                    "description": "A person who can sign in. The admin (or GitOps) owns `spec`; Zeabur Identity only reads it,\nexcept that it creates regular users with no groups when a provider allows it.\n\nKubernetes sees the user as `zeabur:<username>` with groups `zeabur:<group>`, plus\n`zeabur:admins` for an admin account.",
                     "properties": {
                       "accountType": {
                         "default": "Regular",
@@ -869,6 +869,46 @@
                           }
                         ]
                       },
+                      "provisioning": {
+                        "description": "Google and `OIDC` only: create a user at an account's first sign-in, when its ID token's\n`claim` has one of `values`. Unset, accounts must be linked first.",
+                        "nullable": true,
+                        "properties": {
+                          "claim": {
+                            "description": "An ID token claim, such as `hd` or `groups`.",
+                            "maxLength": 64,
+                            "minLength": 1,
+                            "pattern": "^[!-~]+$",
+                            "type": "string"
+                          },
+                          "scopes": {
+                            "description": "Scopes to ask for besides `openid profile email`, such as one that adds a groups claim.",
+                            "items": {
+                              "maxLength": 64,
+                              "minLength": 1,
+                              "pattern": "^[!#-\\[\\]-~]+$",
+                              "type": "string"
+                            },
+                            "maxItems": 8,
+                            "type": "array"
+                          },
+                          "values": {
+                            "description": "The values that allow it. The claim must be one of them, or, for a list, contain one.",
+                            "items": {
+                              "maxLength": 256,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "maxItems": 32,
+                            "minItems": 1,
+                            "type": "array"
+                          }
+                        },
+                        "required": [
+                          "claim",
+                          "values"
+                        ],
+                        "type": "object"
+                      },
                       "type": {
                         "description": "Which provider: `GitHub` (an OAuth app), `Google` (an OAuth client), or `OIDC`, any\nOpenID Connect provider at `issuer`.",
                         "enum": [
@@ -890,6 +930,10 @@
                       {
                         "message": "issuer is required for OIDC providers and not allowed for GitHub or Google",
                         "rule": "(self.type == 'OIDC') == has(self.issuer)"
+                      },
+                      {
+                        "message": "GitHub sends no ID token, so it cannot create users",
+                        "rule": "self.type != 'GitHub' || !has(self.provisioning)"
                       }
                     ]
                   }

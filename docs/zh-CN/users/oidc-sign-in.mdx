@@ -16,7 +16,7 @@ description: 添加 Keycloak、Microsoft Entra ID 或 Okta 等 OpenID Connect �
 
 以下示例以 `https://identity.example.com` 作为 Zeabur Identity 的 Issuer，以 `acme` 作为提供方的 ID。
 
-账号必须先关联到 Zeabur Identity 用户，才能登录。Zeabur Identity 不会在首次登录时创建用户，也不会根据电子邮件地址或名称匹配账号。用户的组和显示名称取自 `User`，不取自提供方。
+账号必须先关联到 Zeabur Identity 用户，才能登录；如果按下方的说明，让 Zeabur Identity 在首次登录时创建用户，就不必关联。Zeabur Identity 不会根据电子邮件地址或名称把账号匹配到现有用户。用户的组取自 `User`，不取自提供方。
 
 ## 添加提供方
 
@@ -103,6 +103,27 @@ spec:
 rm -rf ~/.kube/cache/oidc-login
 kubectl auth whoami
 ```
+
+## 首次登录时创建用户
+
+不想逐个关联账号时，可以让 Zeabur Identity 在符合条件的账号首次登录时，自动创建普通账号的 `User`。条件根据 ID token 中的声明判断，例如组：
+
+```yaml
+spec:
+  # displayName, issuer, clientId and clientSecretKey as above
+  provisioning:
+    claim: groups
+    values: [zeabur-users]
+    scopes: [groups]              # only if the provider adds the claim for a scope
+```
+
+- 声明的值必须是 `values` 之一；如果声明是列表（例如组），只要包含其中一个值即可。Zeabur Identity 会请求 `openid profile email` 范围，再加上 `scopes`。
+- 用户名取自 `preferred_username`，没有时改用 `email`，取 `@` 之前的部分并转为小写。如果名称不符合用户名规则，或已有 `User` 使用这个名称，登录会失败，也不会关联任何账号。这时改用邀请关联该账号。
+- 新建的 `User` 是普通账号，没有组，显示名称取自 `name`，并会记录 `UserCreated` 事件。要开放访问，把角色绑定到 `zeabur:<username>`，或在 `User` 中添加组。
+- 选用只有管理员能修改的声明。谁能设置 `preferred_username`，谁就能决定用户名，进而取得已绑定到该用户名的角色。
+- 要阻止某人登录，停用该用户的 `User`，或在提供方把该用户移出组。只删除 `User` 不够，对方下次登录时会再次创建。
+
+Google 提供方也能创建用户，请参阅[让用户用 Google 登录](./google-sign-in.mdx)。GitHub 不会签发 ID token，所以 GitHub 提供方不能创建用户。
 
 ## 修改或移除提供方
 

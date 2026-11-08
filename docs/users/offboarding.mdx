@@ -70,6 +70,8 @@ After you delete the `User`, the user's passkeys, linked GitHub, Google or OpenI
 
 These objects are all tied to the original `User`'s UID. Even if you create a `User` with the same name, the new object gets a new UID.
 
+If users of an OpenID Connect provider are created at first sign-in, the person's next sign-in creates the `User` again. Disable the `User` instead, or remove the person at the provider.
+
 Tokens the user already has remain valid until they expire, for up to 10 minutes.
 
 Kubernetes garbage collection deletes the related objects later. To delete them immediately, run this command before or after you delete the `User`:

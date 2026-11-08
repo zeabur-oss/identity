@@ -16,7 +16,7 @@ Admin accounts can only sign in with passkeys and can't link accounts from a pro
 
 The examples below use `https://identity.example.com` as the Issuer of Zeabur Identity, and `acme` as the provider's ID.
 
-Users must link their accounts to Zeabur Identity users before they can sign in. Zeabur Identity doesn't create users on first sign-in or match accounts by email address or name. Groups and display names come from `User`, not from the provider.
+Users must link their accounts to Zeabur Identity users before they can sign in, unless Zeabur Identity creates their users at first sign-in, as described below. Zeabur Identity never matches accounts to existing users by email address or name. Groups come from `User`, not from the provider.
 
 ## Add the provider
 
@@ -103,6 +103,27 @@ Sign out, open the sign-in page from an application such as `kubectl`, select **
 rm -rf ~/.kube/cache/oidc-login
 kubectl auth whoami
 ```
+
+## Create users at first sign-in
+
+Instead of linking every account, you can have Zeabur Identity create a regular `User` the first time an allowed account signs in. Choose the accounts by a claim in their ID token, such as a group:
+
+```yaml
+spec:
+  # displayName, issuer, clientId and clientSecretKey as above
+  provisioning:
+    claim: groups
+    values: [zeabur-users]
+    scopes: [groups]              # only if the provider adds the claim for a scope
+```
+
+- The claim must be one of `values`, or, for a list such as groups, contain one of them. Zeabur Identity asks for `openid profile email` and any `scopes`.
+- The username is `preferred_username`, or else `email`, up to the `@`, in lowercase. If it isn't a valid username, or a `User` already has it, sign-in fails and nothing is linked. Link that account with an invitation instead.
+- The new `User` is a regular account with no groups, with its display name from `name`, and a `UserCreated` event. Bind roles to `zeabur:<username>` or add groups to the `User` to give access.
+- Use claims that only your administrators can change. Whoever controls `preferred_username` chooses the username, and with it any role already bound to that name.
+- To stop someone, disable their `User` or remove them from the group at the provider. Deleting the `User` isn't enough: their next sign-in creates it again.
+
+Google providers can create users too; see [Let users sign in with Google](./google-sign-in.mdx). GitHub sends no ID token, so a GitHub provider can't.
 
 ## Change or remove the provider
 
