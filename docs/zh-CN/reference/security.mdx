@@ -1,7 +1,7 @@
 ---
 title: 安全与支持政策
-description: 了解如何私下报告安全漏洞，以及 alpha 版本的安全补丁与支持范围。
-source: "cbc33a9db483"
+description: 了解如何私下报告安全漏洞，以及哪些版本会收到安全补丁。
+source: "adcce213eb9f"
 ---
 
 发现安全漏洞时，通过这个仓库的 GitHub **Report a vulnerability** 私下报告。不要为安全问题创建公开 issue。
@@ -10,18 +10,13 @@ source: "cbc33a9db483"
 
 在这个仓库的 GitHub 页面选择 **Report a vulnerability**，使用 GitHub 的私密漏洞报告功能提交问题。
 
-## Alpha 支持范围
+## 支持的版本
 
-Zeabur Identity `v0.1.1` 是 alpha 版本，供你在可随时丢弃的自管集群上评估使用。
-
-- 只有最新发布的 alpha 版本提供安全补丁。
-- 安全补丁发布后，请升级到最新 alpha 版本。
+只有最新发布的版本会收到安全补丁。安全补丁发布后，请升级到该版本。
 
 ## 升级前的准备
 
-Alpha 版本之间允许破坏性变更，范围包括 Kubernetes 资源。项目不保证支持 schema 迁移、升级或回滚到旧版。
-
-保留独立的集群管理员凭据，并准备好经过恢复测试的备份：
+升级前，先阅读该版本的发布说明。保留独立的集群管理员凭据，并准备好经过恢复测试的备份：
 
 - 按照[保留不经过 Zeabur Identity 的入口](../operations/emergency-access.mdx)，保留独立的管理入口。
 - 按照[备份与恢复](../operations/backup-restore.mdx)，准备并测试备份。

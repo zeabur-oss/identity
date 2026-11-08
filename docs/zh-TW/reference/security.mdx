@@ -1,7 +1,7 @@
 ---
 title: 安全性與支援政策
-description: 了解如何私下回報安全性弱點，以及 alpha 版本的安全修補與支援範圍。
-source: "cbc33a9db483"
+description: 了解如何私下回報安全性弱點，以及哪些版本會收到安全修補。
+source: "adcce213eb9f"
 ---
 
 如果發現安全性弱點，請使用這個儲存庫的 GitHub **Report a vulnerability** 功能私下回報。不要為安全性問題建立公開 issue。
@@ -10,18 +10,13 @@ source: "cbc33a9db483"
 
 在這個儲存庫的 GitHub 頁面選擇 **Report a vulnerability**，就能使用 GitHub 的私密弱點回報功能提交問題。
 
-## Alpha 支援範圍
+## 支援的版本
 
-Zeabur Identity `v0.1.1` 是 alpha 版本，供你在可隨時丟棄的自管叢集上評估。
-
-- 只有最新發布的 alpha 版本提供安全修補。
-- 安全修補發布後，請升級到最新 alpha 版本。
+只有最新發布的版本會收到安全修補。安全修補發布後，請升級到該版本。
 
 ## 升級前的準備
 
-Alpha 版本之間可能有破壞性變更，包括 Kubernetes 資源的變更。專案不保證能遷移結構描述、升級或回滾到舊版。
-
-請保留獨立的叢集管理員認證資訊，並備妥已通過還原測試的備份：
+升級前，請先讀該版本的發行說明。請保留獨立的叢集管理員認證資訊，並備妥已通過還原測試的備份：
 
 - 依照[保留不經過 Zeabur Identity 的入口](../operations/emergency-access.mdx)，保留獨立的管理入口。
 - 依照[備份與還原](../operations/backup-restore.mdx)，準備並測試備份。
