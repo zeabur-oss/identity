@@ -1,7 +1,6 @@
 ---
 title: Zeabur Identity 的架构
 description: 了解 Zeabur Identity 在 Kubernetes 集群中的运行方式、安全特性、组件关系与 crate 分工。
-source: "e4465561253d"
 ---
 
 Zeabur Identity 是以通行密钥为主要登录方式的 OpenID Connect Issuer，在自管 Kubernetes 集群中运行。kube-apiserver 使用 [Structured Authentication Configuration][kep-3331]，自行验证 Zeabur Identity 签发的令牌。你可以用通行密钥登录，无需持有无法撤销的长期有效的管理员 kubeconfig。其他 OpenID Connect 客户端，例如 Argo CD、Grafana 和 Headlamp，也能使用同一个 Issuer。
