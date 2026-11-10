@@ -63,7 +63,8 @@ pub(crate) enum Command {
 pub(crate) enum ClientCommand {
     /// Print an `OAuthClient` (JSON), for `zeabur-identityctl client create … | kubectl apply -f
     /// -`. A confidential client gets a generated secret, printed once on stderr; only its hash
-    /// goes into the object.
+    /// goes into the object. With `--output json`, print one JSON object with `clientId`,
+    /// `secret` and the `OAuthClient` as `manifest` instead, and nothing on stderr.
     Create(ClientCreateArgs),
 }
 
@@ -96,6 +97,19 @@ pub(crate) struct ClientCreateArgs {
     /// Namespace Zeabur Identity runs in.
     #[arg(long, env = "ZEABUR_IDENTITY_NAMESPACE", default_value = zeabur_identity_k8s::rbac::DEFAULT_NAMESPACE)]
     pub namespace: String,
+    /// What to print on stdout.
+    #[arg(long, value_enum, default_value_t = ClientOutput::Manifest)]
+    pub output: ClientOutput,
+}
+
+/// Output of `zeabur-identityctl client create`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum ClientOutput {
+    /// The `OAuthClient` for `kubectl apply`; a confidential client's secret goes to stderr.
+    Manifest,
+    /// One JSON object with `clientId`, `secret` (confidential clients only) and the
+    /// `OAuthClient` as `manifest`.
+    Json,
 }
 
 /// Client type.

@@ -92,6 +92,8 @@ zeabur-identityctl client create grafana --type confidential --display-name Graf
 
 The command prints the secret to the terminal’s stderr, separate from the object output.
 
+For a script, add `--output json`. The command then prints one JSON object on stdout and nothing on stderr: `clientId`, `secret` (only for a confidential client), and the `OAuthClient` as `manifest`. Apply the `manifest` field, for example with `jq .manifest | kubectl apply -f -`, and give the `secret` field to the application.
+
 <Callout type="warn">
 
 The secret appears only once. The cluster stores only its SHA-256 hash. Give the secret to the application immediately.
