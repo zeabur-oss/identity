@@ -197,12 +197,16 @@ k3d image import zeabur-identity:e2e --cluster zeabur-identity
 ZEABUR_IDENTITY_E2E_IMAGE=zeabur-identity:e2e \
 ZEABUR_IDENTITY_E2E_AUTHN_DIR="$dir/authn" \
 ZEABUR_IDENTITY_E2E_MEASUREMENTS="$dir/measurements.json" \
-  cargo nextest run --locked --run-ignored only -E 'binary(e2e)'
+  cargo nextest run --locked --run-ignored only -E 'binary(e2e) and not test(keycloak)'
 ```
 
 The scenario installs Zeabur Identity, enrols a software passkey, signs in, and checks
 `kubectl auth whoami`, the admin account's rights across a refresh and the pod's memory. See the
 [zeabur-identity-e2e README](crates/zeabur-identity-e2e/README.md) for its assertions and reload timing.
+
+The Keycloak scenario, sign-in through an OpenID provider with its own CA, needs Docker and pulls
+the Keycloak image, so CI does not run it. `./scripts/keycloak-e2e.sh` creates its own cluster and
+runs it.
 
 When finished:
 

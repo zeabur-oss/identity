@@ -20,7 +20,7 @@ cargo doc --workspace --open
 
 代码路径以 `crates/` 为基准。单元测试格式为 `crate: module::tests::name`，集成测试格式为 `crate/tests/file.rs: name`。
 
-标记为 *(cluster)* 的测试使用 k3s `v1.36.5`，运行时使用 `--run-ignored only`。标记为 *(e2e)* 的测试位于 `zeabur-identity-e2e/tests/e2e.rs`，使用 Zeabur Identity 容器镜像运行。
+标记为 *(cluster)* 的测试使用 k3s `v1.36.5`，运行时使用 `--run-ignored only`。标记为 *(e2e)* 的测试位于 `zeabur-identity-e2e/tests/e2e.rs`，使用 Zeabur Identity 容器镜像运行。标记为 *(e2e, Keycloak)* 的测试还需要 Keycloak 服务器，使用 `scripts/keycloak-e2e.sh` 运行，不在 CI 中运行。
 
 ## 各项规范摘要
 
@@ -214,7 +214,7 @@ cargo doc --workspace --open
 | Project requirement | Add, rename, remove, and session revocation leave a `zeabur_identity::audit` log line and an `Event` on the `User` (actor, credential, AAGUID, client IP, user agent) | MUST | `account.rs` `log_outcome`, `record`; `zeabur-identity-k8s/src/credentials.rs` `record` | `adding_and_removing_need_a_recent_verified_passkey`, `rename_needs_the_csrf_token_and_same_origin`; `zeabur-identity-k8s/tests/account.rs: only_the_users_own_passkeys_are_listed_or_changed` | Met |
 | Project requirement | A passkey's label is the one the user typed; without one, the account page names it by its creation date | — | `lib.rs` `new_passkey`; `zeabur-identity-ui/templates/account.html` | `a_passkey_without_a_label_shows_its_creation_date` | Met |
 
-## 上游登录（GitHub、Google）
+## 上游登录（GitHub、OpenID 提供方）
 
 测试位于 `zeabur-identity-signin/tests/upstream.rs`。
 
@@ -232,6 +232,7 @@ cargo doc --workspace --open
 | Project requirement | 添加、修改或删除提供方，以及更换客户端密钥后，下次请求就会生效，无需重启；未更改的提供方会保留缓存；如果正在处理的请求所用的提供方遭到删除，或改用其他 Issuer，请求会在发送授权码前结束 | `zeabur-identity-k8s/src/upstream.rs`; `zeabur-identity/src/providers.rs`; `upstream/provider.rs` `Providers`, `ClientSecret` | `provider_changes_and_secret_rotation_are_seen_without_a_restart` *(cluster)*; `an_added_provider_starts_at_the_next_request`, `a_provider_deleted_or_changed_during_a_sign_in_ends_it_before_the_code_is_sent`, `the_client_secret_is_read_at_each_exchange`; `zeabur-identity-signin/tests/pages.rs: provider_buttons_follow_the_registry`; `zeabur-identity: providers::tests::an_unchanged_provider_is_kept_and_a_changed_or_deleted_one_is_not` | Met |
 | Project requirement | 删除提供方不会删除已关联的账号；账号页面仍会列出这些账号，也能解除关联；使用相同 Issuer 的提供方仍可让这些账号登录 | `upstream.rs`, `account.rs` `shown_provider` | `a_deleted_provider_keeps_its_linked_accounts` | Met |
 | Project requirement | 引入 `UpstreamProvider` 前已关联的账号会改为 `type: Upstream`，并设置 `provider: github` 或 `google`，保留名称、UID、所有者和标签；准入验证只允许这项更改 | `zeabur-identity-k8s/src/migrate.rs`; `zeabur-identity-api/src/credential.rs` `IMMUTABLE_RULE` | `linked_accounts_migrate_with_their_names_owners_and_labels` *(cluster)*; `zeabur-identity-k8s: migrate::tests::*` | Met |
+| OIDC Core §3.1; OIDC Discovery §4 | 与真实的 OpenID 提供方 Keycloak 互通。Keycloak 使用私有 CA，Pod 通过 `SSL_CERT_FILE` 与 `SSL_CERT_DIR` 信任它：未关联的账号无法登录；在账号页面关联的两个账号都以所属用户登录；取消关联其中一个后，该账号再次无法登录，另一个仍可登录 | `scripts/keycloak-e2e.sh` | `keycloak_links_signs_in_and_unlinks` *(e2e, Keycloak)* | Met |
 | Project requirement | 使用已移除的上游选项时，服务器会停止启动，并在消息中指出该选项及替代方式 | `zeabur-identity/src/cli.rs` `reject_removed` | `zeabur-identity: cli::tests::a_removed_upstream_flag_names_itself_and_its_replacement` | Met |
 | Kubernetes Object Names and IDs | An invitation or setup link enrolls a passkey or links an account only for the `User` whose UID its owner reference names | `lib.rs` `valid_setup_token`; `zeabur-identity-k8s/src/setup.rs` `load_setup`, `load_invitation` | `signin.rs: a_link_left_from_a_removed_user_does_not_enrol_a_new_user_of_that_name`; `zeabur-identity-k8s/tests/account.rs: an_invitation_enrols_only_the_user_that_owns_it` | Met |
 
