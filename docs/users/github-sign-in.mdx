@@ -47,48 +47,47 @@ After registration, record the **Client ID** and generate a **client secret**.
 
 ### Store the client secret
 
-Zeabur Identity reads the secret from a file in a Kubernetes Secret mounted at `/etc/zeabur-identity`.
+Zeabur Identity reads the client secrets of all sign-in providers from the Secret `zeabur-identity-upstream`, one key for each provider. It reads the secret at each sign-in, so you can change it without restarting.
 
 Run the following commands to keep the secret out of your shell history and process list:
 
 ```sh
 read -rs GITHUB_SECRET     # paste the client secret, then Enter
-printf %s "$GITHUB_SECRET" | kubectl -n zeabur-identity create secret generic zeabur-identity-config \
-  --from-file=github-client-secret=/dev/stdin
+printf %s "$GITHUB_SECRET" | kubectl -n zeabur-identity create secret generic zeabur-identity-upstream \
+  --from-file=github=/dev/stdin
 unset GITHUB_SECRET
 ```
 
-If `zeabur-identity-config` already exists, for example, to store the [Google sign-in](./google-sign-in.mdx) secret, use the following command to add the key and preserve the other keys:
+If `zeabur-identity-upstream` already exists, for example, to store the [Google sign-in](./google-sign-in.mdx) secret, use the following command to add the `github` key and preserve the other keys. Its values use base64 encoding:
 
 ```sh
-kubectl -n zeabur-identity edit secret zeabur-identity-config
+kubectl -n zeabur-identity edit secret zeabur-identity-upstream
 ```
 
 </Step>
 
 <Step>
 
-### Enable the GitHub sign-in provider
+### Add GitHub as a sign-in provider
 
-Regenerate the deployment configuration with the Secret and Client ID.
-
-`zeabur-identityctl manifests` doesn't remember previous options. Keep the image, Namespace, and other `--serve-arg` options from your installation, and add the GitHub options.
-
-The following commands reuse the configuration from [Install and sign in on k3s](../get-started/quickstart.mdx), including `--invitations`, which you'll need to invite users in the next step. Replace `GITHUB_CLIENT_ID` with the **Client ID** you obtained earlier; this value isn't a secret.
+Create an `UpstreamProvider` named `github`. The name is part of the callback URL you registered in step 1. Replace `GITHUB_CLIENT_ID` with the **Client ID** you obtained earlier; this value isn't a secret.
 
 ```sh
 GITHUB_CLIENT_ID=Ov23li...   # from step 1; not a secret
-ZEABUR_IDENTITY_IMAGE=$(kubectl -n zeabur-identity get deployment zeabur-identity -o jsonpath='{.spec.template.spec.containers[0].image}')
-zeabur-identityctl manifests --image "$ZEABUR_IDENTITY_IMAGE" \
-  --config-secret zeabur-identity-config \
-  --serve-arg=--invitations \
-  --serve-arg=--github-client-id=$GITHUB_CLIENT_ID \
-  --serve-arg=--github-client-secret-file=/etc/zeabur-identity/github-client-secret \
-  | kubectl apply --server-side -f -
-kubectl -n zeabur-identity rollout status deploy/zeabur-identity
+kubectl apply -f - <<EOF
+apiVersion: identity.zeabur.com/v1alpha1
+kind: UpstreamProvider
+metadata:
+  name: github
+  namespace: zeabur-identity
+spec:
+  type: GitHub
+  clientId: $GITHUB_CLIENT_ID
+  clientSecretKey: github
+EOF
 ```
 
-After the deployment completes, the sign-in page displays **Continue with GitHub**.
+The sign-in page displays **Continue with GitHub** right away. You don't need to restart Zeabur Identity.
 
 </Step>
 
@@ -99,7 +98,7 @@ After the deployment completes, the sign-in page displays **Continue with GitHub
 Choose a linking method based on the user's current status:
 
 - Users who can already sign in: Open the account page, verify their identity with a passkey, and select **Link GitHub**. Admin accounts can't link GitHub accounts.
-- New users: Create an invitation as described in [Manage users](./manage-users.mdx).
+- New users: Create an invitation as described in [Manage users](./manage-users.mdx). Invitations need the `--invitations` option from [Install and sign in on k3s](../get-started/quickstart.mdx).
 - Users who have an account but can't sign in yet: Create another invitation with the same username. If the account already has a passkey or a linked account, add `--reset` to the invitation command. For account recovery instructions, see [Sign out, recover, and remove users](./offboarding.mdx).
 
 After opening the invitation link, the user selects **Continue with GitHub** without creating a passkey, then signs in to the GitHub account they want to link. Each link can add only one passkey or one account.
@@ -138,7 +137,8 @@ metadata:
   ownerReferences:
     - {apiVersion: identity.zeabur.com/v1alpha1, kind: User, name: $USER_NAME, uid: $USER_UID}
 spec:
-  type: GitHub
+  type: Upstream
+  provider: github
   user: $USER_NAME
   external: {issuer: "https://github.com", subject: "$GH_ID"}
 EOF
@@ -181,7 +181,13 @@ Linked GitHub accounts are `Credential` objects, like passkeys:
 - Sign the user out to end existing sessions. See [Sign out, recover, and remove users](./offboarding.mdx).
 - Disable or remove the user to revoke all access. See [Sign out, recover, and remove users](./offboarding.mdx).
 
-To turn off GitHub sign-in, regenerate the deployment configuration without the two `--github-*` options, keep the other options, and delete the OAuth application in GitHub. Linked accounts and existing sessions remain; remove them as described above.
+To turn off GitHub sign-in, delete the `UpstreamProvider`, then delete the OAuth application in GitHub:
+
+```sh
+kubectl -n zeabur-identity delete upstreamprovider github
+```
+
+Linked accounts and existing sessions remain; remove them as described above. If you add GitHub as a sign-in provider again, the linked accounts can sign in again.
 
 ## Troubleshooting
 
@@ -190,6 +196,6 @@ To turn off GitHub sign-in, regenerate the deployment configuration without the 
 | GitHub reports that the redirect URI doesn't belong to this application | Confirm that the OAuth application's callback URL exactly matches `<issuer>/upstream/github/callback`. |
 | **This account is not linked to any user here** | The GitHub account has no matching `Credential`. Follow the account-linking steps. A manually created credential with an incorrect name or ID also produces this message. |
 | **Use a passkey for this account** | The GitHub account links to an admin account. Admin accounts can only sign in with passkeys. |
-| **This provider is not enabled** | The Deployment is missing `--github-client-id`. Run `kubectl -n zeabur-identity get deploy zeabur-identity -o jsonpath='{.spec.template.spec.containers[0].args}'` to check the arguments. |
-| The Pod can't read `/etc/zeabur-identity/...` | Confirm that `--config-secret zeabur-identity-config` mounts the Secret, the Secret contains `github-client-secret`, and `--github-client-secret-file` points to `/etc/zeabur-identity/github-client-secret`. If you customize the Pod's security settings or mounts, preserve `fsGroup` and the read permissions from the generated configuration. |
+| **This provider is not enabled** | No `UpstreamProvider` named `github` exists. Run `kubectl -n zeabur-identity get upstreamproviders` to check. If it exists, run `kubectl -n zeabur-identity logs deploy/zeabur-identity` and look for `upstream_provider_invalid`. |
+| Sign-in fails after GitHub redirects back, and the logs show `provider_unavailable` | The Secret `zeabur-identity-upstream` doesn't exist or has no `github` key. Check the key that `clientSecretKey` names. |
 | Sign-in fails after GitHub redirects back | The Pod can't connect to `github.com` or `api.github.com`. Check outbound connection settings, including proxies, firewalls, and NetworkPolicy, and run `kubectl -n zeabur-identity logs deploy/zeabur-identity` to view the logs. |
