@@ -15,8 +15,8 @@ release. Depend on the tag of the Zeabur Identity release that you install:
 zeabur-identity-api = { git = "https://github.com/zeabur-oss/identity", tag = "v0.2.0" }
 ```
 
-The crate depends only on `k8s-openapi`, `kube`, `schemars`, `serde`, `serde_json`, `thiserror`
-and `aws-lc-rs`. It holds no client and does no I/O.
+The crate depends only on `k8s-openapi`, `kube`, `schemars`, `serde`, `serde_json`, `thiserror`,
+`url` and `aws-lc-rs`. It holds no client and does no I/O.
 
 ## Two roles of Zeabur Identity
 

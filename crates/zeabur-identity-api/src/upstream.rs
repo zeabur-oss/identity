@@ -64,18 +64,23 @@ impl Issuer {
         if !is_visible_ascii(&value) {
             return Err(invalid(WHAT, "not visible ASCII"));
         }
+        // The parser accepts other spellings of the scheme and an empty authority, and changes
+        // them. The issuer is compared as given, so it must already be in the plain form.
         let Some(rest) = value.strip_prefix("https://") else {
             return Err(invalid(WHAT, "not https"));
         };
-        if rest.contains(['?', '#']) {
-            return Err(invalid(WHAT, "query or fragment"));
-        }
-        let authority = rest.split('/').next().unwrap_or_default();
-        if authority.is_empty() || authority.starts_with(':') {
+        if rest.starts_with(['/', '\\']) {
             return Err(invalid(WHAT, "no host"));
         }
-        if authority.contains('@') {
+        let url = url::Url::parse(&value).map_err(|_error| invalid(WHAT, "not a URL"))?;
+        if url.host().is_none() {
+            return Err(invalid(WHAT, "no host"));
+        }
+        if !url.username().is_empty() || url.password().is_some() {
             return Err(invalid(WHAT, "user information"));
+        }
+        if url.query().is_some() || url.fragment().is_some() {
+            return Err(invalid(WHAT, "query or fragment"));
         }
         Ok(Self(value))
     }
@@ -260,6 +265,12 @@ mod tests {
             "https://".to_owned(),
             "https:///path".to_owned(),
             "https://:443".to_owned(),
+            "https://[]".to_owned(),
+            "https://github.com:not-a-port".to_owned(),
+            "https://github.com:99999".to_owned(),
+            "https://\\\\github.com".to_owned(),
+            "https://user:pass@github.com".to_owned(),
+            "https://github.com?".to_owned(),
             "https://user@github.com".to_owned(),
             "https://github.com?x=1".to_owned(),
             "https://github.com#x".to_owned(),
