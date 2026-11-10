@@ -53,7 +53,7 @@ use zeabur_identity_ui::pages::{
 use crate::device::Requester;
 use crate::passkeys::{authenticator, backup_flags};
 use crate::problem::Problem;
-use crate::upstream::provider::Kind;
+use crate::upstream::provider::{Descriptor, Kind};
 use crate::{
     Accepted, BAD_REQUEST, CEREMONY_COOKIE, CEREMONY_EXPIRED, CEREMONY_LIFETIME, Ceremony,
     PASSKEY_AMR, PASSKEY_FAILED, Refused, SignIn, Verified, accepted, check_account, check_request,
@@ -629,8 +629,8 @@ where
                 })
                 .collect();
             let linked_rows = linked_rows(&linked);
-            let providers: Vec<ProviderButton> =
-                service.providers.iter().map(|kind| kind.button()).collect();
+            let providers: Vec<ProviderButton<'_>> =
+                service.providers.iter().map(Descriptor::button).collect();
             let csrf = account.token.csrf();
             account_page(
                 lang,

@@ -106,7 +106,7 @@ impl Kind {
 
     /// Its button on the sign-in pages.
     #[must_use]
-    pub const fn button(self) -> ProviderButton {
+    pub const fn button(self) -> ProviderButton<'static> {
         ProviderButton {
             id: self.id(),
             label: self.label(),
@@ -139,6 +139,30 @@ impl Kind {
         match self {
             Self::GitHub => "https://github.com",
             Self::Google => GOOGLE_ISSUER,
+        }
+    }
+}
+
+/// An upstream provider that the account page offers to link: its ID, the name it is shown with
+/// and its icon. A provider list gives one for each provider that a user can link now.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Descriptor {
+    /// The provider's ID. The account page sends it to `POST /account/links/start`.
+    pub id: ProviderId,
+    /// The name shown on its button.
+    pub label: String,
+    /// The icon on its button (see `zeabur-identity-ui`'s `templates/icons.html`).
+    pub icon: &'static str,
+}
+
+impl Descriptor {
+    /// Its button.
+    #[must_use]
+    pub fn button(&self) -> ProviderButton<'_> {
+        ProviderButton {
+            id: self.id.as_str(),
+            label: &self.label,
+            icon: self.icon,
         }
     }
 }
@@ -355,6 +379,16 @@ impl Provider {
     #[must_use]
     pub const fn kind(&self) -> Kind {
         self.kind
+    }
+
+    /// How the account page offers it.
+    #[must_use]
+    pub fn descriptor(&self) -> Descriptor {
+        Descriptor {
+            id: self.id.clone(),
+            label: self.kind.label().to_owned(),
+            icon: self.kind.icon(),
+        }
     }
 
     /// The path segment of its routes.
