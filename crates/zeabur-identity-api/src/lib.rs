@@ -50,6 +50,7 @@ pub mod client;
 pub mod credential;
 pub mod grant;
 pub mod invitation;
+pub mod upstream;
 pub mod user;
 
 use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
