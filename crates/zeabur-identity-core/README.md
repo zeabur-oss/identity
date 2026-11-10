@@ -7,8 +7,8 @@ Primitives every Zeabur Identity crate shares. Nothing here performs I/O.
 - [`clock`](crate::clock): [`UnixTime`](crate::clock::UnixTime) and the
   [`Clock`](crate::clock::Clock) trait. Everything time-dependent takes a `Clock`, so tests
   drive time explicitly instead of sleeping.
-- [`crypto`](crate::crypto): randomness, SHA-256, constant-time comparison, hashing of
-  high-entropy secrets, and [`Sealer`](crate::crypto::Sealer), which seals self-contained
+- [`crypto`](crate::crypto): randomness, SHA-256, constant-time comparison, and
+  [`Sealer`](crate::crypto::Sealer), which seals self-contained
   protocol state with AES-256-GCM-SIV.
 - [`config`](crate::config): validated configuration values, in particular
   [`BaseUrl`](crate::config::BaseUrl), the form of the issuer identifier.

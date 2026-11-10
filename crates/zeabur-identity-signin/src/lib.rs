@@ -23,9 +23,10 @@ use webauthn_rs::prelude::{
     DiscoverableAuthentication, Passkey, PasskeyRegistration, PublicKeyCredential,
     RegisterPublicKeyCredential, Uuid,
 };
+use zeabur_identity_api::token_hash;
 use zeabur_identity_core::account::{Method, Refusal, allows};
 use zeabur_identity_core::clock::{Clock, UnixTime};
-use zeabur_identity_core::crypto::{ct_eq, hash_secret, hex, random};
+use zeabur_identity_core::crypto::{ct_eq, hex, random};
 use zeabur_identity_oauth::authorize::Authentication;
 use zeabur_identity_oauth::endpoints::{FLOW_COOKIE, complete_authorization};
 use zeabur_identity_oauth::{AuthorizationServer, OneTimeIds, Use};
@@ -534,7 +535,7 @@ pub(crate) async fn valid_setup_token<S: SetupStore, D: Directory>(
         .map_err(internal)?
         .ok_or(SETUP_INVALID)?;
     let matches = ct_eq(
-        hash_secret(presented.as_bytes()).as_bytes(),
+        token_hash(presented.as_bytes()).as_bytes(),
         stored.token_hash.as_bytes(),
     );
     if !matches || stored.expires_at <= now {

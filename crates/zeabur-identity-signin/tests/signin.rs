@@ -22,10 +22,11 @@ mod tests {
     use tracing::instrument::WithSubscriber as _;
     use url::Url;
     use zeabur_identity_api::client::ClientType;
+    use zeabur_identity_api::token_hash;
     use zeabur_identity_core::account::{AccountType, Settings};
     use zeabur_identity_core::clock::{Clock, UnixTime};
     use zeabur_identity_core::config::BaseUrl;
-    use zeabur_identity_core::crypto::{Sealer, hash_secret};
+    use zeabur_identity_core::crypto::Sealer;
     use zeabur_identity_keys::Algorithm;
     use zeabur_identity_keys::manager::KeyManager;
     use zeabur_identity_keys::rotation::RotationPolicy;
@@ -158,7 +159,7 @@ mod tests {
                 subject: DANA_UID.into(),
                 ..User::default()
             },
-            &hash_secret(INVITATION.as_bytes()),
+            &token_hash(INVITATION.as_bytes()),
             UnixTime::from_secs(START + 3600),
         );
         setup.put(
@@ -167,7 +168,7 @@ mod tests {
                 subject: ADMIN_UID.into(),
                 ..User::default()
             },
-            &hash_secret(SETUP_TOKEN.as_bytes()),
+            &token_hash(SETUP_TOKEN.as_bytes()),
             UnixTime::from_secs(START + 3600),
         );
         let service = Arc::new(SignIn {
@@ -846,7 +847,7 @@ mod tests {
                 subject: ADMIN_UID.into(),
                 ..User::default()
             },
-            &hash_secret(b"a-newer-token"),
+            &token_hash(b"a-newer-token"),
             UnixTime::from_secs(START + 3600),
         );
         let reply = post(
@@ -1222,7 +1223,7 @@ mod tests {
                 subject: "uid-missing".into(),
                 ..User::default()
             },
-            &hash_secret(token.as_bytes()),
+            &token_hash(token.as_bytes()),
             UnixTime::from_secs(START + 3600),
         );
         let reply = post(&h.app, "/setup/options", json!({ "token": token }), &[]).await;

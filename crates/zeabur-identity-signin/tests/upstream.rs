@@ -19,10 +19,11 @@ mod tests {
     use tower::ServiceExt as _;
     use tracing::instrument::WithSubscriber as _;
     use zeabur_identity_api::client::ClientType;
+    use zeabur_identity_api::token_hash;
     use zeabur_identity_core::account::AccountType;
     use zeabur_identity_core::clock::{Clock, SystemClock};
     use zeabur_identity_core::config::BaseUrl;
-    use zeabur_identity_core::crypto::{Sealer, hash_secret, sha256};
+    use zeabur_identity_core::crypto::{Sealer, sha256};
     use zeabur_identity_keys::Algorithm;
     use zeabur_identity_keys::jwk::JwkSet;
     use zeabur_identity_keys::jws::sign_compact;
@@ -243,7 +244,7 @@ mod tests {
         setup.put_invitation(
             "inv-1",
             &dana,
-            &hash_secret(INVITATION.as_bytes()),
+            &token_hash(INVITATION.as_bytes()),
             zeabur_identity_core::clock::UnixTime::from_secs(SystemClock.now().as_secs() + 3600),
         );
         let sign_in = Arc::new(SignIn {

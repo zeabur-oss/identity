@@ -36,14 +36,6 @@ pub fn sha256(data: &[u8]) -> [u8; 32] {
     out
 }
 
-/// The stored form of a high-entropy secret: `sha256:<64 lower-case hex digits>`.
-///
-/// Unsalted SHA-256 is enough because every hashed value carries at least 256 bits of entropy.
-#[must_use]
-pub fn hash_secret(secret: &[u8]) -> String {
-    format!("sha256:{}", hex(&sha256(secret)))
-}
-
 /// Lower-case hex.
 #[must_use]
 pub fn hex(bytes: &[u8]) -> String {
@@ -148,11 +140,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn hashes_and_hex() {
-        assert_eq!(
-            hash_secret(b"abc"),
-            "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
-        );
+    fn constant_time_comparison() {
         assert!(ct_eq(b"same", b"same"));
         assert!(!ct_eq(b"same", b"diff"));
         assert!(!ct_eq(b"short", b"longer"));

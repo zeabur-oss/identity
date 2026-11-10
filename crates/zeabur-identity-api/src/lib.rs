@@ -79,6 +79,26 @@ pub const EXPIRES_AT_ANNOTATION: &str = "identity.zeabur.com/expires-at";
 /// collection; its value lets a list-based collector select only past hours.
 pub const EXPIRY_BUCKET_LABEL: &str = "identity.zeabur.com/expiry-bucket";
 
+/// The stored form of a high-entropy secret: `sha256:` and the 64 lowercase hex digits of the
+/// SHA-256 of `token`.
+///
+/// Zeabur Identity stores invitation and setup tokens (`Invitation` `spec.tokenHash`), client
+/// secrets (`OAuthClient` `spec.secretHash`) and refresh tokens in this form, and compares a
+/// presented value by this hash. Unsalted SHA-256 is enough only because every hashed value
+/// carries at least 256 bits of entropy. Never hash a password or another value a person chose.
+#[must_use]
+pub fn token_hash(token: &[u8]) -> String {
+    let digest = aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, token);
+    let mut out = String::with_capacity(71);
+    out.push_str("sha256:");
+    for byte in digest.as_ref() {
+        for nibble in [byte >> 4, byte & 0x0F] {
+            out.extend(char::from_digit(u32::from(nibble), 16));
+        }
+    }
+    out
+}
+
 /// Every custom resource definition, in a stable order.
 #[must_use]
 pub fn definitions() -> Vec<CustomResourceDefinition> {
@@ -109,6 +129,15 @@ pub fn definitions_json() -> serde_json::Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn token_hash_is_sha256_in_lowercase_hex() {
+        // FIPS 180-2 appendix B.1 test vector: SHA-256("abc").
+        assert_eq!(
+            token_hash(b"abc"),
+            "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
 
     /// The committed manifest must match the code. Regenerate with
     /// `cargo run -q -- crds > deploy/crds.json`.

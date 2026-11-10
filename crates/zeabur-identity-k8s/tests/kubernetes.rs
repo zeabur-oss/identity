@@ -905,7 +905,7 @@ mod tests {
             amr: vec!["hwk".into()],
             device_bound: false,
             expires_at: zeabur_identity_core::clock::UnixTime::from_secs(now + 3600),
-            initial_hash: zeabur_identity_core::crypto::hash_secret(b"token-0"),
+            initial_hash: zeabur_identity_api::token_hash(b"token-0"),
             subject: None,
             credential: None,
             user_verified: false,
@@ -915,8 +915,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     #[ignore = "needs a Kubernetes cluster (KUBECONFIG)"]
     async fn grant_rotation_is_linearizable() {
+        use zeabur_identity_api::token_hash;
         use zeabur_identity_core::clock::UnixTime;
-        use zeabur_identity_core::crypto::hash_secret;
         use zeabur_identity_k8s::grants::KubeGrantStore;
         use zeabur_identity_store::{CreateGrant, GrantStore, Rotation};
 
@@ -945,11 +945,11 @@ mod tests {
                 let (store, name, barrier) = (store.clone(), name.clone(), Arc::clone(&barrier));
                 tokio::spawn(async move {
                     barrier.wait().await;
-                    let next = hash_secret(format!("token-1-{i}").as_bytes());
+                    let next = token_hash(format!("token-1-{i}").as_bytes());
                     store
                         .rotate(
                             &name,
-                            &hash_secret(b"token-0"),
+                            &token_hash(b"token-0"),
                             &next,
                             UnixTime::from_secs(t0),
                             idle,
@@ -976,7 +976,7 @@ mod tests {
         assert_eq!(grant.rotation, 1);
         assert_eq!(
             grant.previous_hash.as_deref(),
-            Some(hash_secret(b"token-0").as_str())
+            Some(token_hash(b"token-0").as_str())
         );
         let presented = grant.current_hash.clone();
         assert!(matches!(
@@ -997,7 +997,7 @@ mod tests {
                 .rotate(
                     &name,
                     &grant.current_hash,
-                    &hash_secret(b"late"),
+                    &token_hash(b"late"),
                     UnixTime::from_secs(t0 + 7200),
                     idle
                 )
@@ -1439,7 +1439,7 @@ mod tests {
         let token = store.load(raw).await.unwrap().unwrap();
         assert_eq!(
             token.token_hash,
-            zeabur_identity_core::crypto::hash_secret(raw.as_bytes())
+            zeabur_identity_api::token_hash(raw.as_bytes())
         );
         let secret: Secret = env.admin_api::<Secret>().get(SETUP_SECRET).await.unwrap();
         assert!(!serde_json::to_string(&secret).unwrap().contains(raw));
@@ -1645,7 +1645,7 @@ mod tests {
         assert_eq!(loaded.user, "eve");
         assert_eq!(
             loaded.token_hash,
-            zeabur_identity_core::crypto::hash_secret(token.as_bytes())
+            zeabur_identity_api::token_hash(token.as_bytes())
         );
         // Without invitations enabled, the same token refers to nothing.
         assert!(

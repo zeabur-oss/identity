@@ -4893,6 +4893,7 @@ dependencies = [
 name = "zeabur-identity-api"
 version = "0.1.2"
 dependencies = [
+ "aws-lc-rs",
  "k8s-openapi",
  "kube",
  "schemars 1.2.3",
