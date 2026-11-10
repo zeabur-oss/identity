@@ -6,7 +6,7 @@
   pages: [quickstart, existing-cluster]
 - group: users
   label: People and apps
-  pages: [manage-users, admin-sessions, offboarding, github-sign-in, google-sign-in, provisioning, clients]
+  pages: [manage-users, admin-sessions, offboarding, upstream-sign-in, provisioning, clients]
 - group: operations
   label: Operate
   pages: [emergency-access, backup-restore, upgrade]

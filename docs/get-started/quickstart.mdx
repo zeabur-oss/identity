@@ -503,7 +503,7 @@ kubectl -n default delete configmap zeabur-identity-permission-check
 - **Use admin accounts only for administrative work**: For daily work, invite yourself to create a regular account, then bind permissions to groups as needed. See [Manage users](../users/manage-users.mdx).
 - **Users, passkeys, and sessions are Kubernetes objects**: They reside in the `zeabur-identity` Namespace. A passkey is a `Credential`, and a session after sign-in is a `Grant`. Run `kubectl -n zeabur-identity get users,credentials,grants` on the server to list these objects. See [Manage users](../users/manage-users.mdx) for operations.
 
-Next, configure [Backup and restore](../operations/backup-restore.mdx), [Upgrade and rollback](../operations/upgrade.mdx), and [Keep an access path that bypasses Zeabur Identity](../operations/emergency-access.mdx). For daily use, start with [Manage users](../users/manage-users.mdx), configure [Sign in with GitHub](../users/github-sign-in.mdx) or [Sign in with Google](../users/google-sign-in.mdx), or [register clients](../users/clients.mdx) so applications such as Grafana or Argo CD can use Zeabur Identity for sign-in.
+Next, configure [Backup and restore](../operations/backup-restore.mdx), [Upgrade and rollback](../operations/upgrade.mdx), and [Keep an access path that bypasses Zeabur Identity](../operations/emergency-access.mdx). For daily use, start with [Manage users](../users/manage-users.mdx), [add GitHub, Google or your own OpenID provider as a sign-in](../users/upstream-sign-in.mdx), or [register clients](../users/clients.mdx) so applications such as Grafana or Argo CD can use Zeabur Identity for sign-in.
 
 ## Troubleshooting
 

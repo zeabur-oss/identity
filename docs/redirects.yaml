@@ -1,8 +1,10 @@
 # Old path: new path, both without .md. Add a line when a published page moves or is removed.
 get-started: get-started/quickstart
 managing-users: users/manage-users
-github-sign-in: users/github-sign-in
-google-sign-in: users/google-sign-in
+github-sign-in: users/upstream-sign-in
+google-sign-in: users/upstream-sign-in
+users/github-sign-in: users/upstream-sign-in
+users/google-sign-in: users/upstream-sign-in
 provisioning-users: users/provisioning
 clients: users/clients
 operations: operations/emergency-access

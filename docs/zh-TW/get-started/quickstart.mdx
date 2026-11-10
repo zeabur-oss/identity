@@ -503,7 +503,7 @@ kubectl -n default delete configmap zeabur-identity-permission-check
 - **管理員帳號只用於管理工作**：日常操作請邀請自己建立一般帳號，再依需求替群組綁定權限。詳見[管理使用者](../users/manage-users.mdx)。
 - **使用者、通行密鑰和工作階段都是 Kubernetes 物件**：都放在 `zeabur-identity` Namespace。通行密鑰是 `Credential`，登入後的工作階段是 `Grant`。在伺服器執行 `kubectl -n zeabur-identity get users,credentials,grants` 可列出這些物件，操作方式見[管理使用者](../users/manage-users.mdx)。
 
-接著設定[備份與還原](../operations/backup-restore.mdx)、[升級與回滾](../operations/upgrade.mdx)，並[保留不經過 Zeabur Identity 的入口](../operations/emergency-access.mdx)。日常使用可從[管理使用者](../users/manage-users.mdx)開始，設定[用 GitHub 登入](../users/github-sign-in.mdx)或[用 Google 登入](../users/google-sign-in.mdx)，也能[註冊用戶端](../users/clients.mdx)，讓 Grafana 或 Argo CD 等應用程式使用 Zeabur Identity 登入。
+接著設定[備份與還原](../operations/backup-restore.mdx)、[升級與回滾](../operations/upgrade.mdx)，並[保留不經過 Zeabur Identity 的入口](../operations/emergency-access.mdx)。日常使用可從[管理使用者](../users/manage-users.mdx)開始，[加入 GitHub、Google 或自家的 OpenID 服務作為登入方式](../users/upstream-sign-in.mdx)，也能[註冊用戶端](../users/clients.mdx)，讓 Grafana 或 Argo CD 等應用程式使用 Zeabur Identity 登入。
 
 ## 遇到問題
 

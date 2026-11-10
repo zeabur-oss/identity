@@ -3,7 +3,7 @@ title: Back up and restore Zeabur Identity
 description: Back up Zeabur Identity data and keys, restore service based on your backup type, and practice recovering identities, passkeys, and access permissions.
 ---
 
-Back up the cluster's datastore, Zeabur Identity resources, private keys, and related configuration. Restoring the datastore preserves everyone's identity and passkeys. Rebuilding resources from exports creates new identities. Everyone must register new passkeys and relink their GitHub or Google accounts, and applications must migrate their user mappings.
+Back up the cluster's datastore, Zeabur Identity resources, private keys, and related configuration. Restoring the datastore preserves everyone's identity and passkeys. Rebuilding resources from exports creates new identities. Everyone must register new passkeys and relink their GitHub, Google or other upstream accounts, and applications must migrate their user mappings.
 
 ## What to back up
 
@@ -38,7 +38,7 @@ Keep the following data together. Record the backup date, Zeabur Identity image 
 | Backup item | Purpose |
 |---|---|
 | The cluster's datastore backup, plus the server token, encryption keys, and cluster certificates that your distribution needs to open it | This is the only way to preserve UIDs and passkeys. You can't restore a snapshot that you can't decrypt. |
-| `users`, `credentials`, `oauthclients`, and `upstreamproviders` (`*.identity.zeabur.com`) | Preserve users and groups, passkey records, linked GitHub or Google accounts, registered clients, and sign-in providers. |
+| `users`, `credentials`, `oauthclients`, and `upstreamproviders` (`*.identity.zeabur.com`) | Preserve users and groups, passkey records, linked upstream accounts, registered clients, and sign-in providers. |
 | Secret `zeabur-identity-signing-keys` | Preserves all private signing keys, including keys scheduled for activation and retired keys. Other data can't reconstruct these keys. |
 | Secret `zeabur-identity-internal-ca` | Preserves the root CA and private key. cert-manager uses it to issue the certificate that kube-apiserver verifies when it connects to the internal address. Keep this Secret with the authentication files on every control plane machine. cert-manager uses it to reissue `zeabur-identity-internal-tls`. |
 | Deployment, Service, ServiceAccount, Role, and RoleBinding `zeabur-identity`, plus ClusterRoleBinding `zeabur-identity-cluster-admins` | Preserve how Zeabur Identity runs and its admin permissions. Also back up any RoleBindings you created for other applications. |
@@ -391,7 +391,7 @@ Don't create any objects from `credentials.json`, `grants.json`, or `invitations
 
 Old passkeys can't work with new UIDs. Old sessions refer to accounts by username, so an old refresh token can obtain tokens for whoever currently uses that name.
 
-Users can relink their GitHub or Google accounts when they register again.
+Users can relink their upstream accounts when they register again.
 
 </Step>
 

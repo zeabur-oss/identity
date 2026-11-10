@@ -28,7 +28,7 @@ Zeabur Identity stores users, passkeys, and sessions as Kubernetes objects in it
 | Object | Short name | Purpose | Created by |
 |---|---|---|---|
 | `User` | `zbuser` | A user, including their username, display name, groups, and account type | You |
-| `Credential` | `zbcred` | A passkey or a linked GitHub or Google account | Zeabur Identity, when the user uses a link |
+| `Credential` | `zbcred` | A passkey or a linked upstream account | Zeabur Identity, when the user uses a link |
 | `Invitation` | `zbinvite` | An unused one-time link | `zeabur-identityctl invite`; Zeabur Identity deletes it after the link is used or expires |
 | `Grant` | `zbgrant` | A signed-in session: applications use `g-…`, and the account page uses `s-…` | Zeabur Identity, at each sign-in |
 
@@ -52,7 +52,7 @@ This command creates the user `alice`, adds her to the `dev` group, and outputs 
 
 The link expires after 7 days. You can't extend its lifetime. To shorten it, specify `--valid-for 24h`.
 
-`--group`, `--admin`, and `--display-name` only configure new users. Inviting an existing user only adds a passkey or links a GitHub or Google account; it doesn't change their groups or display name.
+`--group`, `--admin`, and `--display-name` only configure new users. Inviting an existing user only adds a passkey or links an upstream account; it doesn't change their groups or display name.
 
 If the user already has a passkey or linked account, `invite` reports an error and stops. `--reset` deletes these sign-in credentials first. For account recovery, see [Sign out, recover, and remove users](./offboarding.mdx).
 
@@ -62,7 +62,7 @@ If the user already has a passkey or linked account, `invite` reports an error a
 
 ### Give the link to the user
 
-Send the link to Alice through a channel you trust. She can open the link to create a passkey. If you've enabled [Sign in with GitHub](./github-sign-in.mdx) or [Sign in with Google](./google-sign-in.mdx), she can also link the corresponding account.
+Send the link to Alice through a channel you trust. She can open the link to create a passkey. If you've [added an upstream sign-in](./upstream-sign-in.mdx), such as GitHub, she can link that account instead.
 
 <Callout type="warn">
 
@@ -162,7 +162,7 @@ Users can open `https://<issuer>/account` to manage their passkeys and sessions:
 
 - Add, rename, or remove passkeys.
 - View and end sessions.
-- Link or unlink GitHub or Google accounts for regular accounts, after you enable the corresponding sign-in option.
+- Link or unlink upstream accounts for regular accounts, after you [add an upstream sign-in](./upstream-sign-in.mdx).
 
 Users must verify their identity with a passkey before adding a passkey, linking an account, or removing a credential. Users can't remove their last passkey or unlink their last account available for sign-in on the account page.
 
@@ -178,7 +178,7 @@ Account page sessions expire after 1 hour. Password managers find the account pa
 
 Most passkeys sync through platform accounts, such as iCloud Keychain or Google Password Manager, so switching to a new phone usually doesn't require extra setup. To use a separate security key, users can add it on the account page.
 
-Regular accounts can also link GitHub or Google accounts on the account page. The same external account can't link to different users at the same time. To link it to another user, unlink it on the original user's account page first. Admin accounts can't link external accounts.
+Regular accounts can also link upstream accounts, such as GitHub, on the account page. The same external account can't link to different users at the same time. To link it to another user, unlink it on the original user's account page first. Admin accounts can't link external accounts.
 
 Don't use `invite` to add passkeys or link accounts for users who can already sign in. If the link reaches the wrong person, that person can sign in as the user. If the user can no longer sign in, follow the recovery process in [Sign out, recover, and remove users](./offboarding.mdx).
 

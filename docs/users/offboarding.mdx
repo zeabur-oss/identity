@@ -22,7 +22,7 @@ After deletion, these sessions can no longer refresh tokens. Tokens the user alr
 zeabur-identityctl setup-link --username alice --reset
 ```
 
-This command deletes all credentials, sessions, and pending invitations for `alice`. Credentials include passkeys and linked GitHub or Google accounts.
+This command deletes all credentials, sessions, and pending invitations for `alice`. Credentials include passkeys and linked upstream accounts.
 
 The command outputs a new single-use setup link that expires in 1 hour.
 
@@ -40,7 +40,7 @@ For regular accounts, you can use an invitation instead:
 zeabur-identityctl invite --username alice --reset
 ```
 
-This command performs the same reset and outputs an invitation. The user can also use the invitation to link a GitHub or Google account.
+This command performs the same reset and outputs an invitation. The user can also use the invitation to link an upstream account.
 
 ## Disable a user
 
@@ -66,7 +66,7 @@ The **Disabled** column in the output shows `true`.
 kubectl -n zeabur-identity delete zbuser alice
 ```
 
-After you delete the `User`, the user's passkeys, linked GitHub or Google accounts, sessions, and invitation links become invalid.
+After you delete the `User`, the user's passkeys, linked upstream accounts, sessions, and invitation links become invalid.
 
 These objects are all tied to the original `User`'s UID. Even if you create a `User` with the same name, the new object gets a new UID.
 

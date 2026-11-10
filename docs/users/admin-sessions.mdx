@@ -15,7 +15,7 @@ Regular accounts have only the permissions you bind to their groups. They have n
 
 <Callout type="warn">
 
-Each admin should also have a regular account for daily work. Use admin accounts only to make changes to the cluster. Admin accounts can't sign in with GitHub or Google or link either type of account. The sign-in page displays **Use a passkey for this account**.
+Each admin should also have a regular account for daily work. Use admin accounts only to make changes to the cluster. Admin accounts can't sign in with an upstream account, such as GitHub, or link one. The sign-in page displays **Use a passkey for this account**.
 
 </Callout>
 
@@ -66,7 +66,7 @@ A session ends when it reaches its idle timeout or maximum duration. The default
 | Admin, single team | 5 minutes | 1 hour | 12 hours after sign-in |
 | Admin, multiple teams or AAL3 enabled | 5 minutes | 15 minutes | 12 hours after sign-in |
 
-The 12-hour limit starts at sign-in with a passkey, GitHub, or Google. Refreshing tokens doesn't reset this limit.
+The 12-hour limit starts at sign-in with a passkey or an upstream account. Refreshing tokens doesn't reset this limit.
 
 Zeabur Identity doesn't retain a single sign-on session, so every authorization request displays the sign-in page. The `refresh_expires_in` field in the token response indicates how many seconds remain before the refresh token reaches its idle timeout.
 

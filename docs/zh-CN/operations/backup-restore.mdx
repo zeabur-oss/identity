@@ -3,7 +3,7 @@ title: 备份与恢复 Zeabur Identity
 description: 备份 Zeabur Identity 的数据与密钥，按备份类型恢复服务，并演练身份、通行密钥与访问权限的恢复。
 ---
 
-备份集群的数据存储、Zeabur Identity 资源、私钥与相关配置。恢复数据存储可以保留所有人的身份与通行密钥；从导出文件重建资源会生成新身份，所有人都要重新注册通行密钥、关联 GitHub 或 Google 账号，应用也要迁移用户映射。
+备份集群的数据存储、Zeabur Identity 资源、私钥与相关配置。恢复数据存储可以保留所有人的身份与通行密钥；从导出文件重建资源会生成新身份，所有人都要重新注册通行密钥、关联 GitHub、Google 等外部账号，应用也要迁移用户映射。
 
 ## 要备份什么
 
@@ -38,7 +38,7 @@ Zeabur Identity 用 `User` 对象的 UID 识别每个人。每个令牌的 `sub`
 | 备份项目 | 用途 |
 |---|---|
 | 集群的数据存储备份，以及发行版打开备份所需的服务器令牌、加密密钥与集群证书 | 这是保留 UID 与通行密钥的唯一方式。无法解密的快照无法用于恢复。 |
-| `users`、`credentials`、`oauthclients`、`upstreamproviders`（`*.identity.zeabur.com`） | 保存用户与组、通行密钥记录、已关联的 GitHub 或 Google 账号、已注册的客户端，以及登录提供方。 |
+| `users`、`credentials`、`oauthclients`、`upstreamproviders`（`*.identity.zeabur.com`） | 保存用户与组、通行密钥记录、已关联的外部账号、已注册的客户端，以及登录提供方。 |
 | Secret `zeabur-identity-signing-keys` | 保存所有签名私钥，包括即将启用与已退役的密钥。其他数据无法重建这些密钥。 |
 | Secret `zeabur-identity-internal-ca` | 保存根 CA 与私钥。cert-manager 用它签发证书，供 kube-apiserver 连接内部地址时验证。这份 Secret 要与每台控制平面机器上的认证文件一起保存。cert-manager 会用它重新签发 `zeabur-identity-internal-tls`。 |
 | Deployment、Service、ServiceAccount、Role 与 RoleBinding `zeabur-identity`，以及 ClusterRoleBinding `zeabur-identity-cluster-admins` | 保存 Zeabur Identity 的运行方式与管理员权限。也要备份你为其他应用创建的 RoleBinding。 |
@@ -391,7 +391,7 @@ done
 
 旧通行密钥无法搭配新 UID。旧会话按用户名指向账号，因此旧刷新令牌能为当前使用该名称的人获取令牌。
 
-用户重新注册时，再自行关联 GitHub 或 Google 账号。
+用户重新注册时，再自行关联外部账号。
 
 </Step>
 

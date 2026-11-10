@@ -12,7 +12,7 @@ To upgrade with GitHub or Google sign-in set up:
 
 1. Apply this version's `deploy/crds.json` and `deploy/rbac.json` before the new image.
 2. Copy each client secret into the Secret `zeabur-identity-upstream`, under the key `github` or `google`.
-3. Create an `UpstreamProvider` named `github` (`type: GitHub`) or `google` (`type: OpenID`, `issuer: https://accounts.google.com`, `displayName: Google`). With these names, the callback URLs registered at GitHub and Google stay the same. See "Let users sign in with GitHub" and "Let users sign in with Google".
+3. Create an `UpstreamProvider` named `github` (`type: GitHub`) or `google` (`type: OpenID`, `issuer: https://accounts.google.com`, `displayName: Google`). With these names, the callback URLs registered at GitHub and Google stay the same. See "Add an upstream sign-in".
 4. Regenerate the Deployment with `zeabur-identityctl manifests` without the four removed options.
 
 When it starts, Zeabur Identity turns each linked GitHub or Google account into a `Credential` of `type: Upstream` with `provider: github` or `provider: google`. Names, owners and labels stay, so linked accounts sign in as before. A `Credential` you create for a linked account now needs `type: Upstream` and `provider`.

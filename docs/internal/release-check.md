@@ -85,7 +85,7 @@ Use a test user such as `alice`, keeping the server's cluster-admin kubeconfig a
 - [ ] **Invitation:** invite Alice, open her link and create a passkey. Sign in as Alice and check her username and groups. Opening the used invitation again should fail.
 - [ ] **Disable:** set Alice's `disabled` field to `true`. Check that a fresh sign-in fails and her existing session cannot renew. Re-enable her before continuing.
 - [ ] **Sign out:** sign in as Alice, then delete her `Grant`. Check that the session cannot renew. Kubernetes still accepts an access token already issued until its expiry, up to ten minutes with the default settings.
-- [ ] **Account type:** run `zeabur-identityctl account-type alice admin`. Check that Alice's next sign-in includes `zeabur:admins` and, if GitHub or Google sign-in is set up, that signing in with it shows "Use a passkey for this account". Run `zeabur-identityctl account-type alice regular` before continuing.
+- [ ] **Account type:** run `zeabur-identityctl account-type alice admin`. Check that Alice's next sign-in includes `zeabur:admins` and, if an upstream sign-in is set up, that signing in with it shows "Use a passkey for this account". Run `zeabur-identityctl account-type alice regular` before continuing.
 - [ ] **Lost passkey:** run `zeabur-identityctl setup-link --username alice --reset`. Check that the old passkey fails, pending invitations are removed and old sessions cannot renew. Open the new link, create a replacement passkey and sign in again.
 
 When checking session renewal, use the same session before and after the change. A new
