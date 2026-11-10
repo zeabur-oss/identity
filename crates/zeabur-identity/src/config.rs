@@ -42,6 +42,8 @@ pub struct ServeConfig {
     pub invitations: bool,
     /// Enabled upstream identity providers.
     pub upstream: Vec<UpstreamConfig>,
+    /// The OpenID issuer that Google sign-in discovers.
+    pub google_issuer: zeabur_identity_api::upstream::Issuer,
     /// Where the internal TLS listener binds (Kubernetes store only).
     pub internal_listen: SocketAddr,
     /// Overrides the internal base URL recorded in the certificate Secret.

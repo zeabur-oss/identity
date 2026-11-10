@@ -10,7 +10,7 @@ Configure a Google OAuth client, then link Google accounts to Zeabur Identity us
 - Install Zeabur Identity in the `zeabur-identity` Namespace, and run `zeabur-identityctl` and `kubectl` with a cluster administrator's kubeconfig.
 - Have a real public domain ready. Google only accepts redirect URIs on public domains. See [Google's URI validation rules](https://developers.google.com/identity/protocols/oauth2/web-server#uri-validation). The local name `identity.example.test` used in [Install and sign in on k3s](../get-started/quickstart.mdx) won't work.
 - Confirm that your browser can reach Zeabur Identity at that domain and trusts its TLS certificate.
-- Confirm that the Zeabur Identity Pod can make outbound HTTPS connections to `oauth2.googleapis.com` and `www.googleapis.com`.
+- Confirm that the Zeabur Identity Pod can make outbound HTTPS connections to `accounts.google.com`, `oauth2.googleapis.com`, and `www.googleapis.com`.
 
 The examples below use `https://identity.example.com`. Replace each example with the Issuer you configured during installation:
 
@@ -147,5 +147,6 @@ Disabling Google sign-in doesn't remove linked accounts or end existing sessions
 | `org_internal` or a Google access policy error | Check the application's **Audience** and the policies of the account's organization. See [Google's audience rules](https://support.google.com/cloud/answer/15549945). |
 | **This account is not linked to any user here** | Use an invitation to link the selected Google account to a user. Zeabur Identity doesn't match accounts by email address or name. |
 | **Use a passkey for this account** | The Google account maps to an admin account. Admins can only sign in with passkeys. |
-| No Google button on the sign-in page, or the Pod can't read the secret | Check the two `--google-*` options, `--config-secret zeabur-identity-config`, the `google-client-secret` key in the Secret, and the file path. If you customized the Pod's security context, keep the generated `fsGroup`. |
+| No Google button on the sign-in page, or the Pod can't read the secret | Check `--google-client-id`, `--google-client-secret-file`, `--config-secret zeabur-identity-config`, the `google-client-secret` key in the Secret, and the file path. If you customized the Pod's security context, keep the generated `fsGroup`. |
+| **Continue with Google** shows an error instead of opening Google | Zeabur Identity reads Google's endpoints from `https://accounts.google.com/.well-known/openid-configuration` first. Look for `provider_unavailable` in the logs (`kubectl -n zeabur-identity logs deploy/zeabur-identity`), and check whether the Pod can reach `accounts.google.com` over HTTPS. |
 | Sign-in fails after returning from Google | Run `kubectl -n zeabur-identity logs deploy/zeabur-identity` to view the logs, and check whether the Pod can reach the token and signing key hosts over HTTPS: `oauth2.googleapis.com` and `www.googleapis.com`. |

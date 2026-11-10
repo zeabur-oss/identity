@@ -1,6 +1,6 @@
-//! Upstream sign-in and account linking against fake GitHub and Google providers that answer in
-//! process: PKCE is checked against the challenge sent, Google's ID token is signed with a test
-//! key published in a test JWK set.
+//! Upstream sign-in and account linking against fake GitHub and OpenID providers that answer in
+//! process: PKCE is checked against the challenge sent, the OpenID provider's discovery document
+//! names test endpoints, and its ID token is signed with a test key published in a test JWK set.
 
 #[cfg(test)]
 mod tests {
@@ -38,7 +38,9 @@ mod tests {
     use zeabur_identity_signin::account::{ACCOUNT_CLIENT, SESSION_COOKIE, SessionToken};
     use zeabur_identity_signin::passkeys::Passkeys;
     use zeabur_identity_signin::upstream::http::{HttpClient, HttpError};
-    use zeabur_identity_signin::upstream::provider::{Endpoints, Kind, Provider};
+    use zeabur_identity_signin::upstream::provider::{
+        Exchange, GOOGLE_ISSUER, GitHubEndpoints, Kind, Provider,
+    };
     use zeabur_identity_signin::upstream::{self, UPSTREAM_COOKIE, Upstream};
     use zeabur_identity_store::{
         Client, CredentialStore as _, Directory as _, GrantStore as _, MemoryCredentialStore,
@@ -69,6 +71,12 @@ mod tests {
         id_token_overrides: Mutex<Value>,
         fail_http: AtomicBool,
         secrets: Mutex<Vec<String>>,
+        /// The OpenID provider's issuer: its discovery document is at this issuer.
+        issuer: String,
+        /// Overrides for the discovery document; `null` makes it answer `500`.
+        discovery_overrides: Mutex<Value>,
+        /// The URL of every request the providers received.
+        requests: Mutex<Vec<String>>,
     }
 
     #[derive(Clone)]
@@ -85,7 +93,7 @@ mod tests {
     fn google_token(fake: &Fake, nonce: &str) -> Response<Bytes> {
         let now = SystemClock.now().as_secs();
         let mut claims = json!({
-            "iss": "https://accounts.google.com",
+            "iss": fake.issuer,
             "sub": GOOGLE_SUB,
             "aud": "google-client",
             "exp": now + 300,
@@ -119,6 +127,31 @@ mod tests {
         reply(StatusCode::OK, &serde_json::to_value(set).unwrap())
     }
 
+    /// The OpenID provider's discovery document, pointing at the test endpoints.
+    fn discovery(fake: &Fake) -> Response<Bytes> {
+        let overrides = fake.discovery_overrides.lock().unwrap().clone();
+        if overrides.is_null() {
+            return reply(StatusCode::INTERNAL_SERVER_ERROR, &json!({}));
+        }
+        let mut document = json!({
+            "issuer": fake.issuer,
+            "authorization_endpoint": "https://google.test/authorize",
+            "token_endpoint": "https://google.test/token",
+            "jwks_uri": "https://google.test/jwks",
+            "response_types_supported": ["code"],
+        });
+        if let Value::Object(map) = overrides {
+            for (k, v) in map {
+                if v.is_null() {
+                    document.as_object_mut().unwrap().remove(&k);
+                } else {
+                    document[k] = v;
+                }
+            }
+        }
+        reply(StatusCode::OK, &document)
+    }
+
     impl HttpClient for FakeHttp {
         fn send(
             &self,
@@ -137,6 +170,14 @@ mod tests {
         fn answer(&self, request: &Request<Bytes>) -> Option<Response<Bytes>> {
             let fake = &self.0;
             let uri = request.uri().to_string();
+            fake.requests.lock().unwrap().push(uri.clone());
+            let discovery_url = format!(
+                "{}/.well-known/openid-configuration",
+                fake.issuer.trim_end_matches('/')
+            );
+            if uri == discovery_url {
+                return Some(discovery(fake));
+            }
             let form: HashMap<String, String> = form_urlencoded::parse(request.body())
                 .into_owned()
                 .collect();
@@ -201,6 +242,11 @@ mod tests {
     }
 
     async fn harness() -> Harness {
+        harness_at(GOOGLE_ISSUER).await
+    }
+
+    /// The harness, with the OpenID provider shown as Google at `issuer`.
+    async fn harness_at(google_issuer: &str) -> Harness {
         let manager = KeyManager::new(
             MemoryKeyStore::default(),
             SystemClock,
@@ -256,36 +302,25 @@ mod tests {
             used_ceremonies: OneTimeIds::default(),
             providers: vec![Kind::GitHub, Kind::Google],
         });
-        let fake = Arc::new(Fake::default());
+        let fake = Arc::new(Fake {
+            issuer: google_issuer.to_owned(),
+            discovery_overrides: Mutex::new(json!({})),
+            ..Fake::default()
+        });
         let google_key = Arc::new(SigningKey::generate(Algorithm::Rs256).unwrap());
         *fake.google_key.lock().unwrap() = Some(Arc::clone(&google_key));
         *fake.published_key.lock().unwrap() = Some(google_key);
-        let github = Provider::new(
-            Kind::GitHub,
+        let github = Provider::github(
             "gh-client".into(),
             "gh-secret".into(),
-            Endpoints {
+            GitHubEndpoints {
                 authorize: "https://github.test/authorize".into(),
                 token: "https://github.test/token".into(),
-                user: Some("https://api.github.test/user".into()),
-                jwks: None,
-                issuers: vec![],
+                user: "https://api.github.test/user".into(),
             },
         )
         .unwrap();
-        let google = Provider::new(
-            Kind::Google,
-            "google-client".into(),
-            "google-secret".into(),
-            Endpoints {
-                authorize: "https://google.test/authorize".into(),
-                token: "https://google.test/token".into(),
-                user: None,
-                jwks: Some("https://google.test/jwks".into()),
-                issuers: Endpoints::google().issuers,
-            },
-        )
-        .unwrap();
+        let google = google_provider(google_issuer);
         let service = Arc::new(Upstream {
             sign_in: Arc::clone(&sign_in),
             providers: vec![github, google],
@@ -296,6 +331,15 @@ mod tests {
             .merge(zeabur_identity_signin::router(sign_in))
             .merge(upstream::router(Arc::clone(&service)));
         Harness { app, fake, service }
+    }
+
+    fn google_provider(issuer: &str) -> Provider {
+        Provider::google(
+            Issuer::new(issuer).unwrap(),
+            "google-client".into(),
+            "google-secret".into(),
+        )
+        .unwrap()
     }
 
     struct Reply {
@@ -884,6 +928,17 @@ mod tests {
         assert_eq!(
             sign_in(&h, "google", "code-azp-other").await.status,
             StatusCode::BAD_REQUEST
+        );
+        // Google's documentation lists both spellings of its issuer.
+        *h.fake.id_token_overrides.lock().unwrap() = json!({ "iss": "accounts.google.com" });
+        let reply = sign_in(&h, "google", "code-iss-short").await;
+        assert_eq!(reply.status, StatusCode::SEE_OTHER, "{}", reply.body);
+        assert_audit(
+            &reply,
+            "auth.sign_in",
+            None,
+            Some("alice"),
+            Some("uid-alice"),
         );
         // A one-element array naming this client, with a matching azp, is accepted.
         *h.fake.id_token_overrides.lock().unwrap() =
@@ -1545,5 +1600,140 @@ mod tests {
         assert_eq!(renewed.status, StatusCode::BAD_REQUEST, "{}", renewed.body);
         let reply = sign_in(&h, "github", "code-2").await;
         assert!(reply.body.contains("account_unlinked (github)"));
+    }
+
+    fn requests(h: &Harness) -> Vec<String> {
+        h.fake.requests.lock().unwrap().clone()
+    }
+
+    #[tokio::test]
+    async fn the_openid_provider_is_reached_at_the_endpoints_its_discovery_document_names() {
+        let h = harness().await;
+        link(&h, Kind::Google, GOOGLE_SUB, "alice").await;
+        let flow = authorize(&h, "openid").await;
+        let started = start(&h, "google", &json!({}), &format!("{FLOW_COOKIE}={flow}")).await;
+        let url = started.json()["redirect_to"].as_str().unwrap().to_owned();
+        assert!(url.starts_with("https://google.test/authorize?"), "{url}");
+        let query = provider_issues_code(&h, &url, "code-1");
+        let cookies = format!(
+            "{FLOW_COOKIE}={flow}; {UPSTREAM_COOKIE}={}",
+            started.cookie(UPSTREAM_COOKIE)
+        );
+        let reply = callback(&h, "google", &query, &cookies).await;
+        assert_eq!(reply.status, StatusCode::SEE_OTHER, "{}", reply.body);
+        assert_eq!(
+            requests(&h),
+            [
+                "https://accounts.google.com/.well-known/openid-configuration",
+                "https://google.test/token",
+                "https://google.test/jwks",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn another_openid_issuer_signs_in_through_the_same_checks() {
+        const IDP: &str = "https://idp.test/realms/dev";
+        let h = harness_at(IDP).await;
+        h.service
+            .sign_in
+            .credentials
+            .link(&NewExternal {
+                id: ExternalId {
+                    issuer: Issuer::new(IDP).unwrap(),
+                    subject: Subject::new(GOOGLE_SUB).unwrap(),
+                },
+                user: "alice".into(),
+                kind: Kind::Google.credential_type(),
+                user_subject: "uid-alice".into(),
+            })
+            .await
+            .unwrap();
+        let reply = sign_in(&h, "google", "code-1").await;
+        assert_eq!(reply.status, StatusCode::SEE_OTHER, "{}", reply.body);
+        assert_audit(
+            &reply,
+            "auth.sign_in",
+            None,
+            Some("alice"),
+            Some("uid-alice"),
+        );
+        assert_eq!(
+            requests(&h)[0],
+            "https://idp.test/realms/dev/.well-known/openid-configuration"
+        );
+        // Google's second spelling of its issuer is Google's only, and another issuer's tokens
+        // are refused like Google's.
+        for (case, (claim, value)) in [
+            ("iss", json!("accounts.google.com")),
+            ("iss", json!(GOOGLE_ISSUER)),
+            ("iss", json!("https://idp.test/realms/dev/")),
+            ("aud", json!("someone-else")),
+            ("nonce", json!("replayed")),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            *h.fake.id_token_overrides.lock().unwrap() = json!({ claim: value });
+            let reply = sign_in(&h, "google", &format!("code-{case}")).await;
+            assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{claim}={value}");
+            assert_audit(
+                &reply,
+                "auth.sign_in",
+                Some("provider_verification_failed"),
+                None,
+                None,
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unusable_discovery_document_ends_the_sign_in_with_no_other_endpoint_tried() {
+        for overrides in [
+            Value::Null,
+            json!({ "issuer": "https://evil.example" }),
+            json!({ "issuer": "https://accounts.google.com/" }),
+            json!({ "issuer": "accounts.google.com" }),
+            json!({ "jwks_uri": null }),
+            json!({ "token_endpoint": "http://google.test/token" }),
+            json!({ "authorization_endpoint": "/authorize" }),
+        ] {
+            let h = harness().await;
+            *h.fake.discovery_overrides.lock().unwrap() = overrides.clone();
+            let flow = authorize(&h, "openid").await;
+            let started = start(&h, "google", &json!({}), &format!("{FLOW_COOKIE}={flow}")).await;
+            assert_eq!(started.status, StatusCode::BAD_GATEWAY, "{overrides}");
+            assert_eq!(
+                started.json()["type"],
+                "urn:zeabur-identity:problem:provider-unavailable"
+            );
+            assert!(started.headers.get(header::SET_COOKIE).is_none());
+            assert_eq!(
+                requests(&h),
+                ["https://accounts.google.com/.well-known/openid-configuration"],
+                "{overrides}"
+            );
+
+            // At the callback, the code is not sent anywhere.
+            let fresh = google_provider(GOOGLE_ISSUER);
+            let exchange = Exchange {
+                code: "code-1",
+                verifier: VERIFIER,
+                redirect_uri: "https://login.example.com/upstream/google/callback",
+                nonce: "nonce",
+            };
+            assert!(
+                fresh
+                    .identify(&FakeHttp(Arc::clone(&h.fake)), exchange, SystemClock.now())
+                    .await
+                    .is_err()
+            );
+            assert!(
+                requests(&h)
+                    .iter()
+                    .all(|url| url.ends_with("/.well-known/openid-configuration")),
+                "{overrides}"
+            );
+        }
     }
 }
