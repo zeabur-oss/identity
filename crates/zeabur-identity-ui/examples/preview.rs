@@ -20,12 +20,23 @@ const GITHUB: ProviderButton<'static> = ProviderButton {
     icon: "GithubLogo",
 };
 const PROVIDERS: [ProviderButton<'static>; 1] = [GITHUB];
-const BOTH: [ProviderButton<'static>; 2] = [
+/// Several providers of any kind, one with a display name at the 64-character limit.
+const MANY: [ProviderButton<'static>; 4] = [
+    ProviderButton {
+        id: "keycloak",
+        label: "Company SSO",
+        icon: "SignIn",
+    },
     GITHUB,
     ProviderButton {
         id: "google",
         label: "Google",
         icon: "GoogleLogo",
+    },
+    ProviderButton {
+        id: "partners",
+        label: "Partner Directory for Contractors and External Collaborators, EU",
+        icon: "SignIn",
     },
 ];
 const LINKED: [LinkedRow<'static>; 1] = [LinkedRow {
@@ -137,7 +148,10 @@ async fn index() -> Html<String> {
         "/login/request",
         "/login/ending",
         "/login/hint",
+        "/login/no-providers",
+        "/login/many",
         "/setup",
+        "/setup/many",
         "/setup#token=preview",
         "/linked",
         "/account",
@@ -181,6 +195,8 @@ async fn login(Path(state): Path<String>, RawQuery(q): RawQuery, h: HeaderMap) -
             &PROVIDERS,
             &[],
         ),
+        "no-providers" => login_page(lang, Some(("Zeabur", PENDING)), None, &[], &[]),
+        "many" => login_page(lang, Some(("Zeabur", PENDING)), None, &MANY, &[]),
         _ => StatusCode::NOT_FOUND.into_response(),
     }
 }
@@ -242,7 +258,7 @@ async fn account(Path(state): Path<String>, RawQuery(q): RawQuery, h: HeaderMap)
         csrf: "preview",
         passkeys,
         linked,
-        providers: &BOTH,
+        providers: &MANY,
         admin,
         sessions: &SESSIONS,
     };
@@ -290,6 +306,12 @@ async fn main() -> std::io::Result<()> {
             "/setup",
             get(|RawQuery(q): RawQuery, h: HeaderMap| async move {
                 setup_page(lang(q.as_deref(), &h), None, &PROVIDERS, &APPS)
+            }),
+        )
+        .route(
+            "/setup/many",
+            get(|RawQuery(q): RawQuery, h: HeaderMap| async move {
+                setup_page(lang(q.as_deref(), &h), None, &MANY, &APPS)
             }),
         )
         .route("/setup/options", post(setup_options))
