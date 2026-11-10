@@ -20,7 +20,7 @@ mod tests {
     use tracing::instrument::WithSubscriber as _;
     use zeabur_identity_api::client::ClientType;
     use zeabur_identity_api::token_hash;
-    use zeabur_identity_api::upstream::{ExternalId, Issuer, Subject};
+    use zeabur_identity_api::upstream::{ExternalId, Issuer, ProviderId, Subject};
     use zeabur_identity_core::account::AccountType;
     use zeabur_identity_core::clock::{Clock, SystemClock};
     use zeabur_identity_core::config::BaseUrl;
@@ -39,7 +39,7 @@ mod tests {
     use zeabur_identity_signin::passkeys::Passkeys;
     use zeabur_identity_signin::upstream::http::{HttpClient, HttpError};
     use zeabur_identity_signin::upstream::provider::{
-        Exchange, GOOGLE_ISSUER, GitHubEndpoints, Kind, Provider,
+        ClientSecret, Exchange, GITHUB_ISSUER, GOOGLE_ISSUER, GitHubEndpoints, Provider, Providers,
     };
     use zeabur_identity_signin::upstream::{self, UPSTREAM_COOKIE, Upstream};
     use zeabur_identity_store::{
@@ -302,20 +302,11 @@ mod tests {
         let mut providers = Vec::new();
         for id in configured {
             let provider = match *id {
-                "github" => Provider::github(
-                    "gh-client".into(),
-                    "gh-secret".into(),
-                    GitHubEndpoints {
-                        authorize: "https://github.test/authorize".into(),
-                        token: "https://github.test/token".into(),
-                        user: "https://api.github.test/user".into(),
-                    },
-                )
-                .unwrap(),
+                "github" => github_provider(ClientSecret::Fixed("gh-secret".into())),
                 "google" => google_provider(google_issuer),
                 other => panic!("no provider {other} in the harness"),
             };
-            providers.push(provider);
+            providers.push(Arc::new(provider));
         }
         let sign_in = Arc::new(SignIn {
             oauth: Arc::clone(&oauth),
@@ -323,7 +314,7 @@ mod tests {
             credentials: MemoryCredentialStore::default(),
             setup,
             used_ceremonies: OneTimeIds::default(),
-            providers: providers.iter().map(Provider::descriptor).collect(),
+            providers: Arc::new(Providers::new(providers)),
         });
         let fake = Arc::new(Fake {
             issuer: google_issuer.to_owned(),
@@ -335,7 +326,6 @@ mod tests {
         *fake.published_key.lock().unwrap() = Some(google_key);
         let service = Arc::new(Upstream {
             sign_in: Arc::clone(&sign_in),
-            providers,
             http: FakeHttp(Arc::clone(&fake)),
             used_states: OneTimeIds::default(),
         });
@@ -345,13 +335,69 @@ mod tests {
         Harness { app, fake, service }
     }
 
-    fn google_provider(issuer: &str) -> Provider {
-        Provider::google(
-            Issuer::new(issuer).unwrap(),
-            "google-client".into(),
-            "google-secret".into(),
+    fn github_provider(secret: ClientSecret) -> Provider {
+        Provider::github(
+            ProviderId::new("github").unwrap(),
+            "gh-client".into(),
+            secret,
+            GitHubEndpoints {
+                authorize: "https://github.test/authorize".into(),
+                token: "https://github.test/token".into(),
+                user: "https://api.github.test/user".into(),
+            },
         )
         .unwrap()
+    }
+
+    fn google_provider(issuer: &str) -> Provider {
+        openid_provider(
+            "google",
+            issuer,
+            ClientSecret::Fixed("google-secret".into()),
+        )
+    }
+
+    fn openid_provider(id: &str, issuer: &str, secret: ClientSecret) -> Provider {
+        Provider::openid(
+            ProviderId::new(id).unwrap(),
+            "Google".into(),
+            Issuer::new(issuer).unwrap(),
+            Vec::new(),
+            "google-client".into(),
+            secret,
+        )
+    }
+
+    /// The two providers the harness configures, by their default IDs.
+    #[derive(Clone, Copy, Debug)]
+    enum Kind {
+        GitHub,
+        Google,
+    }
+
+    impl Kind {
+        fn from_id(id: &str) -> Option<Self> {
+            match id {
+                "github" => Some(Self::GitHub),
+                "google" => Some(Self::Google),
+                _ => None,
+            }
+        }
+
+        fn id(self) -> ProviderId {
+            ProviderId::new(match self {
+                Self::GitHub => "github",
+                Self::Google => "google",
+            })
+            .unwrap()
+        }
+
+        fn issuer(self) -> &'static str {
+            match self {
+                Self::GitHub => GITHUB_ISSUER,
+                Self::Google => GOOGLE_ISSUER,
+            }
+        }
     }
 
     struct Reply {
@@ -453,10 +499,10 @@ mod tests {
                     assert!(fields["reason"].as_str().is_some());
                 }
             }
-            if let Some(kind) = provider.as_deref().and_then(Kind::from_id) {
-                assert_eq!(fields["provider"], kind.id());
-            } else {
-                assert!(fields.get("provider").is_none());
+            // A logged provider is the one the path names. Only a configured provider is logged
+            // (see `callback_classification_requires_verified_unexpired_pending`).
+            if let Some(logged) = fields.get("provider") {
+                assert_eq!(logged.as_str(), provider.as_deref());
             }
             assert!(fields.get("client").is_none());
         }
@@ -648,7 +694,7 @@ mod tests {
             .link(&NewExternal {
                 id: external(kind, subject),
                 user: user.into(),
-                kind: kind.credential_type(),
+                provider: kind.id(),
                 user_subject: format!("uid-{user}"),
             })
             .await
@@ -1647,7 +1693,7 @@ mod tests {
             .link(&NewExternal {
                 id: external(Kind::Google, "second"),
                 user: "alice".into(),
-                kind: Kind::Google.credential_type(),
+                provider: Kind::Google.id(),
                 user_subject: "uid-alice".into(),
             })
             .await
@@ -1728,7 +1774,7 @@ mod tests {
                     subject: Subject::new(GOOGLE_SUB).unwrap(),
                 },
                 user: "alice".into(),
-                kind: Kind::Google.credential_type(),
+                provider: Kind::Google.id(),
                 user_subject: "uid-alice".into(),
             })
             .await
@@ -1998,5 +2044,133 @@ mod tests {
             assert!(!reply.headers.contains_key(header::LOCATION));
             assert_eq!(token_requests(&h), 0, "{reason}");
         }
+    }
+
+    fn registry(h: &Harness) -> &Providers {
+        &h.service.sign_in.providers
+    }
+
+    /// Starts a sign-in as alice with `provider` and returns the callback query and cookies.
+    async fn started_sign_in(h: &Harness, provider: &str) -> (String, String) {
+        let flow = authorize(h, "openid").await;
+        let started = start(h, provider, &json!({}), &format!("{FLOW_COOKIE}={flow}")).await;
+        assert_eq!(started.status, StatusCode::OK, "{}", started.body);
+        let url = started.json()["redirect_to"].as_str().unwrap().to_owned();
+        (
+            provider_issues_code(h, &url, "code-1"),
+            format!(
+                "{FLOW_COOKIE}={flow}; {UPSTREAM_COOKIE}={}",
+                started.cookie(UPSTREAM_COOKIE)
+            ),
+        )
+    }
+
+    #[tokio::test]
+    async fn an_added_provider_starts_at_the_next_request() {
+        let h = harness_with(GOOGLE_ISSUER, &["github"]).await;
+        link(&h, Kind::Google, GOOGLE_SUB, "alice").await;
+        let flow = authorize(&h, "openid").await;
+        let started = start(&h, "google", &json!({}), &format!("{FLOW_COOKIE}={flow}")).await;
+        assert_eq!(started.status, StatusCode::NOT_FOUND);
+
+        let mut list = registry(&h).current().to_vec();
+        list.push(Arc::new(google_provider(GOOGLE_ISSUER)));
+        registry(&h).replace(list);
+        let reply = sign_in(&h, "google", "code-1").await;
+        assert_eq!(reply.status, StatusCode::SEE_OTHER, "{}", reply.body);
+    }
+
+    /// A provider deleted or moved to another issuer while the user is at the provider: the code
+    /// is not sent anywhere.
+    #[tokio::test]
+    async fn a_provider_deleted_or_changed_during_a_sign_in_ends_it_before_the_code_is_sent() {
+        for (replacement, reason) in [
+            (None, "provider_unavailable"),
+            (Some("https://idp.test/realms/dev"), "provider_changed"),
+        ] {
+            let h = harness().await;
+            link(&h, Kind::Google, GOOGLE_SUB, "alice").await;
+            let (query, cookies) = started_sign_in(&h, "google").await;
+            let mut list: Vec<_> = registry(&h)
+                .current()
+                .iter()
+                .filter(|p| p.id().as_str() != "google")
+                .cloned()
+                .collect();
+            if let Some(issuer) = replacement {
+                list.push(Arc::new(google_provider(issuer)));
+            }
+            registry(&h).replace(list);
+            let reply = callback(&h, "google", &query, &cookies).await;
+            assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{reason}");
+            assert_eq!(reply.audit.as_ref().unwrap()["fields"]["reason"], reason);
+            assert!(!reply.headers.contains_key(header::LOCATION));
+            assert_eq!(token_requests(&h), 0, "{reason}");
+        }
+    }
+
+    /// The client secret is read at each exchange: a rotated secret works at the next sign-in, and
+    /// an unreadable one ends the sign-in before the code is sent, without naming the Secret.
+    #[tokio::test]
+    async fn the_client_secret_is_read_at_each_exchange() {
+        let h = harness_with(GOOGLE_ISSUER, &[]).await;
+        link(&h, Kind::GitHub, &GITHUB_ID.to_string(), "alice").await;
+        let current: Arc<Mutex<Result<String, String>>> =
+            Arc::new(Mutex::new(Ok("stale-secret".into())));
+        let source = Arc::clone(&current);
+        let secret = ClientSecret::Fetch(Arc::new(move || {
+            let value = source.lock().unwrap().clone();
+            Box::pin(async move { value })
+        }));
+        registry(&h).replace(vec![Arc::new(github_provider(secret))]);
+
+        let refused = sign_in(&h, "github", "code-1").await;
+        assert_eq!(refused.status, StatusCode::BAD_REQUEST);
+
+        *current.lock().unwrap() = Ok("gh-secret".into());
+        let reply = sign_in(&h, "github", "code-2").await;
+        assert_eq!(reply.status, StatusCode::SEE_OTHER, "{}", reply.body);
+
+        *current.lock().unwrap() = Err("Secret zeabur-identity-upstream has no key github".into());
+        let before = token_requests(&h);
+        let reply = sign_in(&h, "github", "code-3").await;
+        assert_eq!(reply.status, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            reply.audit.as_ref().unwrap()["fields"]["reason"],
+            "provider_unavailable"
+        );
+        assert_eq!(token_requests(&h), before);
+        assert!(!reply.body.contains("zeabur-identity-upstream"));
+    }
+
+    /// Deleting a provider deletes no linked account: the account page still lists it and can
+    /// unlink it, and any provider with the same issuer signs it in again.
+    #[tokio::test]
+    async fn a_deleted_provider_keeps_its_linked_accounts() {
+        let h = harness().await;
+        link(&h, Kind::Google, GOOGLE_SUB, "alice").await;
+        registry(&h).replace(Vec::new());
+        assert_eq!(
+            linked_to(&h, Kind::Google, GOOGLE_SUB).await.as_deref(),
+            Some("alice")
+        );
+        let session = account_session(&h, "alice", 0).await;
+        let page = account_page(&h, &session).await;
+        assert!(page.contains("accounts.google.com"), "{page}");
+
+        registry(&h).replace(vec![Arc::new(openid_provider(
+            "workspace",
+            GOOGLE_ISSUER,
+            ClientSecret::Fixed("google-secret".into()),
+        ))]);
+        let reply = sign_in(&h, "workspace", "code-1").await;
+        assert_eq!(reply.status, StatusCode::SEE_OTHER, "{}", reply.body);
+        assert_audit(
+            &reply,
+            "auth.sign_in",
+            None,
+            Some("alice"),
+            Some("uid-alice"),
+        );
     }
 }

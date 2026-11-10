@@ -1,8 +1,10 @@
 //! `zeabur-identity`: wires configuration, storage, keys and HTTP together.
 //!
 //! Kubernetes mode binds the internal port first, failing immediately if it is unavailable.
-//! Startup refuses to bind the public port until directory metadata watches publish their initial
-//! snapshots and signing keys are reconciled. Background tasks watch metadata, rotate keys,
+//! Startup first migrates linked accounts from before `UpstreamProvider`
+//! ([`zeabur_identity_k8s::migrate`]). It refuses to bind the public port until directory metadata
+//! watches publish their initial snapshots, the upstream providers are read and signing keys are
+//! reconciled. Background tasks watch metadata, rotate keys,
 //! collect expired grants and invitations, and serve internal TLS.
 //! With the Kubernetes store, if the API server becomes unreachable, Zeabur Identity keeps serving
 //! the last published keys; logins and refreshes that need a write fail closed, and the background
@@ -22,14 +24,16 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use zeabur_identity_api::grant::Grant;
 use zeabur_identity_api::invitation::Invitation;
+use zeabur_identity_api::upstream_provider::UpstreamProvider;
 use zeabur_identity_core::clock::SystemClock;
 use zeabur_identity_core::crypto::Sealer;
 use zeabur_identity_k8s::credentials::KubeCredentialStore;
 use zeabur_identity_k8s::directory::KubeDirectory;
-use zeabur_identity_k8s::gc;
 use zeabur_identity_k8s::grants::KubeGrantStore;
 use zeabur_identity_k8s::keys::SecretKeyStore;
+use zeabur_identity_k8s::objects::list_all;
 use zeabur_identity_k8s::setup::KubeSetupStore;
+use zeabur_identity_k8s::{gc, migrate, upstream as kube_upstream};
 use zeabur_identity_keys::manager::{KeyManager, ManagerError};
 use zeabur_identity_keys::store::KeyStore;
 use zeabur_identity_oauth::discovery::ProviderMetadata;
@@ -37,7 +41,7 @@ use zeabur_identity_oauth::metadata::{AppState, router};
 use zeabur_identity_oauth::{AuthorizationServer, OneTimeIds, endpoints};
 use zeabur_identity_signin::passkeys::Passkeys;
 use zeabur_identity_signin::upstream::http::HyperClient;
-use zeabur_identity_signin::upstream::provider::{GitHubEndpoints, Kind, Provider};
+use zeabur_identity_signin::upstream::provider::Providers;
 use zeabur_identity_signin::upstream::{self, Upstream};
 use zeabur_identity_signin::{SignIn, pages};
 use zeabur_identity_store::{CredentialStore, Directory, GrantStore, SetupStore};
@@ -45,6 +49,7 @@ use zeabur_identity_tls::listener::{Resolver, TlsListener, server_config};
 
 use crate::config::{ServeConfig, Store};
 use crate::internal::{self, InternalConfig};
+use crate::providers::Builder;
 
 /// How often signing keys are reconciled. Rotation timings are hours to days, so a minute of
 /// lateness is irrelevant; the interval mainly bounds how quickly a storage outage recovers.
@@ -70,6 +75,13 @@ pub enum ServeError {
     /// Kubernetes directory metadata could not be synchronized at startup.
     #[error("preparing directory metadata: {0}")]
     Directory(#[from] zeabur_identity_store::StoreError),
+    /// Linked accounts from before `UpstreamProvider` could not be migrated. Apply this version's
+    /// CRDs and RBAC first.
+    #[error("migrating linked accounts (apply this version's CRDs and RBAC first): {0}")]
+    Migration(kube::Error),
+    /// `UpstreamProvider` objects could not be read. Apply this version's CRDs and RBAC first.
+    #[error("reading UpstreamProvider objects (apply this version's CRDs and RBAC first): {0}")]
+    Upstream(kube::Error),
     /// The process sealing key could not be created.
     #[error("creating the process sealing key failed")]
     Crypto,
@@ -103,6 +115,12 @@ pub async fn serve(config: ServeConfig) -> Result<(), ServeError> {
         .clone()
         .unwrap_or_else(|| client.default_namespace().to_owned());
     tracing::info!("using Kubernetes storage");
+    let migrated = migrate::linked_accounts(client.clone(), &namespace)
+        .await
+        .map_err(ServeError::Migration)?;
+    if migrated > 0 {
+        tracing::info!(migrated, "linked accounts migrated to UpstreamProvider");
+    }
     let keys = SecretKeyStore::new(
         Api::namespaced(client.clone(), &namespace),
         key_secret.clone(),
@@ -126,6 +144,8 @@ pub async fn serve(config: ServeConfig) -> Result<(), ServeError> {
             }
         }));
     }
+    let providers = Arc::new(Providers::default());
+    background.push(watch_providers(&client, &namespace, &providers, shutdown_rx.clone()).await?);
     let internal_secrets = Api::namespaced(client.clone(), &namespace);
     let gc = tokio::spawn({
         let shutdown = shutdown_rx.clone();
@@ -134,6 +154,7 @@ pub async fn serve(config: ServeConfig) -> Result<(), ServeError> {
     run(
         &config,
         (keys, directory, grants, credentials, setup),
+        providers,
         background.into_iter().chain([gc]).collect(),
         (internal_listener, resolver, internal_secrets),
         shutdown_tx,
@@ -141,32 +162,32 @@ pub async fn serve(config: ServeConfig) -> Result<(), ServeError> {
     .await
 }
 
-/// The configured upstream providers, with their client secrets read from files.
-fn upstream_providers(config: &ServeConfig) -> Result<Vec<Provider>, ServeError> {
-    config
-        .upstream
-        .iter()
-        .map(|upstream| {
-            let secret = std::fs::read_to_string(&upstream.client_secret_file)
-                .map_err(|error| {
-                    ServeError::Config(format!(
-                        "{}: {error}",
-                        upstream.client_secret_file.display()
-                    ))
-                })?
-                .trim()
-                .to_owned();
-            let client_id = upstream.client_id.clone();
-            let provider = match upstream.kind {
-                Kind::GitHub => Provider::github(client_id, secret, GitHubEndpoints::github_com()),
-                Kind::Google => Provider::google(config.google_issuer.clone(), client_id, secret),
-            };
-            provider.map_err(|error| ServeError::Config(format!("{}: {error}", upstream.kind.id())))
-        })
-        .collect()
+/// Reads the `UpstreamProvider` objects into `registry`, then keeps it current until shutdown.
+/// The first read fails startup, for example when the CRD is not installed.
+async fn watch_providers(
+    client: &Client,
+    namespace: &str,
+    registry: &Arc<Providers>,
+    mut shutdown: watch::Receiver<bool>,
+) -> Result<JoinHandle<()>, ServeError> {
+    let api: Api<UpstreamProvider> = Api::namespaced(client.clone(), namespace);
+    let mut builder = Builder::new(
+        Api::namespaced(client.clone(), namespace),
+        Arc::clone(registry),
+    );
+    let mut initial = list_all(&api, kube::api::ListParams::default())
+        .await
+        .map_err(ServeError::Upstream)?;
+    initial.sort_by(|a, b| a.metadata.name.cmp(&b.metadata.name));
+    builder.publish(&initial);
+    Ok(tokio::spawn(async move {
+        tokio::select! {
+            () = kube_upstream::watch(api, |objects| builder.publish(&objects)) => {}
+            _ = shutdown.wait_for(|stop| *stop) => {}
+        }
+    }))
 }
 
-/// Maps load shedding to an immediate retryable response; unexpected errors retain diagnostics.
 fn admission_error(error: &axum::BoxError) -> axum::response::Response {
     use axum::http::{StatusCode, header};
     use axum::response::IntoResponse as _;
@@ -220,6 +241,7 @@ fn limits(router: axum::Router) -> axum::Router {
 async fn run<S: KeyStore, D: Directory, G: GrantStore, K: CredentialStore, T: SetupStore>(
     config: &ServeConfig,
     (keys, directory, grants, credentials, setup): (S, D, G, K, T),
+    providers: Arc<Providers>,
     mut background: Vec<JoinHandle<()>>,
     (listener, resolver, secrets): (TlsListener, Arc<Resolver>, Api<Secret>),
     shutdown_tx: watch::Sender<bool>,
@@ -262,8 +284,6 @@ async fn run<S: KeyStore, D: Directory, G: GrantStore, K: CredentialStore, T: Se
         used_codes: OneTimeIds::default(),
         used_request_uris: OneTimeIds::default(),
     });
-    let providers = upstream_providers(config)?;
-    let kinds: Vec<Kind> = providers.iter().map(Provider::kind).collect();
     let sign_in = Arc::new(SignIn {
         oauth: Arc::clone(&server),
         passkeys: Passkeys::new(&config.issuer)
@@ -271,9 +291,9 @@ async fn run<S: KeyStore, D: Directory, G: GrantStore, K: CredentialStore, T: Se
         credentials,
         setup,
         used_ceremonies: OneTimeIds::default(),
-        providers: providers.iter().map(Provider::descriptor).collect(),
+        providers: Arc::clone(&providers),
     });
-    let mut app = router(AppState::new(
+    let app = router(AppState::new(
         metadata,
         manager.subscribe(),
         config.metadata_max_age,
@@ -282,20 +302,18 @@ async fn run<S: KeyStore, D: Directory, G: GrantStore, K: CredentialStore, T: Se
     .merge(business_limits(zeabur_identity_signin::router(Arc::clone(
         &sign_in,
     ))))
-    .merge(business_limits(pages::router(Arc::clone(&server), &kinds)));
-    if !providers.is_empty() {
-        let roots = zeabur_identity_tls::trust::roots()
-            .map_err(|error| ServeError::Config(error.to_string()))?;
-        let http =
-            HyperClient::new(roots).map_err(|error| ServeError::Config(error.to_string()))?;
-        tracing::info!(providers = ?kinds, "upstream sign-in enabled");
-        app = app.merge(business_limits(upstream::router(Arc::new(Upstream {
-            sign_in,
-            providers,
-            http,
-            used_states: OneTimeIds::default(),
-        }))));
-    }
+    .merge(business_limits(pages::router(
+        Arc::clone(&server),
+        providers,
+    )));
+    let roots = zeabur_identity_tls::trust::roots()
+        .map_err(|error| ServeError::Config(error.to_string()))?;
+    let http = HyperClient::new(roots).map_err(|error| ServeError::Config(error.to_string()))?;
+    let app = app.merge(business_limits(upstream::router(Arc::new(Upstream {
+        sign_in,
+        http,
+        used_states: OneTimeIds::default(),
+    }))));
     let app = limits(app);
     let listener = TcpListener::bind(config.listen).await?;
     tracing::info!(address = %listener.local_addr()?, issuer = %config.issuer, "listening");

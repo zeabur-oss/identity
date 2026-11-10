@@ -8,8 +8,7 @@ use std::sync::{Mutex, PoisonError};
 use thiserror::Error;
 use zeabur_identity_api::ADMIN_GROUP;
 use zeabur_identity_api::client::ClientType;
-use zeabur_identity_api::credential::CredentialType;
-use zeabur_identity_api::upstream::ExternalId;
+use zeabur_identity_api::upstream::{ExternalId, Issuer, ProviderId};
 use zeabur_identity_core::account::{AccountType, Settings};
 use zeabur_identity_core::clock::UnixTime;
 use zeabur_identity_core::crypto::ct_eq;
@@ -638,8 +637,11 @@ pub enum Unlink {
 pub struct LinkedSummary {
     /// `Credential` object name.
     pub name: String,
-    /// The provider.
-    pub kind: CredentialType,
+    /// The `UpstreamProvider` it was linked through. `None` for a credential from before
+    /// `UpstreamProvider` that was not migrated.
+    pub provider: Option<ProviderId>,
+    /// The issuer of the account. It still names the account after its provider is deleted.
+    pub issuer: Issuer,
     /// When it was linked, if the backend records it.
     pub created_at: Option<UnixTime>,
 }
@@ -666,8 +668,8 @@ pub struct NewExternal {
     pub id: ExternalId,
     /// `User` object name.
     pub user: String,
-    /// The provider.
-    pub kind: CredentialType,
+    /// The `UpstreamProvider` the account is linked through.
+    pub provider: ProviderId,
     /// The [`User::subject`] (UID) of the user the account signs in as.
     pub user_subject: String,
 }
@@ -887,7 +889,7 @@ pub trait SetupStore: Send + Sync + 'static {
 #[derive(Debug, Default)]
 pub struct MemoryCredentialStore {
     passkeys: Mutex<HashMap<String, MemoryPasskey>>,
-    externals: Mutex<HashMap<String, (LinkedAccount, CredentialType)>>,
+    externals: Mutex<HashMap<String, (LinkedAccount, ProviderId, Issuer)>>,
     events: Mutex<Vec<AccountEvent>>,
 }
 
@@ -968,7 +970,8 @@ impl CredentialStore for MemoryCredentialStore {
                         user: external.user.clone(),
                         user_subject: Some(external.user_subject.clone()),
                     },
-                    external.kind,
+                    external.provider.clone(),
+                    external.id.issuer.clone(),
                 ));
                 CreateCredential::Created
             }
@@ -985,7 +988,7 @@ impl CredentialStore for MemoryCredentialStore {
             .externals
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        future::ready(Ok(externals.get(name).map(|(linked, _)| linked.clone())))
+        future::ready(Ok(externals.get(name).map(|(linked, ..)| linked.clone())))
     }
 
     fn passkeys(
@@ -1064,10 +1067,11 @@ impl CredentialStore for MemoryCredentialStore {
             .unwrap_or_else(PoisonError::into_inner);
         let mut list: Vec<LinkedSummary> = externals
             .iter()
-            .filter(|(_, (linked, _))| linked.signs_in_as(user))
-            .map(|(name, (_, kind))| LinkedSummary {
+            .filter(|(_, (linked, ..))| linked.signs_in_as(user))
+            .map(|(name, (_, provider, issuer))| LinkedSummary {
                 name: name.clone(),
-                kind: *kind,
+                provider: Some(provider.clone()),
+                issuer: issuer.clone(),
                 created_at: None,
             })
             .collect();
@@ -1093,9 +1097,12 @@ impl CredentialStore for MemoryCredentialStore {
             .count()
             + externals
                 .iter()
-                .filter(|(other, (linked, _))| other.as_str() != name && owned(linked))
+                .filter(|(other, (linked, ..))| other.as_str() != name && owned(linked))
                 .count();
-        let outcome = if !externals.get(name).is_some_and(|(linked, _)| owned(linked)) {
+        let outcome = if !externals
+            .get(name)
+            .is_some_and(|(linked, ..)| owned(linked))
+        {
             Unlink::NotFound
         } else if others == 0 {
             Unlink::LastCredential

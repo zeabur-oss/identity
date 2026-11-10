@@ -53,7 +53,7 @@ use zeabur_identity_ui::pages::{
 use crate::device::Requester;
 use crate::passkeys::{authenticator, backup_flags};
 use crate::problem::Problem;
-use crate::upstream::provider::{Descriptor, Kind};
+use crate::upstream::provider::{Descriptor, GITHUB_ISSUER};
 use crate::{
     Accepted, BAD_REQUEST, CEREMONY_COOKIE, CEREMONY_EXPIRED, CEREMONY_LIFETIME, Ceremony,
     PASSKEY_AMR, PASSKEY_FAILED, Refused, SignIn, Verified, accepted, check_account, check_request,
@@ -530,17 +530,47 @@ where
     response
 }
 
-fn linked_rows(linked: &[LinkedSummary]) -> Vec<LinkedRow<'_>> {
-    linked
-        .iter()
-        .filter_map(|account| {
-            Some(LinkedRow {
-                name: &account.name,
-                provider: Kind::from_credential_type(account.kind)?.button(),
-                linked: account.created_at.map(UnixTime::as_secs),
-            })
-        })
-        .collect()
+/// How a linked account's provider is shown: the provider it was linked through. If that
+/// provider is gone, a provider with the same issuer, which signs the account in, or else the
+/// issuer's host. The user can unlink the account either way.
+fn shown_provider(account: &LinkedSummary, providers: &[Descriptor]) -> (String, &'static str) {
+    let current = account
+        .provider
+        .as_ref()
+        .and_then(|id| providers.iter().find(|p| p.id == *id))
+        .or_else(|| providers.iter().find(|p| p.issuer == account.issuer));
+    match current {
+        Some(descriptor) => (descriptor.label.clone(), descriptor.icon),
+        None if account.issuer.as_str() == GITHUB_ISSUER => ("GitHub".to_owned(), "GithubLogo"),
+        None => (issuer_label(account.issuer.as_str()), "Key"),
+    }
+}
+
+fn linked_rows<'a>(
+    linked: &'a [LinkedSummary],
+    shown: &'a [(String, &'static str)],
+) -> Vec<LinkedRow<'a>> {
+    let mut rows = Vec::new();
+    for (account, (label, icon)) in linked.iter().zip(shown) {
+        rows.push(LinkedRow {
+            name: &account.name,
+            provider: ProviderButton {
+                id: "",
+                label,
+                icon,
+            },
+            linked: account.created_at.map(UnixTime::as_secs),
+        });
+    }
+    rows
+}
+
+/// The host of an issuer, or the issuer itself if it has none.
+fn issuer_label(issuer: &str) -> String {
+    url::Url::parse(issuer)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .unwrap_or_else(|| issuer.to_owned())
 }
 
 async fn page<D, G, C, K, S>(
@@ -628,9 +658,14 @@ where
                     current: grant.spec.name == account.session.spec.name,
                 })
                 .collect();
-            let linked_rows = linked_rows(&linked);
+            let descriptors = service.providers.descriptors();
+            let shown: Vec<_> = linked
+                .iter()
+                .map(|account| shown_provider(account, &descriptors))
+                .collect();
+            let linked_rows = linked_rows(&linked, &shown);
             let providers: Vec<ProviderButton<'_>> =
-                service.providers.iter().map(Descriptor::button).collect();
+                descriptors.iter().map(Descriptor::button).collect();
             let csrf = account.token.csrf();
             account_page(
                 lang,

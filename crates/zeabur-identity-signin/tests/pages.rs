@@ -11,6 +11,7 @@ mod tests {
     use http_body_util::BodyExt as _;
     use tower::ServiceExt as _;
     use zeabur_identity_api::client::ClientType;
+    use zeabur_identity_api::upstream::{Issuer, ProviderId};
     use zeabur_identity_core::clock::SystemClock;
     use zeabur_identity_core::config::BaseUrl;
     use zeabur_identity_core::crypto::Sealer;
@@ -21,7 +22,9 @@ mod tests {
     use zeabur_identity_oauth::endpoints::{self, FLOW_COOKIE};
     use zeabur_identity_oauth::{AuthorizationServer, Lifetimes, OneTimeIds};
     use zeabur_identity_signin::pages;
-    use zeabur_identity_signin::upstream::provider::Kind;
+    use zeabur_identity_signin::upstream::provider::{
+        ClientSecret, GOOGLE_ISSUER, GitHubEndpoints, Provider, Providers,
+    };
     use zeabur_identity_store::{Client, MemoryDirectory, MemoryGrantStore};
     use zeabur_identity_ui::CSP;
 
@@ -29,10 +32,42 @@ mod tests {
     const HOME: &str = "https://dashboard.example.com/";
 
     async fn app() -> Router {
-        app_with(&[]).await
+        app_with(Arc::default()).await
     }
 
-    async fn app_with(providers: &[Kind]) -> Router {
+    /// A provider for each ID: `github` is GitHub, any other an OpenID provider named after it.
+    fn registry(ids: &[&str]) -> Arc<Providers> {
+        let mut list = Vec::new();
+        for id in ids {
+            let secret = ClientSecret::Fixed("secret".into());
+            let provider = if *id == "github" {
+                Provider::github(
+                    ProviderId::new(*id).unwrap(),
+                    "client".into(),
+                    secret,
+                    GitHubEndpoints::github_com(),
+                )
+                .unwrap()
+            } else {
+                let (label, issuer) = match *id {
+                    "google" => ("Google", GOOGLE_ISSUER.to_owned()),
+                    other => (other, format!("https://{other}.example")),
+                };
+                Provider::openid(
+                    ProviderId::new(*id).unwrap(),
+                    label.into(),
+                    Issuer::new(issuer).unwrap(),
+                    Vec::new(),
+                    "client".into(),
+                    secret,
+                )
+            };
+            list.push(Arc::new(provider));
+        }
+        Arc::new(Providers::new(list))
+    }
+
+    async fn app_with(providers: Arc<Providers>) -> Router {
         let manager = KeyManager::new(
             MemoryKeyStore::default(),
             SystemClock,
@@ -399,7 +434,7 @@ mod tests {
         if !built() {
             return;
         }
-        let app = app_with(&[Kind::GitHub]).await;
+        let app = app_with(registry(&["github"])).await;
         let setup = get(&app, "/assets/setup.js", &[]).await.body;
         let page = get(&app, "/setup", &[]).await;
         for id in ["setup", "upstream", "new-link"] {
@@ -418,7 +453,7 @@ mod tests {
         if !built() {
             return;
         }
-        let app = app_with(&[Kind::GitHub]).await;
+        let app = app_with(registry(&["github"])).await;
         let setup = get(&app, "/assets/setup.js", &[]).await.body;
         let page = get(&app, "/setup", &[]).await;
         for (kind, message) in [
@@ -561,7 +596,7 @@ mod tests {
         let page = get(&plain, "/setup", &[]).await;
         assert!(!page.body.contains("data-provider"));
 
-        let app = app_with(&[Kind::GitHub, Kind::Google]).await;
+        let app = app_with(registry(&["github", "google"])).await;
         let page = get(&app, "/setup", &[]).await;
         assert_hardened(&page);
         assert!(page.body.contains(r#"data-provider="github""#));
@@ -585,5 +620,26 @@ mod tests {
             .to_owned();
         let page = get(&app, "/login", &[("cookie", &cookie)]).await;
         assert!(page.body.contains("data-provider"));
+    }
+
+    /// The pages show the providers at the time of each request: added, renamed and deleted
+    /// providers show at the next request, without a new router.
+    #[tokio::test]
+    async fn provider_buttons_follow_the_registry() {
+        let providers = registry(&["github"]);
+        let app = app_with(Arc::clone(&providers)).await;
+        let page = get(&app, "/setup", &[]).await;
+        assert!(page.body.contains(r#"data-provider="github""#));
+        assert!(!page.body.contains("Keycloak"));
+
+        providers.replace(registry(&["github", "keycloak"]).current().to_vec());
+        let page = get(&app, "/setup", &[]).await;
+        assert!(page.body.contains(r#"data-provider="github""#));
+        assert!(page.body.contains(r#"data-provider="keycloak""#));
+        assert!(page.body.contains("Continue with keycloak"));
+
+        providers.replace(Vec::new());
+        let page = get(&app, "/setup", &[]).await;
+        assert!(!page.body.contains("data-provider"));
     }
 }

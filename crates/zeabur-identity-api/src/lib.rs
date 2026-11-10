@@ -1,7 +1,7 @@
 #![doc = include_str!("../README.md")]
 //! # Custom resources
 //!
-//! Zeabur Identity's long-term state lives in five namespaced kinds; private key material lives in
+//! Zeabur Identity's long-term state lives in six namespaced kinds; private key material lives in
 //! Secrets. Short-lived state (pre-login flows, WebAuthn challenges, authorization codes) never
 //! reaches the API server.
 //! Each kind exists because a native object cannot do its job:
@@ -21,6 +21,9 @@
 //!   keys. A grant holds only hashes; `kubectl get grants` shows who is signed in.
 //! - [`invitation::Invitation`]: written by an admin, redeemed by Zeabur Identity. As Secrets,
 //!   pending invitations could only be found with `list` on Secrets.
+//! - [`upstream_provider::UpstreamProvider`]: configuration written by admins or GitOps, which
+//!   Zeabur Identity watches. A provider's client secret is a key of one Secret with a fixed name,
+//!   so Zeabur Identity reads that Secret by name and no other Secret.
 //!
 //! Format rules (lengths, patterns, list sizes) are `OpenAPI` `maxLength`, `pattern` and
 //! `maxItems`, which cost nothing against the CEL cost budget; CEL rules
@@ -51,6 +54,7 @@ pub mod credential;
 pub mod grant;
 pub mod invitation;
 pub mod upstream;
+pub mod upstream_provider;
 pub mod user;
 
 use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
@@ -109,6 +113,7 @@ pub fn definitions() -> Vec<CustomResourceDefinition> {
         client::OAuthClient::crd(),
         grant::Grant::crd(),
         invitation::Invitation::crd(),
+        upstream_provider::UpstreamProvider::crd(),
     ]
 }
 

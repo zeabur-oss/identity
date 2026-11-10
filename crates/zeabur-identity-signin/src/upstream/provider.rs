@@ -30,14 +30,15 @@
 //! [RFC 7636]: https://www.rfc-editor.org/rfc/rfc7636.html
 //! [RFC 6749]: https://www.rfc-editor.org/rfc/rfc6749.html
 
-use std::sync::Mutex;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::time::Duration;
 
 use axum::body::Bytes;
 use axum::http::{Method, Request, StatusCode, header};
 use serde::Deserialize;
 use thiserror::Error;
-use zeabur_identity_api::credential::CredentialType;
 use zeabur_identity_api::upstream::{ExternalId, InvalidValue, Issuer, ProviderId, Subject};
 use zeabur_identity_core::clock::UnixTime;
 use zeabur_identity_keys::Algorithm;
@@ -56,90 +57,37 @@ const JWKS_MIN_REFRESH: Duration = Duration::from_mins(1);
 const LEEWAY: u64 = 60;
 /// Google's issuer.
 pub const GOOGLE_ISSUER: &str = "https://accounts.google.com";
+/// The issuer of accounts linked through a `GitHub` provider.
+pub const GITHUB_ISSUER: &str = "https://github.com";
 
-/// A supported provider.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Kind {
-    /// GitHub.
-    GitHub,
-    /// Google.
-    Google,
+/// The client secret of a provider: fixed, or read at each code exchange, so that a rotated
+/// secret is used at the next sign-in.
+#[derive(Clone)]
+pub enum ClientSecret {
+    /// A fixed value.
+    Fixed(String),
+    /// Reads the current value. The error says what is missing, without the secret.
+    Fetch(Arc<dyn Fn() -> SecretFuture + Send + Sync>),
 }
 
-impl Kind {
-    /// The path segment and CLI name: the default [`Provider::id`].
-    #[must_use]
-    pub const fn id(self) -> &'static str {
+/// What [`ClientSecret::Fetch`] returns.
+pub type SecretFuture = Pin<Box<dyn Future<Output = Result<String, String>> + Send>>;
+
+impl ClientSecret {
+    async fn get(&self) -> Result<String, UpstreamError> {
         match self {
-            Self::GitHub => "github",
-            Self::Google => "google",
+            Self::Fixed(secret) => Ok(secret.clone()),
+            Self::Fetch(fetch) => fetch().await.map_err(UpstreamError::Secret),
         }
     }
+}
 
-    /// Parses [`Kind::id`].
-    #[must_use]
-    pub fn from_id(id: &str) -> Option<Self> {
-        match id {
-            "github" => Some(Self::GitHub),
-            "google" => Some(Self::Google),
-            _ => None,
-        }
-    }
-
-    /// The name shown on buttons.
-    #[must_use]
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::GitHub => "GitHub",
-            Self::Google => "Google",
-        }
-    }
-
-    /// The icon on its button.
-    #[must_use]
-    pub const fn icon(self) -> &'static str {
-        match self {
-            Self::GitHub => "GithubLogo",
-            Self::Google => "GoogleLogo",
-        }
-    }
-
-    /// Its button on the sign-in pages.
-    #[must_use]
-    pub const fn button(self) -> ProviderButton<'static> {
-        ProviderButton {
-            id: self.id(),
-            label: self.label(),
-            icon: self.icon(),
-        }
-    }
-
-    /// The `Credential` type of a linked account.
-    #[must_use]
-    pub const fn credential_type(self) -> CredentialType {
-        match self {
-            Self::GitHub => CredentialType::GitHub,
-            Self::Google => CredentialType::Google,
-        }
-    }
-
-    /// The provider of a linked account's `Credential` type. `None` for a passkey.
-    #[must_use]
-    pub const fn from_credential_type(kind: CredentialType) -> Option<Self> {
-        match kind {
-            CredentialType::GitHub => Some(Self::GitHub),
-            CredentialType::Google => Some(Self::Google),
-            CredentialType::Passkey => None,
-        }
-    }
-
-    /// The issuer of the public service: GitHub's, and Google's default for `--google-issuer`.
-    #[must_use]
-    pub const fn issuer(self) -> &'static str {
-        match self {
-            Self::GitHub => "https://github.com",
-            Self::Google => GOOGLE_ISSUER,
-        }
+impl std::fmt::Debug for ClientSecret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Fixed(_) => "ClientSecret::Fixed",
+            Self::Fetch(_) => "ClientSecret::Fetch",
+        })
     }
 }
 
@@ -149,6 +97,8 @@ impl Kind {
 pub struct Descriptor {
     /// The provider's ID. The account page sends it to `POST /account/links/start`.
     pub id: ProviderId,
+    /// The issuer of the accounts it signs in.
+    pub issuer: Issuer,
     /// The name shown on its button.
     pub label: String,
     /// The icon on its button (see `zeabur-identity-ui`'s `templates/icons.html`).
@@ -164,6 +114,50 @@ impl Descriptor {
             label: &self.label,
             icon: self.icon,
         }
+    }
+}
+
+/// The providers in use, read by every handler and replaced as a whole when the configuration
+/// changes.
+///
+/// A handler takes the current list at the start of a request and keeps it to the end. Thus a
+/// change applies to the next request; a request in flight finishes with the provider it started
+/// with, or finds it gone or changed at the callback (see [`crate::upstream`]).
+#[derive(Debug, Default)]
+pub struct Providers {
+    list: RwLock<Arc<[Arc<Provider>]>>,
+}
+
+impl Providers {
+    /// A registry with `list`, in the order shown.
+    #[must_use]
+    pub fn new(list: Vec<Arc<Provider>>) -> Self {
+        Self {
+            list: RwLock::new(list.into()),
+        }
+    }
+
+    /// Replaces the list.
+    pub fn replace(&self, list: Vec<Arc<Provider>>) {
+        *self.list.write().unwrap_or_else(PoisonError::into_inner) = list.into();
+    }
+
+    /// The current list, in the order shown.
+    #[must_use]
+    pub fn current(&self) -> Arc<[Arc<Provider>]> {
+        Arc::clone(&self.list.read().unwrap_or_else(PoisonError::into_inner))
+    }
+
+    /// The provider with this ID.
+    #[must_use]
+    pub fn get(&self, id: &str) -> Option<Arc<Provider>> {
+        self.current().iter().find(|p| p.id.as_str() == id).cloned()
+    }
+
+    /// How the pages show each provider, in the order shown.
+    #[must_use]
+    pub fn descriptors(&self) -> Vec<Descriptor> {
+        self.current().iter().map(|p| p.descriptor()).collect()
     }
 }
 
@@ -212,24 +206,28 @@ struct OpenIdCache {
 #[derive(Debug)]
 enum Protocol {
     GitHub(GitHubEndpoints),
-    OpenId(OpenIdCache),
+    OpenId {
+        /// Scopes requested in addition to `openid`.
+        scopes: Vec<String>,
+        cache: OpenIdCache,
+    },
 }
 
 /// A configured provider.
 pub struct Provider {
-    kind: Kind,
     id: ProviderId,
+    label: String,
     issuer: Issuer,
     client_id: String,
-    client_secret: String,
+    client_secret: ClientSecret,
     protocol: Protocol,
 }
 
 impl std::fmt::Debug for Provider {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Provider")
-            .field("kind", &self.kind)
             .field("id", &self.id)
+            .field("label", &self.label)
             .field("issuer", &self.issuer)
             .field("client_id", &self.client_id)
             .finish_non_exhaustive()
@@ -251,6 +249,9 @@ pub enum UpstreamError {
     /// The ID token is not valid.
     #[error("the provider's ID token is not valid: {0}")]
     IdToken(&'static str),
+    /// The client secret could not be read.
+    #[error("the client secret is not available: {0}")]
+    Secret(String),
 }
 
 #[derive(Deserialize)]
@@ -334,60 +335,64 @@ fn is_https_url(value: &str) -> bool {
 }
 
 impl Provider {
-    /// GitHub, at [`Kind::id`] and with [`Kind::issuer`].
+    /// github.com, at `id`, with the issuer [`GITHUB_ISSUER`].
     ///
     /// # Errors
     ///
-    /// [`InvalidValue`] if the ID or the issuer is malformed.
+    /// [`InvalidValue`] if the issuer is malformed.
     pub fn github(
+        id: ProviderId,
         client_id: String,
-        client_secret: String,
+        client_secret: ClientSecret,
         endpoints: GitHubEndpoints,
     ) -> Result<Self, InvalidValue> {
         Ok(Self {
-            kind: Kind::GitHub,
-            id: ProviderId::new(Kind::GitHub.id())?,
-            issuer: Issuer::new(Kind::GitHub.issuer())?,
+            id,
+            label: "GitHub".to_owned(),
+            issuer: Issuer::new(GITHUB_ISSUER)?,
             client_id,
             client_secret,
             protocol: Protocol::GitHub(endpoints),
         })
     }
 
-    /// The OpenID provider at `issuer`, shown as Google. Its endpoints come from the discovery
-    /// document of `issuer`.
-    ///
-    /// # Errors
-    ///
-    /// [`InvalidValue`] if the ID is malformed.
-    pub fn google(
+    /// The OpenID provider at `issuer`, shown as `label`. Its endpoints come from the discovery
+    /// document of `issuer`. `scopes` are requested in addition to `openid`.
+    #[must_use]
+    pub fn openid(
+        id: ProviderId,
+        label: String,
         issuer: Issuer,
+        scopes: Vec<String>,
         client_id: String,
-        client_secret: String,
-    ) -> Result<Self, InvalidValue> {
-        Ok(Self {
-            kind: Kind::Google,
-            id: ProviderId::new(Kind::Google.id())?,
+        client_secret: ClientSecret,
+    ) -> Self {
+        Self {
+            id,
+            label,
             issuer,
             client_id,
             client_secret,
-            protocol: Protocol::OpenId(OpenIdCache::default()),
-        })
+            protocol: Protocol::OpenId {
+                scopes,
+                cache: OpenIdCache::default(),
+            },
+        }
     }
 
-    /// Which provider.
-    #[must_use]
-    pub const fn kind(&self) -> Kind {
-        self.kind
-    }
-
-    /// How the account page offers it.
+    /// How the sign-in and account pages show it.
     #[must_use]
     pub fn descriptor(&self) -> Descriptor {
+        let icon = match &self.protocol {
+            Protocol::GitHub(_) => "GithubLogo",
+            Protocol::OpenId { .. } if self.issuer.as_str() == GOOGLE_ISSUER => "GoogleLogo",
+            Protocol::OpenId { .. } => "Key",
+        };
         Descriptor {
             id: self.id.clone(),
-            label: self.kind.label().to_owned(),
-            icon: self.kind.icon(),
+            issuer: self.issuer.clone(),
+            label: self.label.clone(),
+            icon,
         }
     }
 
@@ -417,7 +422,7 @@ impl Provider {
     ) -> Result<String, UpstreamError> {
         let endpoint = match &self.protocol {
             Protocol::GitHub(endpoints) => endpoints.authorize.clone(),
-            Protocol::OpenId(cache) => {
+            Protocol::OpenId { cache, .. } => {
                 self.metadata(cache, http, now)
                     .await?
                     .authorization_endpoint
@@ -431,14 +436,19 @@ impl Provider {
             .append_pair("state", request.state)
             .append_pair("code_challenge", request.challenge)
             .append_pair("code_challenge_method", "S256");
-        match self.protocol {
+        match &self.protocol {
             // No scope: only the public profile (and with it the numeric ID) is needed.
             Protocol::GitHub(_) => {
                 query.append_pair("allow_signup", "false");
             }
-            Protocol::OpenId(_) => {
+            Protocol::OpenId { scopes, .. } => {
+                let mut scope = "openid".to_owned();
+                for extra in scopes.iter().filter(|s| s.as_str() != "openid") {
+                    scope.push(' ');
+                    scope.push_str(extra);
+                }
                 query
-                    .append_pair("scope", "openid")
+                    .append_pair("scope", &scope)
                     .append_pair("nonce", request.nonce)
                     .append_pair("prompt", "select_account");
             }
@@ -467,7 +477,7 @@ impl Provider {
                     .ok_or(UpstreamError::Protocol("no access token"))?;
                 github_user(http, &endpoints.user, &access).await?
             }
-            Protocol::OpenId(cache) => {
+            Protocol::OpenId { cache, .. } => {
                 let metadata = self.metadata(cache, http, now).await?;
                 let tokens = self
                     .redeem(http, &metadata.token_endpoint, exchange)
@@ -499,13 +509,14 @@ impl Provider {
         token_endpoint: &str,
         exchange: Exchange<'_>,
     ) -> Result<TokenResponse, UpstreamError> {
+        let client_secret = self.client_secret.get().await?;
         let form = form_urlencoded::Serializer::new(String::new())
             .append_pair("grant_type", "authorization_code")
             .append_pair("code", exchange.code)
             .append_pair("redirect_uri", exchange.redirect_uri)
             .append_pair("code_verifier", exchange.verifier)
             .append_pair("client_id", &self.client_id)
-            .append_pair("client_secret", &self.client_secret)
+            .append_pair("client_secret", &client_secret)
             .finish();
         let request = Request::builder()
             .method(Method::POST)
@@ -538,7 +549,7 @@ impl Provider {
         let cached = cache
             .metadata
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .clone();
         if let Some((fetched, metadata)) = cached
             && now.as_secs().saturating_sub(fetched.as_secs()) < METADATA_MAX_AGE.as_secs()
@@ -572,7 +583,7 @@ impl Provider {
         *cache
             .metadata
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((now, metadata.clone()));
+            .unwrap_or_else(PoisonError::into_inner) = Some((now, metadata.clone()));
         Ok(metadata)
     }
 
@@ -678,7 +689,7 @@ async fn jwk_set<H: HttpClient>(
     let cached = cache
         .jwks
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .unwrap_or_else(PoisonError::into_inner)
         .clone();
     if let Some((fetched, from, keys)) = &cached
         && from == uri
@@ -700,10 +711,7 @@ async fn jwk_set<H: HttpClient>(
     }
     let keys =
         parse_jwk_set(response.body()).map_err(|_jwks| UpstreamError::Protocol("JWK set"))?;
-    *cache
-        .jwks
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) =
+    *cache.jwks.lock().unwrap_or_else(PoisonError::into_inner) =
         Some((now, uri.to_owned(), keys.clone()));
     Ok(keys)
 }
@@ -730,14 +738,18 @@ mod tests {
 
     #[test]
     fn only_google_accepts_the_issuer_without_a_scheme() {
-        let google =
-            Provider::google(Issuer::new(GOOGLE_ISSUER).unwrap(), "c".into(), "s".into()).unwrap();
-        let other = Provider::google(
-            Issuer::new("https://idp.example").unwrap(),
-            "c".into(),
-            "s".into(),
-        )
-        .unwrap();
+        let openid = |issuer: &str| {
+            Provider::openid(
+                ProviderId::new("p").unwrap(),
+                "P".into(),
+                Issuer::new(issuer).unwrap(),
+                Vec::new(),
+                "c".into(),
+                ClientSecret::Fixed("s".into()),
+            )
+        };
+        let google = openid(GOOGLE_ISSUER);
+        let other = openid("https://idp.example");
         assert!(google.accepts_issuer("https://accounts.google.com"));
         assert!(google.accepts_issuer("accounts.google.com"));
         assert!(!google.accepts_issuer("https://accounts.google.com/"));

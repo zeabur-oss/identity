@@ -9,18 +9,27 @@ use kube::{CustomResource, KubeSchema};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::upstream::ExternalId;
+use crate::upstream::{ExternalId, ProviderId};
 
 /// Kind of credential.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema)]
 pub enum CredentialType {
     /// A WebAuthn discoverable credential.
     Passkey,
-    /// A GitHub account.
-    GitHub,
-    /// A Google account.
-    Google,
+    /// An account at an upstream provider (`UpstreamProvider`).
+    Upstream,
 }
+
+/// The admission rule that keeps the spec unchanged, with one exception.
+///
+/// A linked account of type `GitHub` or `Google` may become type `Upstream` with provider `github`
+/// or `google`. Zeabur Identity makes that change when it starts (`zeabur_identity_k8s::migrate`).
+pub const IMMUTABLE_RULE: &str = concat!(
+    "self == oldSelf || (oldSelf.type in ['GitHub', 'Google'] && self.type == 'Upstream'",
+    " && self.user == oldSelf.user && !has(self.passkey) && has(self.external)",
+    " && has(oldSelf.external) && self.external == oldSelf.external && has(self.provider)",
+    " && self.provider == (oldSelf.type == 'GitHub' ? 'github' : 'google'))",
+);
 
 /// A way for a `User` to sign in.
 ///
@@ -53,9 +62,10 @@ pub enum CredentialType {
     doc = "A passkey or linked upstream identity of a Zeabur Identity user."
 )]
 #[x_kube(
-    validation = Rule::new("self == oldSelf").message("credentials are immutable; delete and re-enrol instead"),
+    validation = Rule::new(IMMUTABLE_RULE).message("credentials are immutable; delete and re-enrol instead"),
     validation = Rule::new("(self.type == 'Passkey') == has(self.passkey)").message("passkey is set exactly when type is Passkey"),
-    validation = Rule::new("(self.type != 'Passkey') == has(self.external)").message("external is set exactly when type is GitHub or Google")
+    validation = Rule::new("(self.type != 'Passkey') == has(self.external)").message("external is set exactly when type is Upstream"),
+    validation = Rule::new("(self.type == 'Upstream') == has(self.provider)").message("provider is set exactly when type is Upstream")
 )]
 #[serde(rename_all = "camelCase")]
 pub struct CredentialSpec {
@@ -68,9 +78,18 @@ pub struct CredentialSpec {
     /// Passkey details, when `type` is `Passkey`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub passkey: Option<Passkey>,
-    /// Upstream identity, when `type` is `GitHub` or `Google`.
+    /// Upstream identity, when `type` is `Upstream`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub external: Option<ExternalId>,
+    /// The `UpstreamProvider` that linked the account, when `type` is `Upstream`. Sign-in does not
+    /// read it: any provider with the same issuer signs the account in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        with = "String",
+        length(min = 1, max = 63),
+        regex(pattern = r"^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$")
+    )]
+    pub provider: Option<ProviderId>,
 }
 
 /// The public part of a WebAuthn credential. Nothing here is secret.
@@ -135,8 +154,9 @@ mod tests {
             },
             "spec": {
                 "user": "alice",
-                "type": "GitHub",
-                "external": {"issuer": "https://github.com", "subject": "583231"}
+                "type": "Upstream",
+                "external": {"issuer": "https://github.com", "subject": "583231"},
+                "provider": "github"
             }
         });
         let credential: Credential = serde_json::from_value(stored.clone()).unwrap();
@@ -159,8 +179,9 @@ mod tests {
             "metadata": {"name": "c-0"},
             "spec": {
                 "user": "alice",
-                "type": "GitHub",
-                "external": {"issuer": "https://github.com", "subject": "alice smith"}
+                "type": "Upstream",
+                "external": {"issuer": "https://github.com", "subject": "alice smith"},
+                "provider": "github"
             }
         });
         assert!(serde_json::from_value::<Credential>(stored).is_err());
