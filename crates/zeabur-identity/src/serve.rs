@@ -37,7 +37,7 @@ use zeabur_identity_oauth::metadata::{AppState, router};
 use zeabur_identity_oauth::{AuthorizationServer, OneTimeIds, endpoints};
 use zeabur_identity_signin::passkeys::Passkeys;
 use zeabur_identity_signin::upstream::http::HyperClient;
-use zeabur_identity_signin::upstream::provider::{Endpoints, Kind, Provider};
+use zeabur_identity_signin::upstream::provider::{GitHubEndpoints, Kind, Provider};
 use zeabur_identity_signin::upstream::{self, Upstream};
 use zeabur_identity_signin::{SignIn, pages};
 use zeabur_identity_store::{CredentialStore, Directory, GrantStore, SetupStore};
@@ -156,12 +156,12 @@ fn upstream_providers(config: &ServeConfig) -> Result<Vec<Provider>, ServeError>
                 })?
                 .trim()
                 .to_owned();
-            let endpoints = match upstream.kind {
-                Kind::GitHub => Endpoints::github(),
-                Kind::Google => Endpoints::google(),
+            let client_id = upstream.client_id.clone();
+            let provider = match upstream.kind {
+                Kind::GitHub => Provider::github(client_id, secret, GitHubEndpoints::github_com()),
+                Kind::Google => Provider::google(config.google_issuer.clone(), client_id, secret),
             };
-            Provider::new(upstream.kind, upstream.client_id.clone(), secret, endpoints)
-                .map_err(|error| ServeError::Config(format!("{}: {error}", upstream.kind.id())))
+            provider.map_err(|error| ServeError::Config(format!("{}: {error}", upstream.kind.id())))
         })
         .collect()
 }
