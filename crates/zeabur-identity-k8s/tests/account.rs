@@ -16,6 +16,7 @@ mod tests {
     use serde_json::{Value, json};
     use tokio::sync::{Barrier, Mutex};
     use zeabur_identity_api::credential::CredentialType;
+    use zeabur_identity_api::upstream::{ExternalId, Issuer, Subject};
     use zeabur_identity_core::clock::UnixTime;
     use zeabur_identity_k8s::credentials::KubeCredentialStore;
     use zeabur_identity_k8s::grants::KubeGrantStore;
@@ -389,11 +390,12 @@ mod tests {
 
         // A link for a User that was replaced after the caller read it.
         let stale = NewExternal {
-            name: "new".into(),
+            id: ExternalId {
+                issuer: Issuer::new("https://github.com").unwrap(),
+                subject: Subject::new("new").unwrap(),
+            },
             user: "alice".into(),
             kind: CredentialType::GitHub,
-            issuer: "https://github.com".into(),
-            subject: "new".into(),
             user_subject: "uid-old-alice".into(),
         };
         assert!(store.link(&stale).await.is_err());
@@ -403,7 +405,7 @@ mod tests {
                 .lock()
                 .await
                 .names("credentials")
-                .contains(&"new".to_owned())
+                .contains(&stale.name())
         );
     }
 

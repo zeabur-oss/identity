@@ -1251,6 +1251,7 @@ mod tests {
         use base64::engine::general_purpose::URL_SAFE_NO_PAD;
         use zeabur_identity_api::credential::{Credential, CredentialType};
         use zeabur_identity_api::invitation::Invitation;
+        use zeabur_identity_api::upstream::{ExternalId, Issuer, Subject};
         use zeabur_identity_core::clock::UnixTime;
         use zeabur_identity_core::config::BaseUrl;
         use zeabur_identity_k8s::credentials::KubeCredentialStore;
@@ -1258,8 +1259,7 @@ mod tests {
         use zeabur_identity_k8s::invitations::{Invitee, invite};
         use zeabur_identity_k8s::setup::{SETUP_SECRET, issue_setup_link};
         use zeabur_identity_store::{
-            CredentialStore as _, GrantStore as _, NewExternal, NewPasskey,
-            external_credential_name, passkey_credential_name,
+            CredentialStore as _, GrantStore as _, NewExternal, NewPasskey, passkey_credential_name,
         };
 
         let env = Env::new().await;
@@ -1328,11 +1328,12 @@ mod tests {
             };
             credential_store.create(&passkey).await.unwrap();
             let external = NewExternal {
-                name: external_credential_name("https://github.com", generation),
+                id: ExternalId {
+                    issuer: Issuer::new("https://github.com").unwrap(),
+                    subject: Subject::new(generation).unwrap(),
+                },
                 user: "alice".into(),
                 kind: CredentialType::GitHub,
-                issuer: "https://github.com".into(),
-                subject: generation.into(),
                 user_subject: uid.clone(),
             };
             credential_store.link(&external).await.unwrap();
@@ -1343,7 +1344,7 @@ mod tests {
                 .unwrap();
             let metadata = [
                 credentials.get(&passkey.name).await.unwrap().metadata,
-                credentials.get(&external.name).await.unwrap().metadata,
+                credentials.get(&external.name()).await.unwrap().metadata,
                 grants.get(&grant).await.unwrap().metadata,
                 invitations.get(&invitation.name).await.unwrap().metadata,
             ];
@@ -1351,7 +1352,7 @@ mod tests {
                 assert_eq!(object.owner_references.unwrap()[0].uid, uid);
             }
             if generation == "old" {
-                original = Some((passkey.name, external.name, grant, invitation.name));
+                original = Some((passkey.name, external.name(), grant, invitation.name));
                 users
                     .delete("alice", &DeleteParams::background())
                     .await
@@ -1385,7 +1386,7 @@ mod tests {
                     "alice"
                 );
                 assert_eq!(
-                    credentials.get(&external.name).await.unwrap().spec.user,
+                    credentials.get(&external.name()).await.unwrap().spec.user,
                     "alice"
                 );
                 assert_eq!(grants.get(&grant).await.unwrap().spec.user, "alice");

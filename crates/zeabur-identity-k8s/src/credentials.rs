@@ -15,9 +15,7 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
 use k8s_openapi::jiff::Timestamp;
 use kube::ResourceExt as _;
 use kube::api::{Api, ListParams, ObjectMeta, Patch, PatchParams, PostParams};
-use zeabur_identity_api::credential::{
-    Credential, CredentialSpec, CredentialType, ExternalIdentity, Passkey,
-};
+use zeabur_identity_api::credential::{Credential, CredentialSpec, CredentialType, Passkey};
 use zeabur_identity_api::{GROUP, USER_LABEL};
 use zeabur_identity_core::clock::UnixTime;
 use zeabur_identity_store::{
@@ -243,7 +241,7 @@ impl CredentialStore for KubeCredentialStore {
         let api = self.api.clone();
         let mut object = Credential {
             metadata: ObjectMeta {
-                name: Some(external.name.clone()),
+                name: Some(external.name()),
                 labels: Some(BTreeMap::from([
                     (USER_LABEL.to_owned(), external.user.clone()),
                     (MANAGED_BY.0.to_owned(), MANAGED_BY.1.to_owned()),
@@ -254,10 +252,7 @@ impl CredentialStore for KubeCredentialStore {
                 user: external.user.clone(),
                 kind: external.kind,
                 passkey: None,
-                external: Some(ExternalIdentity {
-                    issuer: external.issuer.clone(),
-                    subject: external.subject.clone(),
-                }),
+                external: Some(external.id.clone()),
             },
             status: None,
         };

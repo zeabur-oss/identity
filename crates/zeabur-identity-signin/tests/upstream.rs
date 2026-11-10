@@ -20,6 +20,7 @@ mod tests {
     use tracing::instrument::WithSubscriber as _;
     use zeabur_identity_api::client::ClientType;
     use zeabur_identity_api::token_hash;
+    use zeabur_identity_api::upstream::{ExternalId, Issuer, Subject};
     use zeabur_identity_core::account::AccountType;
     use zeabur_identity_core::clock::{Clock, SystemClock};
     use zeabur_identity_core::config::BaseUrl;
@@ -270,7 +271,8 @@ mod tests {
                 jwks: None,
                 issuers: vec![],
             },
-        );
+        )
+        .unwrap();
         let google = Provider::new(
             Kind::Google,
             "google-client".into(),
@@ -282,7 +284,8 @@ mod tests {
                 jwks: Some("https://google.test/jwks".into()),
                 issuers: Endpoints::google().issuers,
             },
-        );
+        )
+        .unwrap();
         let service = Arc::new(Upstream {
             sign_in: Arc::clone(&sign_in),
             providers: vec![github, google],
@@ -574,16 +577,22 @@ mod tests {
         reply
     }
 
+    /// The account `subject` at `kind`'s issuer.
+    fn external(kind: Kind, subject: &str) -> ExternalId {
+        ExternalId {
+            issuer: Issuer::new(kind.issuer()).unwrap(),
+            subject: Subject::new(subject).unwrap(),
+        }
+    }
+
     async fn link(h: &Harness, kind: Kind, subject: &str, user: &str) {
         h.service
             .sign_in
             .credentials
             .link(&NewExternal {
-                name: external_credential_name(kind.issuer(), subject),
+                id: external(kind, subject),
                 user: user.into(),
                 kind: kind.credential_type(),
-                issuer: kind.issuer().into(),
-                subject: subject.into(),
                 user_subject: format!("uid-{user}"),
             })
             .await
@@ -807,7 +816,7 @@ mod tests {
         assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
         assert!(reply.body.contains("Account linked"));
         assert_audit(&reply, "auth.account_link", None, Some("dana"), None);
-        let name = external_credential_name(Kind::Google.issuer(), GOOGLE_SUB);
+        let name = external_credential_name(&external(Kind::Google, GOOGLE_SUB));
         assert_eq!(
             h.service
                 .sign_in
@@ -1181,7 +1190,7 @@ mod tests {
         h.service
             .sign_in
             .credentials
-            .linked_account(&external_credential_name(kind.issuer(), subject))
+            .linked_account(&external_credential_name(&external(kind, subject)))
             .await
             .unwrap()
             .map(|linked| linked.user)
@@ -1261,7 +1270,7 @@ mod tests {
             Some("alice"),
             Some("uid-alice"),
         );
-        let name = external_credential_name(Kind::GitHub.issuer(), &GITHUB_ID.to_string());
+        let name = external_credential_name(&external(Kind::GitHub, &GITHUB_ID.to_string()));
         assert_eq!(
             h.service
                 .sign_in
@@ -1457,7 +1466,7 @@ mod tests {
     async fn unlinking_keeps_a_way_to_sign_in_and_ends_what_the_account_signed_in() {
         let h = harness().await;
         link(&h, Kind::GitHub, &GITHUB_ID.to_string(), "alice").await;
-        let github = external_credential_name(Kind::GitHub.issuer(), &GITHUB_ID.to_string());
+        let github = external_credential_name(&external(Kind::GitHub, &GITHUB_ID.to_string()));
         let stale = account_session(&h, "alice", 600).await;
         let session = account_session(&h, "alice", 0).await;
         let unlink = |session: &Session, name: &str| {
@@ -1484,7 +1493,7 @@ mod tests {
         );
         // Another user's linked account is not found.
         link(&h, Kind::Google, GOOGLE_SUB, "dana").await;
-        let google = external_credential_name(Kind::Google.issuer(), GOOGLE_SUB);
+        let google = external_credential_name(&external(Kind::Google, GOOGLE_SUB));
         let reply = unlink(&session, &google).await;
         assert_eq!(reply.status, StatusCode::NOT_FOUND);
         assert_eq!(
@@ -1497,11 +1506,9 @@ mod tests {
             .sign_in
             .credentials
             .link(&NewExternal {
-                name: "c-second".into(),
+                id: external(Kind::Google, "second"),
                 user: "alice".into(),
                 kind: Kind::Google.credential_type(),
-                issuer: Kind::Google.issuer().into(),
-                subject: "second".into(),
                 user_subject: "uid-alice".into(),
             })
             .await

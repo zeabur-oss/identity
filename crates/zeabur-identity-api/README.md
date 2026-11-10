@@ -15,8 +15,8 @@ release. Depend on the tag of the Zeabur Identity release that you install:
 zeabur-identity-api = { git = "https://github.com/zeabur-oss/identity", tag = "v0.2.0" }
 ```
 
-The crate depends only on `k8s-openapi`, `kube`, `schemars`, `serde`, `serde_json` and
-`aws-lc-rs`. It holds no client and does no I/O.
+The crate depends only on `k8s-openapi`, `kube`, `schemars`, `serde`, `serde_json`, `thiserror`
+and `aws-lc-rs`. It holds no client and does no I/O.
 
 ## Two roles of Zeabur Identity
 
@@ -25,7 +25,8 @@ Zeabur Identity has two roles. The types in this crate belong to one or both of 
 - **It signs people in.** A person signs in with a passkey, or with a linked account at an upstream
   provider (GitHub or Google). A `Credential` holds each passkey and each linked account. For a
   linked account, `spec.external` holds the upstream issuer and subject, and that pair identifies
-  the account.
+  the account. The `upstream` module has their types, `Issuer`, `Subject` and `ExternalId`, which
+  check the syntax and keep the bytes as they are.
 - **It is an OpenID provider for registered applications.** An `OAuthClient` registers an
   application, for example `kubectl`, Argo CD or Grafana. Zeabur Identity signs its ID tokens with
   ES256, or with RS256 if the client sets `idTokenSigningAlg`. A `Grant` holds the refresh-token
