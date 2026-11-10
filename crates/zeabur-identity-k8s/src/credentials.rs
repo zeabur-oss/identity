@@ -194,6 +194,7 @@ impl CredentialStore for KubeCredentialStore {
                     label: passkey.label.clone(),
                 }),
                 external: None,
+                provider: None,
             },
             status: None,
         };
@@ -250,9 +251,10 @@ impl CredentialStore for KubeCredentialStore {
             },
             spec: CredentialSpec {
                 user: external.user.clone(),
-                kind: external.kind,
+                kind: CredentialType::Upstream,
                 passkey: None,
                 external: Some(external.id.clone()),
+                provider: Some(external.provider.clone()),
             },
             status: None,
         };
@@ -389,14 +391,18 @@ impl CredentialStore for KubeCredentialStore {
             let mut list: Vec<LinkedSummary> = owned_externals(&api, &user)
                 .await?
                 .iter()
-                .map(|object| LinkedSummary {
-                    name: object.name_any(),
-                    kind: object.spec.kind,
-                    created_at: object
-                        .metadata
-                        .creation_timestamp
-                        .as_ref()
-                        .map(|t| time(t.0.as_second())),
+                .filter_map(|object| {
+                    let external = object.spec.external.as_ref()?;
+                    Some(LinkedSummary {
+                        name: object.name_any(),
+                        provider: object.spec.provider.clone(),
+                        issuer: external.issuer.clone(),
+                        created_at: object
+                            .metadata
+                            .creation_timestamp
+                            .as_ref()
+                            .map(|t| time(t.0.as_second())),
+                    })
                 })
                 .collect();
             list.sort_by(|a, b| a.created_at.cmp(&b.created_at).then(a.name.cmp(&b.name)));

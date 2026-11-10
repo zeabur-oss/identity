@@ -1,7 +1,7 @@
 # zeabur-identity-api
 
-The `identity.zeabur.com/v1alpha1` custom resources (`User`, `Credential`, `OAuthClient`, `Grant`
-and `Invitation`) and the names that Zeabur Identity shares with the programs that write these
+The `identity.zeabur.com/v1alpha1` custom resources (`User`, `Credential`, `OAuthClient`, `Grant`,
+`Invitation` and `UpstreamProvider`) and the names that Zeabur Identity shares with the programs that write these
 objects: the API group, the labels and annotations, the admin group, and
 `token_hash`, the stored form of tokens and client secrets.
 
@@ -23,9 +23,10 @@ The crate depends only on `k8s-openapi`, `kube`, `schemars`, `serde`, `serde_jso
 Zeabur Identity has two roles. The types in this crate belong to one or both of them.
 
 - **It signs people in.** A person signs in with a passkey, or with a linked account at an upstream
-  provider (GitHub or Google). A `Credential` holds each passkey and each linked account. For a
-  linked account, `spec.external` holds the upstream issuer and subject, and that pair identifies
-  the account. The `upstream` module has their types, `Issuer`, `Subject` and `ExternalId`, which
+  provider. An `UpstreamProvider` configures a provider: GitHub, or an OpenID provider such as
+  Google or Keycloak. A `Credential` holds each passkey and each linked account. For a linked
+  account, `spec.external` holds the upstream issuer and subject, and that pair identifies the
+  account. The `upstream` module has their types, `Issuer`, `Subject` and `ExternalId`, which
   check the syntax and keep the bytes as they are.
 - **It is an OpenID provider for registered applications.** An `OAuthClient` registers an
   application, for example `kubectl`, Argo CD or Grafana. Zeabur Identity signs its ID tokens with
@@ -41,6 +42,7 @@ Zeabur Identity has two roles. The types in this crate belong to one or both of 
 | `OAuthClient` | Create, change and delete it. A confidential client stores `token_hash` of its secret in `spec.secretHash`. | A secret that a person chose: the hash is unsalted, so only a random secret of 256 bits is safe. |
 | `Credential` | List it, and delete it to revoke a passkey or unlink an account. | Create or change it. Zeabur Identity writes it when a person enrols a passkey or links an account, and its name is derived from the credential. |
 | `Grant` | List it, and delete it to end a sign-in. | Create or change it. |
+| `UpstreamProvider` | Create, change and delete it. Put its client secret in the Secret `upstream_provider::SECRET` under `spec.clientSecretKey`. | A client secret in the object itself. |
 
 To invite a person, write an `Invitation` the way `zeabur-identityctl invite` does:
 

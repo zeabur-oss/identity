@@ -80,12 +80,27 @@
         },
         {
           "apiGroups": [
+            ""
+          ],
+          "resourceNames": [
+            "zeabur-identity-upstream"
+          ],
+          "resources": [
+            "secrets"
+          ],
+          "verbs": [
+            "get"
+          ]
+        },
+        {
+          "apiGroups": [
             "identity.zeabur.com"
           ],
           "resources": [
             "users",
             "credentials",
-            "oauthclients"
+            "oauthclients",
+            "upstreamproviders"
           ],
           "verbs": [
             "get",
@@ -102,7 +117,8 @@
           ],
           "verbs": [
             "create",
-            "delete"
+            "delete",
+            "patch"
           ]
         },
         {
