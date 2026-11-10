@@ -38,12 +38,12 @@ Keep the following data together. Record the backup date, Zeabur Identity image 
 | Backup item | Purpose |
 |---|---|
 | The cluster's datastore backup, plus the server token, encryption keys, and cluster certificates that your distribution needs to open it | This is the only way to preserve UIDs and passkeys. You can't restore a snapshot that you can't decrypt. |
-| `users`, `credentials`, and `oauthclients` (`*.identity.zeabur.com`) | Preserve users and groups, passkey records, linked GitHub or Google accounts, and registered clients. |
+| `users`, `credentials`, `oauthclients`, and `upstreamproviders` (`*.identity.zeabur.com`) | Preserve users and groups, passkey records, linked GitHub or Google accounts, registered clients, and sign-in providers. |
 | Secret `zeabur-identity-signing-keys` | Preserves all private signing keys, including keys scheduled for activation and retired keys. Other data can't reconstruct these keys. |
 | Secret `zeabur-identity-internal-ca` | Preserves the root CA and private key. cert-manager uses it to issue the certificate that kube-apiserver verifies when it connects to the internal address. Keep this Secret with the authentication files on every control plane machine. cert-manager uses it to reissue `zeabur-identity-internal-tls`. |
 | Deployment, Service, ServiceAccount, Role, and RoleBinding `zeabur-identity`, plus ClusterRoleBinding `zeabur-identity-cluster-admins` | Preserve how Zeabur Identity runs and its admin permissions. Also back up any RoleBindings you created for other applications. |
 | ConfigMap `zeabur-identity-settings`, if you created it | Preserves the `teams` and `admin-aal3` settings. Without it, all settings return to their defaults. |
-| Secrets mounted into Zeabur Identity, such as `zeabur-identity-config` | Preserve GitHub and Google client secrets. Also keep the upstream application registrations. |
+| Secret `zeabur-identity-upstream` | Preserve the sign-in providers' client secrets. Also keep the application registrations at those providers. |
 | Public TLS and routing | The quickstart installation uses Secret `zeabur-identity-tls` and Ingress `zeabur-identity`. Sign-in rate limiting also uses Ingress `zeabur-identity-rate-limited`, Middleware `zeabur-identity-rate-limit`, and HelmChartConfig `traefik` in `kube-system`. |
 | kube-apiserver configuration on every control plane machine | k3s uses `/etc/rancher/k3s/zeabur-identity/authn.yaml` and the configuration that loads this file. |
 | Client secrets in each confidential client application's secret store | Zeabur Identity stores only hashes. |

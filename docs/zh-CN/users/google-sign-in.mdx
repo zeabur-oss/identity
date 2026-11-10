@@ -48,38 +48,49 @@ Google 账号必须先关联到 Zeabur Identity 用户，才能登录。Zeabur I
 
 <Step>
 
-### 存储客户端密钥并启用 Google 登录
+### 存储客户端密钥
 
-Zeabur Identity 从挂载在 `/etc/zeabur-identity` 的 Kubernetes Secret 文件读取密钥。执行以下命令，避免密钥出现在 shell 历史记录和进程列表中：
+Zeabur Identity 从 Secret `zeabur-identity-upstream` 读取所有登录提供方的客户端密钥，每个提供方各用一个键。执行以下命令，避免密钥出现在 shell 历史记录和进程列表中：
 
 ```sh
 read -rs GOOGLE_SECRET     # paste the client secret, then Enter
-printf %s "$GOOGLE_SECRET" | kubectl -n zeabur-identity create secret generic zeabur-identity-config \
-  --from-file=google-client-secret=/dev/stdin
+printf %s "$GOOGLE_SECRET" | kubectl -n zeabur-identity create secret generic zeabur-identity-upstream \
+  --from-file=google=/dev/stdin
 unset GOOGLE_SECRET
 ```
 
-如果 `zeabur-identity-config` 已存在，例如已存储[用 GitHub 登录](./github-sign-in.mdx)所需的密钥，就在现有 Secret 中添加 `google-client-secret` 键。你可以使用密钥管理工具，或执行以下命令编辑 Secret；其中的值使用 base64 编码：
+如果 `zeabur-identity-upstream` 已存在，例如已存储[用 GitHub 登录](./github-sign-in.mdx)所需的密钥，就在现有 Secret 中添加 `google` 键。你可以使用密钥管理工具，或执行以下命令编辑 Secret；其中的值使用 base64 编码：
 
 ```sh
-kubectl -n zeabur-identity edit secret zeabur-identity-config
+kubectl -n zeabur-identity edit secret zeabur-identity-upstream
 ```
 
-接着重新生成 Deployment，添加 Secret 和两个 Google 选项。`zeabur-identityctl manifests` 不会记住之前的选项，必须保留安装时使用的所有配置，包括镜像、Namespace 和其他 `--serve-arg`。也要保留 `--invitations`，下一步会用到。
+</Step>
+
+<Step>
+
+### 添加 Google 登录提供方
+
+创建名为 `google` 的 `UpstreamProvider`。这个名称是步骤 1 注册的重定向 URI 的一部分。
 
 ```sh
 GOOGLE_CLIENT_ID=1234567890-example.apps.googleusercontent.com   # replace with your client ID
-ZEABUR_IDENTITY_IMAGE=$(kubectl -n zeabur-identity get deployment zeabur-identity -o jsonpath='{.spec.template.spec.containers[0].image}')
-zeabur-identityctl manifests --image "$ZEABUR_IDENTITY_IMAGE" \
-  --config-secret zeabur-identity-config \
-  --serve-arg=--invitations \
-  --serve-arg=--google-client-id=$GOOGLE_CLIENT_ID \
-  --serve-arg=--google-client-secret-file=/etc/zeabur-identity/google-client-secret \
-  | kubectl apply --server-side -f -
-kubectl -n zeabur-identity rollout status deploy/zeabur-identity
+kubectl apply -f - <<EOF
+apiVersion: identity.zeabur.com/v1alpha1
+kind: UpstreamProvider
+metadata:
+  name: google
+  namespace: zeabur-identity
+spec:
+  type: OpenID
+  issuer: https://accounts.google.com
+  displayName: Google
+  clientId: $GOOGLE_CLIENT_ID
+  clientSecretKey: google
+EOF
 ```
 
-部署完成后，登录页会显示 **Continue with Google**。
+登录页会立即显示 **Continue with Google**，无需重启 Zeabur Identity。用户跳转到 Google 前，Zeabur Identity 会读取 `https://accounts.google.com/.well-known/openid-configuration`，并使用其中列出的地址。
 
 </Step>
 
@@ -90,7 +101,7 @@ kubectl -n zeabur-identity rollout status deploy/zeabur-identity
 根据用户当前的状态，选择关联方式：
 
 - 已能登录的普通账号：打开账号页面，用通行密钥验证身份，再选择 **Link Google**。账号页面的操作见[管理用户](./manage-users.mdx)。
-- 新用户：按[管理用户](./manage-users.mdx)的流程发送邀请。
+- 新用户：按[管理用户](./manage-users.mdx)的流程发送邀请。邀请功能需要[在 k3s 上安装并登录](../get-started/quickstart.mdx)中的 `--invitations` 选项。
 - 尚不能登录的现有用户：使用相同用户名再次发送邀请。如果用户已有通行密钥或已关联账号，邀请时需要 `--reset`，这会先删除现有的通行密钥和已关联账号。救援流程见[退出登录、救援与移除用户](./offboarding.mdx)。
 
 用户打开设置链接后，选择 **Continue with Google**，再选择要使用的 Google 账号。
@@ -126,18 +137,17 @@ kubectl auth whoami          # choose "Continue with Google"
 
 ### 更换客户端密钥
 
-Zeabur Identity 只在启动时读取客户端密钥。更新 Secret 后，重启 Zeabur Identity：
-
-```sh
-kubectl -n zeabur-identity rollout restart deploy/zeabur-identity
-kubectl -n zeabur-identity rollout status deploy/zeabur-identity
-```
+Zeabur Identity 每次登录都会读取客户端密钥。更新 Secret `zeabur-identity-upstream` 中的 `google` 键后，下次登录就会使用新密钥，无需重启 Zeabur Identity。
 
 ### 关闭 Google 登录
 
-重新生成 Deployment 时，移除两个 `--google-*` 选项，并保留其他选项。如果不再需要该 OAuth 客户端，也在 Google Cloud Console 删除这个客户端。
+删除 `UpstreamProvider`。如果不再需要该 OAuth 客户端，也在 Google Cloud Console 删除这个客户端。
 
-关闭 Google 登录不会移除已关联的账号，也不会结束现有会话。需要撤销访问权限时，按上方流程移除凭据并让用户退出登录。
+```sh
+kubectl -n zeabur-identity delete upstreamprovider google
+```
+
+关闭 Google 登录不会移除已关联的账号，也不会结束现有会话。需要撤销访问权限时，按上方流程移除凭据并让用户退出登录。如果再次添加 Google 登录提供方，已关联的账号就能再次登录。
 
 ## 遇到问题
 

@@ -47,48 +47,47 @@ export ZEABUR_IDENTITY_ISSUER=https://identity.example.test
 
 ### 儲存用戶端機密
 
-Zeabur Identity 會從 Kubernetes Secret 中的檔案讀取機密，掛載路徑為 `/etc/zeabur-identity`。
+Zeabur Identity 會從 Secret `zeabur-identity-upstream` 讀取所有登入提供者的用戶端機密，每個提供者各用一個索引鍵。每次登入都會重新讀取機密，更換後不需要重新啟動。
 
 執行下列指令，避免機密出現在 Shell 歷史紀錄與程式清單中：
 
 ```sh
 read -rs GITHUB_SECRET     # paste the client secret, then Enter
-printf %s "$GITHUB_SECRET" | kubectl -n zeabur-identity create secret generic zeabur-identity-config \
-  --from-file=github-client-secret=/dev/stdin
+printf %s "$GITHUB_SECRET" | kubectl -n zeabur-identity create secret generic zeabur-identity-upstream \
+  --from-file=github=/dev/stdin
 unset GITHUB_SECRET
 ```
 
-如果 `zeabur-identity-config` 已存在，例如已存放 [Google 登入](./google-sign-in.mdx)的機密，請改用下列指令新增索引鍵，保留其他索引鍵：
+如果 `zeabur-identity-upstream` 已存在，例如已存放 [Google 登入](./google-sign-in.mdx)的機密，請改用下列指令新增 `github` 索引鍵，保留其他索引鍵。Secret 中的值使用 base64 編碼：
 
 ```sh
-kubectl -n zeabur-identity edit secret zeabur-identity-config
+kubectl -n zeabur-identity edit secret zeabur-identity-upstream
 ```
 
 </Step>
 
 <Step>
 
-### 啟用 GitHub 登入提供者
+### 新增 GitHub 登入提供者
 
-用 Secret 與 Client ID 重新產生部署設定。
-
-`zeabur-identityctl manifests` 不會記住先前的選項。執行時，請保留安裝時使用的映像檔、Namespace 與其他 `--serve-arg`，再加上 GitHub 選項。
-
-下列指令沿用[在 k3s 上安裝並登入](../get-started/quickstart.mdx)的設定，也包含下一步邀請使用者所需的 `--invitations`。將 `GITHUB_CLIENT_ID` 換成剛才取得的 **Client ID**。這個值不是機密。
+建立名為 `github` 的 `UpstreamProvider`。這個名稱是步驟 1 註冊的回呼網址的一部分。將 `GITHUB_CLIENT_ID` 換成剛才取得的 **Client ID**。這個值不是機密。
 
 ```sh
 GITHUB_CLIENT_ID=Ov23li...   # from step 1; not a secret
-ZEABUR_IDENTITY_IMAGE=$(kubectl -n zeabur-identity get deployment zeabur-identity -o jsonpath='{.spec.template.spec.containers[0].image}')
-zeabur-identityctl manifests --image "$ZEABUR_IDENTITY_IMAGE" \
-  --config-secret zeabur-identity-config \
-  --serve-arg=--invitations \
-  --serve-arg=--github-client-id=$GITHUB_CLIENT_ID \
-  --serve-arg=--github-client-secret-file=/etc/zeabur-identity/github-client-secret \
-  | kubectl apply --server-side -f -
-kubectl -n zeabur-identity rollout status deploy/zeabur-identity
+kubectl apply -f - <<EOF
+apiVersion: identity.zeabur.com/v1alpha1
+kind: UpstreamProvider
+metadata:
+  name: github
+  namespace: zeabur-identity
+spec:
+  type: GitHub
+  clientId: $GITHUB_CLIENT_ID
+  clientSecretKey: github
+EOF
 ```
 
-部署完成後，登入頁面會顯示 **Continue with GitHub**。
+登入頁面會立即顯示 **Continue with GitHub**，不需要重新啟動 Zeabur Identity。
 
 </Step>
 
@@ -99,7 +98,7 @@ kubectl -n zeabur-identity rollout status deploy/zeabur-identity
 依使用者目前的狀態選擇連結方式：
 
 - 已能登入的使用者：開啟帳號頁面，用通行密鑰確認身分，再選擇 **Link GitHub**。管理員帳號不能連結。
-- 新使用者：依[管理使用者](./manage-users.mdx)的步驟建立邀請。
+- 新使用者：依[管理使用者](./manage-users.mdx)的步驟建立邀請。邀請功能需要[在 k3s 上安裝並登入](../get-started/quickstart.mdx)中的 `--invitations` 選項。
 - 已有帳號但還無法登入的使用者：用相同的使用者名稱再次建立邀請。如果帳號已有通行密鑰或已連結的帳號，建立邀請時需要加上 `--reset`。帳號救援步驟請見[登出、救援與移除使用者](./offboarding.mdx)。
 
 使用者開啟邀請連結後，選擇 **Continue with GitHub**，不要建立通行密鑰，接著登入要連結的 GitHub 帳號。每個邀請連結只能新增一把通行密鑰或連結一個帳號。
@@ -138,7 +137,8 @@ metadata:
   ownerReferences:
     - {apiVersion: identity.zeabur.com/v1alpha1, kind: User, name: $USER_NAME, uid: $USER_UID}
 spec:
-  type: GitHub
+  type: Upstream
+  provider: github
   user: $USER_NAME
   external: {issuer: "https://github.com", subject: "$GH_ID"}
 EOF
@@ -181,7 +181,13 @@ kubectl auth whoami          # choose "Continue with GitHub"; the user is zeabur
 - 將使用者登出，結束已建立的工作階段。操作步驟請見[登出、救援與移除使用者](./offboarding.mdx)。
 - 停用或移除使用者，撤銷所有存取權限。操作步驟請見[登出、救援與移除使用者](./offboarding.mdx)。
 
-若要關閉 GitHub 登入，請重新產生部署設定，移除兩個 `--github-*` 選項，保留其他選項，再到 GitHub 刪除 OAuth 應用程式。已連結的帳號與現有工作階段仍會保留，需要依上面的步驟移除。
+若要關閉 GitHub 登入，請刪除 `UpstreamProvider`，再到 GitHub 刪除 OAuth 應用程式：
+
+```sh
+kubectl -n zeabur-identity delete upstreamprovider github
+```
+
+已連結的帳號與現有工作階段仍會保留，需要依上面的步驟移除。如果再次新增 GitHub 登入提供者，已連結的帳號就能再次登入。
 
 ## 遇到問題
 
@@ -190,6 +196,6 @@ kubectl auth whoami          # choose "Continue with GitHub"; the user is zeabur
 | GitHub 顯示重新導向 URI 不屬於此應用程式 | 確認 OAuth 應用程式的回呼網址與 `<issuer>/upstream/github/callback` 完全相同。 |
 | **This account is not linked to any user here** | GitHub 帳號沒有對應的 `Credential`。請依照連結帳號的步驟處理。如果手動建立的認證資訊名稱或 ID 有誤，也會出現相同訊息。 |
 | **Use a passkey for this account** | GitHub 帳號連結到管理員帳號。管理員帳號只能用通行密鑰登入。 |
-| **This provider is not enabled** | Deployment 缺少 `--github-client-id`。執行 `kubectl -n zeabur-identity get deploy zeabur-identity -o jsonpath='{.spec.template.spec.containers[0].args}'` 檢查參數。 |
-| Pod 無法讀取 `/etc/zeabur-identity/...` | 確認 `--config-secret zeabur-identity-config` 已掛載 Secret，Secret 包含 `github-client-secret`，且 `--github-client-secret-file` 指向 `/etc/zeabur-identity/github-client-secret`。如果你自訂 Pod 的安全性設定或掛載，請保留產生的設定中的 `fsGroup` 與讀取權限。 |
+| **This provider is not enabled** | 沒有名為 `github` 的 `UpstreamProvider`。執行 `kubectl -n zeabur-identity get upstreamproviders` 檢查。如果物件存在，執行 `kubectl -n zeabur-identity logs deploy/zeabur-identity`，在日誌中找 `upstream_provider_invalid`。 |
+| GitHub 重新導向回來後登入失敗，日誌顯示 `provider_unavailable` | Secret `zeabur-identity-upstream` 不存在，或缺少 `github` 索引鍵。檢查 `clientSecretKey` 指定的索引鍵。 |
 | GitHub 重新導向回來後登入失敗 | Pod 無法連線到 `github.com` 或 `api.github.com`。檢查對外連線設定，包括代理伺服器、防火牆與 NetworkPolicy，並執行 `kubectl -n zeabur-identity logs deploy/zeabur-identity` 檢視日誌。 |
