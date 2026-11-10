@@ -11,8 +11,8 @@ use zeabur_identity_api::user::AccountType;
 use zeabur_identity_core::clock::Clock as _;
 
 use crate::cli::{
-    AccountTypeArg, AccountTypeArgs, Cli, ClientCommand, ClientCreateArgs, ClientKind, Command,
-    InviteArgs, KubeConfigArgs, SetupLinkArgs, SigningAlg,
+    AccountTypeArg, AccountTypeArgs, Cli, ClientCommand, ClientCreateArgs, ClientKind,
+    ClientOutput, Command, InviteArgs, KubeConfigArgs, SetupLinkArgs, SigningAlg,
 };
 
 fn main() -> ExitCode {
@@ -53,7 +53,8 @@ fn resources() -> ExitCode {
 }
 
 fn client_create(args: ClientCreateArgs) -> ExitCode {
-    use zeabur_identity_api::client::ClientType;
+    use kube::ResourceExt as _;
+    use zeabur_identity_api::client::{ClientRegistration, ClientType};
     let new = zeabur_identity_k8s::clients::NewClient {
         kind: match args.kind {
             ClientKind::Public => ClientType::Public,
@@ -76,6 +77,13 @@ fn client_create(args: ClientCreateArgs) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    if args.output == ClientOutput::Json {
+        return print_json(serde_json::to_string_pretty(&ClientRegistration {
+            client_id: registration.client.name_any(),
+            secret: registration.secret,
+            manifest: registration.client,
+        }));
+    }
     let code = print_json(serde_json::to_string_pretty(&registration.client));
     if let Some(secret) = registration.secret {
         output::stderr(

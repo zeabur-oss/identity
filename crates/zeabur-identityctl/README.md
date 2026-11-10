@@ -41,7 +41,10 @@ Replace the example URL with your own issuer. `zeabur-identityctl` reads `ZEABUR
 - `zeabur-identityctl client create <client-id> --type <public|confidential> --redirect-uri <uri>`:
   prints an `OAuthClient` after checking it against the same rules as the CRD schema. A
   confidential client gets a generated 256-bit secret, printed once on stderr; the object holds
-  only its hash. See [Registering clients](../../docs/users/clients.mdx).
+  only its hash. With `--output json`, it prints one JSON object instead (`clientId`, `secret`
+  for a confidential client, and the `OAuthClient` as `manifest`) and nothing on stderr; the
+  `zeabur-identity-api` type `ClientRegistration` decodes it. See
+  [Registering clients](../../docs/users/clients.mdx).
 
 Results (JSON, YAML or a link) go to stdout and messages to stderr, so commands compose with
 `kubectl apply -f -`.
