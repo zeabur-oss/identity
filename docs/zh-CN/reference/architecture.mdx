@@ -88,16 +88,17 @@ kube-apiserver 使用 Zeabur Identity 公开的密钥，验证令牌签名。密
 
 | Crate | 内容 | 依赖 |
 |---|---|---|
-| [`zeabur-identity-core`](../../../crates/zeabur-identity-core) | 时间、加密辅助工具、已验证的配置值、协议名称 | — |
-| [`zeabur-identity-keys`](../../../crates/zeabur-identity-keys) | 签名密钥、JWK 发布、JWS 签名与验证、密钥轮换 | core |
-| [`zeabur-identity-store`](../../../crates/zeabur-identity-store) | 存储端口（trait、记录）与内存适配器 | core, keys |
+| [`zeabur-identity-api`](../../../crates/zeabur-identity-api) | `identity.zeabur.com` 自定义资源，以及其他程序与 Zeabur Identity 共用的名称 | — |
+| [`zeabur-identity-core`](../../../crates/zeabur-identity-core) | 时间、加密辅助工具、已验证的配置值、端点路径 | — |
+| [`zeabur-identity-keys`](../../../crates/zeabur-identity-keys) | 签名密钥、JWK 发布、JWS 签名与验证、密钥轮换 | api, core |
+| [`zeabur-identity-store`](../../../crates/zeabur-identity-store) | 存储端口（trait、记录）与内存适配器 | api, core, keys |
 | [`zeabur-identity-tls`](../../../crates/zeabur-identity-tls) | 信任根、证书签发、可重新加载的 TLS 监听器 | core |
 | [`zeabur-identity-ui`](../../../crates/zeabur-identity-ui) | 服务器渲染的页面、内嵌资源、翻译、安全响应头 | core |
-| [`zeabur-identity-oauth`](../../../crates/zeabur-identity-oauth) | OAuth 2.0 / OpenID Connect 授权服务器 | core, keys, store, ui |
-| [`zeabur-identity-signin`](../../../crates/zeabur-identity-signin) | 通行密钥注册与登录、上游提供方、页面路由 | core, keys, store, oauth, ui |
-| [`zeabur-identity-k8s`](../../../crates/zeabur-identity-k8s) | 自定义资源、Kubernetes 适配器、GC、清单、kube-apiserver 配置 | core, keys, store, tls |
+| [`zeabur-identity-oauth`](../../../crates/zeabur-identity-oauth) | OAuth 2.0 / OpenID Connect 授权服务器 | api, core, keys, store, ui |
+| [`zeabur-identity-signin`](../../../crates/zeabur-identity-signin) | 通行密钥注册与登录、上游提供方、页面路由 | api, core, keys, store, oauth, ui |
+| [`zeabur-identity-k8s`](../../../crates/zeabur-identity-k8s) | Kubernetes 适配器、GC、清单、kube-apiserver 配置 | api, core, keys, store, tls |
 | [`zeabur-identity`](../../../crates/zeabur-identity) | **可执行文件**：集群内的服务器 | 以上所有 crate |
-| [`zeabur-identityctl`](../../../crates/zeabur-identityctl) | **可执行文件**：管理员 CLI | core, k8s |
+| [`zeabur-identityctl`](../../../crates/zeabur-identityctl) | **可执行文件**：管理员 CLI | api, core, keys, k8s |
 | [`zeabur-identity-test-support`](../../../crates/zeabur-identity-test-support), [`zeabur-identity-e2e`](../../../crates/zeabur-identity-e2e) | 测试辅助工具；集群上的端到端测试 | — |
 
 登录页面的 TypeScript 与 Tailwind 源码放在 [`ui/`](../../../ui)，并以包的形式使用 Zeabur 设计系统。构建产物与设计系统的样式类都会提交到 `crates/zeabur-identity-ui`，并嵌入可执行文件。样式类以 askama 宏的形式存储在 `templates/ds.html` 中。

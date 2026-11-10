@@ -40,12 +40,12 @@ use kube::runtime::{WatchStreamExt as _, watcher};
 use kube::{Resource, ResourceExt as _};
 use serde::de::DeserializeOwned;
 use tokio::task::JoinHandle;
-use zeabur_identity_core::account::{SETTINGS_CONFIG_MAP, Settings};
+use zeabur_identity_api::client::OAuthClient;
+use zeabur_identity_api::user::{AccountType as ApiAccountType, User as UserObject};
+use zeabur_identity_core::account::{AccountType, SETTINGS_CONFIG_MAP, Settings};
 use zeabur_identity_keys::Algorithm;
 use zeabur_identity_store::{App, Client, Directory, StoreError, User};
 
-use crate::crd::client::OAuthClient;
-use crate::crd::user::User as UserObject;
 use crate::watch::relisting_watcher;
 
 /// Maximum startup wait for complete directory metadata snapshots.
@@ -324,7 +324,10 @@ fn convert(object: UserObject) -> Option<User> {
         display_name: object.spec.display_name,
         groups: object.spec.groups,
         disabled: object.spec.disabled,
-        account_type: object.spec.account_type.into(),
+        account_type: match object.spec.account_type {
+            ApiAccountType::Regular => AccountType::Regular,
+            ApiAccountType::Admin => AccountType::Admin,
+        },
     })
 }
 

@@ -16,10 +16,10 @@ use axum::body::Bytes;
 use axum::http::{Method, Request, StatusCode, header};
 use serde::Deserialize;
 use thiserror::Error;
+use zeabur_identity_api::credential::CredentialType;
 use zeabur_identity_core::clock::UnixTime;
 use zeabur_identity_keys::Algorithm;
 use zeabur_identity_keys::verify::{VerificationKey, parse_jwk_set, verify_compact};
-use zeabur_identity_store::CredentialType;
 use zeabur_identity_ui::pages::ProviderButton;
 
 use super::http::{HttpClient, HttpError};

@@ -46,12 +46,12 @@ mod tests {
     use tokio::net::TcpStream;
     use tokio_rustls::TlsConnector;
     use url::Url;
+    use zeabur_identity_api::client::{ClientType, OAuthClient, OAuthClientSpec};
+    use zeabur_identity_api::credential::Credential;
+    use zeabur_identity_api::user::User;
+    use zeabur_identity_api::{USER_LABEL, definitions};
     use zeabur_identity_core::clock::{Clock as _, SystemClock};
     use zeabur_identity_core::config::BaseUrl;
-    use zeabur_identity_k8s::crd::client::{ClientType, OAuthClient, OAuthClientSpec};
-    use zeabur_identity_k8s::crd::credential::Credential;
-    use zeabur_identity_k8s::crd::user::User;
-    use zeabur_identity_k8s::crd::{USER_LABEL, definitions};
     use zeabur_identity_k8s::kube_config::{self, DiscoveryMode, Distro};
     use zeabur_identity_k8s::setup::issue_setup_link;
     use zeabur_identity_k8s::{deployment, internal_tls, rbac};

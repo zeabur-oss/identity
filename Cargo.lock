@@ -4877,6 +4877,7 @@ dependencies = [
  "tower-http 0.7.1",
  "tracing",
  "tracing-subscriber",
+ "zeabur-identity-api",
  "zeabur-identity-core",
  "zeabur-identity-k8s",
  "zeabur-identity-keys",
@@ -4886,6 +4887,17 @@ dependencies = [
  "zeabur-identity-test-support",
  "zeabur-identity-tls",
  "zeabur-identity-ui",
+]
+
+[[package]]
+name = "zeabur-identity-api"
+version = "0.1.2"
+dependencies = [
+ "k8s-openapi",
+ "kube",
+ "schemars 1.2.3",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -4917,6 +4929,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "url",
+ "zeabur-identity-api",
  "zeabur-identity-core",
  "zeabur-identity-k8s",
  "zeabur-identity-oauth",
@@ -4949,6 +4962,7 @@ dependencies = [
  "tower",
  "tracing",
  "url",
+ "zeabur-identity-api",
  "zeabur-identity-core",
  "zeabur-identity-keys",
  "zeabur-identity-oauth",
@@ -4966,12 +4980,12 @@ dependencies = [
  "bytes",
  "jsonwebtoken",
  "proptest",
- "schemars 1.2.3",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
  "tracing",
+ "zeabur-identity-api",
  "zeabur-identity-core",
 ]
 
@@ -4992,6 +5006,7 @@ dependencies = [
  "tokio",
  "tower",
  "tracing",
+ "zeabur-identity-api",
  "zeabur-identity-core",
  "zeabur-identity-keys",
  "zeabur-identity-store",
@@ -5024,6 +5039,7 @@ dependencies = [
  "tracing",
  "url",
  "webauthn-rs",
+ "zeabur-identity-api",
  "zeabur-identity-core",
  "zeabur-identity-keys",
  "zeabur-identity-oauth",
@@ -5036,9 +5052,9 @@ dependencies = [
 name = "zeabur-identity-store"
 version = "0.1.2"
 dependencies = [
- "schemars 1.2.3",
  "serde",
  "thiserror 2.0.21",
+ "zeabur-identity-api",
  "zeabur-identity-core",
  "zeabur-identity-keys",
 ]
@@ -5092,6 +5108,7 @@ dependencies = [
  "kube",
  "serde_json",
  "tokio",
+ "zeabur-identity-api",
  "zeabur-identity-core",
  "zeabur-identity-k8s",
  "zeabur-identity-keys",

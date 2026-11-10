@@ -4,9 +4,8 @@
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::OwnerReference;
 use kube::Resource;
 use kube::api::{Api, ObjectMeta, Patch, PatchParams};
+use zeabur_identity_api::user::{AccountType, User};
 use zeabur_identity_store::StoreError;
-
-use crate::crd::user::{AccountType, User};
 
 fn backend(error: &kube::Error) -> StoreError {
     StoreError(error.to_string())

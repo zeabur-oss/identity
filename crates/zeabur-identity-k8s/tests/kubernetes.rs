@@ -21,11 +21,11 @@ mod tests {
     use kube::api::{Api, DeleteParams, ListParams, ObjectMeta, PostParams};
     use kube::{Client, Config, ResourceExt as _};
     use tokio::sync::{Barrier, watch};
+    use zeabur_identity_api::client::{ClientType, OAuthClient, OAuthClientSpec};
+    use zeabur_identity_api::grant::{Grant, GrantSpec, GrantStatus};
+    use zeabur_identity_api::user::{AccountType, User, UserSpec};
+    use zeabur_identity_api::{EXPIRES_AT_ANNOTATION, EXPIRY_BUCKET_LABEL, definitions};
     use zeabur_identity_core::clock::SystemClock;
-    use zeabur_identity_k8s::crd::client::{ClientType, OAuthClient, OAuthClientSpec};
-    use zeabur_identity_k8s::crd::grant::{Grant, GrantSpec, GrantStatus};
-    use zeabur_identity_k8s::crd::user::{AccountType, User, UserSpec};
-    use zeabur_identity_k8s::crd::{EXPIRES_AT_ANNOTATION, EXPIRY_BUCKET_LABEL, definitions};
     use zeabur_identity_k8s::keys::SecretKeyStore;
     use zeabur_identity_k8s::objects::{
         CreateOutcome, DeleteOutcome, ReplaceOutcome, create_once, delete_if_unchanged,
@@ -1249,16 +1249,16 @@ mod tests {
     async fn user_recreation_collects_only_the_original_users_dependents() {
         use base64::Engine as _;
         use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        use zeabur_identity_api::credential::{Credential, CredentialType};
+        use zeabur_identity_api::invitation::Invitation;
         use zeabur_identity_core::clock::UnixTime;
         use zeabur_identity_core::config::BaseUrl;
-        use zeabur_identity_k8s::crd::credential::Credential;
-        use zeabur_identity_k8s::crd::invitation::Invitation;
         use zeabur_identity_k8s::credentials::KubeCredentialStore;
         use zeabur_identity_k8s::grants::KubeGrantStore;
         use zeabur_identity_k8s::invitations::{Invitee, invite};
         use zeabur_identity_k8s::setup::{SETUP_SECRET, issue_setup_link};
         use zeabur_identity_store::{
-            CredentialStore as _, CredentialType, GrantStore as _, NewExternal, NewPasskey,
+            CredentialStore as _, GrantStore as _, NewExternal, NewPasskey,
             external_credential_name, passkey_credential_name,
         };
 
@@ -1525,7 +1525,7 @@ mod tests {
             assert!(with_invitations.load(token).await.unwrap().is_some());
         }
         // A user who already has passkeys needs an explicit reset.
-        let credentials: Api<zeabur_identity_k8s::crd::credential::Credential> =
+        let credentials: Api<zeabur_identity_api::credential::Credential> =
             env.zeabur_identity_api();
         let store_creds =
             zeabur_identity_k8s::credentials::KubeCredentialStore::new(credentials.clone());
@@ -1608,7 +1608,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     #[ignore = "needs a Kubernetes cluster (KUBECONFIG)"]
     async fn invitations_are_single_use_and_admin_only() {
-        use zeabur_identity_k8s::crd::invitation::{Invitation, InvitationSpec};
+        use zeabur_identity_api::invitation::{Invitation, InvitationSpec};
         use zeabur_identity_k8s::invitations::{Invitee, invite};
         use zeabur_identity_k8s::setup::KubeSetupStore;
         use zeabur_identity_store::{Consume, SetupStore as _};

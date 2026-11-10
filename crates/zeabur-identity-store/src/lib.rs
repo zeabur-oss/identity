@@ -4,34 +4,13 @@ use std::collections::HashMap;
 use std::future::{self, Future};
 use std::sync::{Mutex, PoisonError};
 
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use zeabur_identity_api::ADMIN_GROUP;
+use zeabur_identity_api::client::ClientType;
+use zeabur_identity_api::credential::CredentialType;
 use zeabur_identity_core::account::{AccountType, Settings};
 use zeabur_identity_core::clock::UnixTime;
 use zeabur_identity_core::crypto::ct_eq;
-use zeabur_identity_core::protocol::ADMIN_GROUP;
-
-/// Client type (RFC 6749 §2.1).
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema)]
-pub enum ClientType {
-    /// Cannot keep a secret; identifies itself with `client_id` only. Like every client, it
-    /// must use PKCE.
-    Public,
-    /// Authenticates at the token endpoint.
-    Confidential,
-}
-
-/// Kind of credential.
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema)]
-pub enum CredentialType {
-    /// A WebAuthn discoverable credential.
-    Passkey,
-    /// A GitHub account.
-    GitHub,
-    /// A Google account.
-    Google,
-}
 
 /// A storage backend failed or answered ambiguously.
 ///

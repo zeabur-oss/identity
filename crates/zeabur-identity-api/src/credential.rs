@@ -8,7 +8,17 @@
 use kube::{CustomResource, KubeSchema};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-pub use zeabur_identity_store::CredentialType;
+
+/// Kind of credential.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema)]
+pub enum CredentialType {
+    /// A WebAuthn discoverable credential.
+    Passkey,
+    /// A GitHub account.
+    GitHub,
+    /// A Google account.
+    Google,
+}
 
 /// A way for a `User` to sign in.
 ///

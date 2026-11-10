@@ -14,7 +14,7 @@
 //! (RFC 8725 §3.12).
 //!
 //! `groups` comes from [`User::token_groups`]: only admin accounts carry
-//! [`ADMIN_GROUP`](zeabur_identity_core::protocol::ADMIN_GROUP).
+//! [`ADMIN_GROUP`](zeabur_identity_api::ADMIN_GROUP).
 
 use serde::Serialize;
 use zeabur_identity_core::clock::UnixTime;

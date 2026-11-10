@@ -344,7 +344,7 @@ pub fn response_location(
 
 #[cfg(test)]
 mod tests {
-    use zeabur_identity_store::ClientType;
+    use zeabur_identity_api::client::ClientType;
 
     use super::*;
 

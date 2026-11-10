@@ -1,13 +1,11 @@
 # zeabur-identity-k8s
 
-Zeabur Identity's Kubernetes side: the custom resources that hold its state, storage adapters on them,
+Zeabur Identity's Kubernetes side: storage adapters on the custom resources that hold its state,
 garbage collection of expired objects, the install manifests, and the kube-apiserver
 `AuthenticationConfiguration` that makes a cluster accept Zeabur Identity's tokens.
 
 ## Contents
 
-- [`crd`](crate::crd): `User`, `Credential`, `OAuthClient`, `Grant` and `Invitation`
-  (`identity.zeabur.com/v1alpha1`), and why each one is a custom resource.
 - [`objects`](crate::objects): the three single-use primitives behind every security-relevant
   write.
 - [`keys`](crate::keys), [`directory`](crate::directory), [`credentials`](crate::credentials),
@@ -23,7 +21,7 @@ garbage collection of expired objects, the install manifests, and the kube-apise
 
 ## Place in the workspace
 
-Depends on `zeabur-identity-core`, `zeabur-identity-keys`, `zeabur-identity-store` and `zeabur-identity-tls`. Used by the `zeabur-identity`
+Depends on `zeabur-identity-api` (the custom resources), `zeabur-identity-core`, `zeabur-identity-keys`, `zeabur-identity-store` and `zeabur-identity-tls`. Used by the `zeabur-identity`
 server, the `zeabur-identityctl` admin CLI and the `zeabur-identity-e2e` tests.
 
 ## Key properties

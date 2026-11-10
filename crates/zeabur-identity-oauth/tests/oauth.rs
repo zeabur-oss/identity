@@ -18,11 +18,12 @@ mod tests {
     use tokio::sync::Barrier;
     use tower::ServiceExt as _;
     use tracing::instrument::WithSubscriber as _;
+    use zeabur_identity_api::ADMIN_GROUP;
+    use zeabur_identity_api::client::ClientType;
     use zeabur_identity_core::account::{AccountType, Settings, Teams};
     use zeabur_identity_core::clock::{Clock, UnixTime};
     use zeabur_identity_core::config::BaseUrl;
     use zeabur_identity_core::crypto::{Sealer, hash_secret};
-    use zeabur_identity_core::protocol::ADMIN_GROUP;
     use zeabur_identity_keys::Algorithm;
     use zeabur_identity_keys::manager::{KeyManager, Published};
     use zeabur_identity_keys::rotation::RotationPolicy;
@@ -31,8 +32,8 @@ mod tests {
     use zeabur_identity_oauth::endpoints::{FLOW_COOKIE, complete_authorization, router};
     use zeabur_identity_oauth::{AuthorizationServer, Lifetimes, OneTimeIds};
     use zeabur_identity_store::{
-        Client, ClientType, CreateGrant, Directory as _, Grant, GrantStore, MemoryDirectory,
-        MemoryGrantStore, NewGrant, Rotation, StoreError, User, Verification,
+        Client, CreateGrant, Directory as _, Grant, GrantStore, MemoryDirectory, MemoryGrantStore,
+        NewGrant, Rotation, StoreError, User, Verification,
     };
     use zeabur_identity_test_support::logging::Capture;
 

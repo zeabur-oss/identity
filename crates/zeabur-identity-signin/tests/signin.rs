@@ -21,6 +21,7 @@ mod tests {
     use tower::ServiceExt as _;
     use tracing::instrument::WithSubscriber as _;
     use url::Url;
+    use zeabur_identity_api::client::ClientType;
     use zeabur_identity_core::account::{AccountType, Settings};
     use zeabur_identity_core::clock::{Clock, UnixTime};
     use zeabur_identity_core::config::BaseUrl;
@@ -34,8 +35,8 @@ mod tests {
     use zeabur_identity_signin::passkeys::{PasskeyError, Passkeys};
     use zeabur_identity_signin::{CEREMONY_COOKIE, SignIn};
     use zeabur_identity_store::{
-        Client, ClientType, CredentialStore as _, MemoryCredentialStore, MemoryDirectory,
-        MemoryGrantStore, MemorySetupStore, User,
+        Client, CredentialStore as _, MemoryCredentialStore, MemoryDirectory, MemoryGrantStore,
+        MemorySetupStore, User,
     };
     use zeabur_identity_test_support::logging::Capture;
     use zeabur_identity_test_support::{Device, device};

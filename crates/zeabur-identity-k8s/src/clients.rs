@@ -13,13 +13,12 @@
 
 use kube::api::ObjectMeta;
 use thiserror::Error;
-use zeabur_identity_core::crypto::{hash_secret, hex, random};
-use zeabur_identity_keys::Algorithm;
-
-use crate::crd::client::{
+use zeabur_identity_api::client::{
     ClientType, MAX_AUDIENCE, MAX_AUDIENCES, MAX_DISPLAY_NAME, MAX_REDIRECT_URI, MAX_REDIRECT_URIS,
     OAuthClient, OAuthClientSpec,
 };
+use zeabur_identity_core::crypto::{hash_secret, hex, random};
+use zeabur_identity_keys::Algorithm;
 
 /// Longest client ID. The client ID is the `OAuthClient` object name and also the
 /// `identity.zeabur.com/client` label value on grants, which Kubernetes caps at 63 characters.
@@ -183,7 +182,7 @@ fn is_client_id(id: &str) -> bool {
 
 /// Whether `uri` is a redirect URI a browser can follow and the `OAuthClient` schema accepts.
 ///
-/// [`REDIRECT_URI_RULE`](crate::crd::client::REDIRECT_URI_RULE) is the floor: `https://` with a
+/// [`REDIRECT_URI_RULE`](zeabur_identity_api::client::REDIRECT_URI_RULE) is the floor: `https://` with a
 /// host, or `http://127.0.0.1` / `http://[::1]` with a path (RFC 9700 §2.1, RFC 8252 §7.3), no
 /// fragment (RFC 6749 §3.1.2) and no user information. On top of it, `uri` must parse as a URL
 /// the way a browser parses it (the WHATWG URL Standard, which the `url` crate implements) and be

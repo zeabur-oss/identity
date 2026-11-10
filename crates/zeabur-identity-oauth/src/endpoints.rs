@@ -10,7 +10,7 @@
 //! # Account types
 //!
 //! Each `User` is an admin or a regular account ([`account::AccountType`]). Only admin accounts
-//! carry [`ADMIN_GROUP`](zeabur_identity_core::protocol::ADMIN_GROUP), which RBAC binds to
+//! carry [`ADMIN_GROUP`](zeabur_identity_api::ADMIN_GROUP), which RBAC binds to
 //! `cluster-admin`. The token endpoint applies the account policy ([`account::allows`]) at code
 //! redemption and again at each refresh, so changing a user to admin ends their GitHub or Google
 //! sessions, and turning on AAL3 ends admin sessions that started with a synced passkey. The

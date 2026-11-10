@@ -15,6 +15,10 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
 use k8s_openapi::jiff::Timestamp;
 use kube::ResourceExt as _;
 use kube::api::{Api, ListParams, ObjectMeta, Patch, PatchParams, PostParams};
+use zeabur_identity_api::credential::{
+    Credential, CredentialSpec, CredentialType, ExternalIdentity, Passkey,
+};
+use zeabur_identity_api::{GROUP, USER_LABEL};
 use zeabur_identity_core::clock::UnixTime;
 use zeabur_identity_store::{
     AccountEvent, CreateCredential, CredentialStore, LinkedAccount, LinkedSummary, NewExternal,
@@ -27,10 +31,6 @@ use super::objects::{
     replace_status_if_unchanged,
 };
 use super::users::{owned_by_another, user_owner, user_owner_uid};
-use crate::crd::credential::{
-    Credential, CredentialSpec, CredentialType, ExternalIdentity, Passkey,
-};
-use crate::crd::{GROUP, USER_LABEL};
 
 /// How many times a rename re-reads after losing a compare-and-swap.
 const MAX_ATTEMPTS: usize = 4;

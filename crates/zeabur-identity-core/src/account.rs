@@ -1,7 +1,7 @@
 //! Account types, and the install-wide settings that decide how each type signs in.
 //!
 //! An admin account signs in only with a passkey, never with a linked GitHub or Google account,
-//! and its tokens carry the [`ADMIN_GROUP`](crate::protocol::ADMIN_GROUP). A regular account may
+//! and its tokens carry the admin group (`zeabur_identity_api::ADMIN_GROUP`). A regular account may
 //! use every sign-in method the server offers. With [`Settings::admin_aal3`], an admin account
 //! also needs a device-bound passkey: one whose authenticator reports the WebAuthn backup
 //! eligibility flag (BE) as unset. NIST SP 800-63B-4 allows synced passkeys up to AAL2 only,

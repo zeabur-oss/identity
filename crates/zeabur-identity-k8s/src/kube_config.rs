@@ -89,11 +89,12 @@ use kube::Client;
 use kube::api::{Api, ApiResource, DynamicObject, GroupVersionKind, Patch, PatchParams};
 use serde_json::Value;
 use thiserror::Error;
+use zeabur_identity_api::IDENTITY_PREFIX;
 use zeabur_identity_core::config::{BaseUrl, ConfigError};
 use zeabur_identity_core::protocol::OPENID_CONFIGURATION_PATH;
 
 use crate::internal_tls::{self, TlsError};
-use crate::rbac::{IDENTITY_PREFIX, NAME};
+use crate::rbac::NAME;
 
 /// Prefix of the `extra` keys Zeabur Identity maps into Kubernetes user info.
 pub const EXTRA_PREFIX: &str = "identity.zeabur.com/";
