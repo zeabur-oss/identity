@@ -157,6 +157,7 @@ kubectl -n zeabur-identity delete upstreamprovider google
 | `org_internal` 或 Google 存取政策錯誤 | 確認應用程式的 **Audience** 設定是否允許這個帳號登入，也確認帳號所屬組織的政策是否允許存取，詳見 [Google 的對象規則](https://support.google.com/cloud/answer/15549945)。 |
 | **This account is not linked to any user here** | 用邀請將選取的 Google 帳號連結到使用者。Zeabur Identity 不依電子郵件地址或姓名配對帳號。 |
 | **Use a passkey for this account** | 該 Google 帳號對應到管理員帳號。管理員只能使用通行密鑰登入。 |
-| 登入頁沒有 Google 按鈕，或 Pod 無法讀取密鑰 | 檢查 `--google-client-id`、`--google-client-secret-file`、`--config-secret zeabur-identity-config`、Secret 中的 `google-client-secret` 鍵和檔案路徑。如果你自訂了 Pod 的安全性內容，請保留產生的 `fsGroup`。 |
+| 登入頁沒有 Google 按鈕 | 執行 `kubectl -n zeabur-identity get upstreamproviders`，確認有 `google`。如果有，執行 `kubectl -n zeabur-identity logs deploy/zeabur-identity`，在日誌中找 `upstream_provider_invalid`。 |
+| 從 Google 回來後登入失敗，日誌出現 `provider_unavailable` | Secret `zeabur-identity-upstream` 不存在，或缺少 `google` 索引鍵。檢查 `clientSecretKey` 指定的索引鍵。 |
 | 按下 **Continue with Google** 後沒有前往 Google，而是顯示錯誤 | Zeabur Identity 會先從 `https://accounts.google.com/.well-known/openid-configuration` 讀取 Google 的端點。在日誌（`kubectl -n zeabur-identity logs deploy/zeabur-identity`）中找 `provider_unavailable`，並檢查 Pod 能否用 HTTPS 連到 `accounts.google.com`。 |
 | 從 Google 返回後登入失敗 | 執行 `kubectl -n zeabur-identity logs deploy/zeabur-identity` 檢視日誌，並檢查 Pod 能否用 HTTPS 連到權杖和簽署金鑰主機：`oauth2.googleapis.com` 與 `www.googleapis.com`。 |
