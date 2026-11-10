@@ -1736,4 +1736,181 @@ mod tests {
             );
         }
     }
+
+    /// How a callback is reached.
+    #[derive(Clone, Copy, Debug)]
+    enum Flow {
+        /// Sign-in as alice, whose account is linked first.
+        SignIn,
+        /// Linking with dana's invitation.
+        Invitation,
+        /// Linking from alice's account page.
+        AccountPage,
+    }
+
+    fn subject_at(kind: Kind) -> String {
+        match kind {
+            Kind::GitHub => GITHUB_ID.to_string(),
+            Kind::Google => GOOGLE_SUB.to_owned(),
+        }
+    }
+
+    /// Runs `flow` with `provider` up to the callback, with `extra` added to the callback query.
+    async fn run_flow(h: &Harness, provider: &str, flow: Flow, extra: &str) -> Reply {
+        let kind = Kind::from_id(provider).unwrap();
+        let (query, cookies) = match flow {
+            Flow::SignIn => {
+                link(h, kind, &subject_at(kind), "alice").await;
+                let flow = authorize(h, "openid").await;
+                let started =
+                    start(h, provider, &json!({}), &format!("{FLOW_COOKIE}={flow}")).await;
+                let url = started.json()["redirect_to"].as_str().unwrap().to_owned();
+                (
+                    provider_issues_code(h, &url, "code-1"),
+                    format!(
+                        "{FLOW_COOKIE}={flow}; {UPSTREAM_COOKIE}={}",
+                        started.cookie(UPSTREAM_COOKIE)
+                    ),
+                )
+            }
+            Flow::Invitation => {
+                let started = start(h, provider, &json!({ "token": INVITATION }), "").await;
+                let url = started.json()["redirect_to"].as_str().unwrap().to_owned();
+                (
+                    provider_issues_code(h, &url, "code-1"),
+                    format!("{UPSTREAM_COOKIE}={}", started.cookie(UPSTREAM_COOKIE)),
+                )
+            }
+            Flow::AccountPage => {
+                let session = account_session(h, "alice", 0).await;
+                let (query, upstream) = start_account_link(h, &session, provider, "code-1").await;
+                (query, format!("{upstream}; {}", session.cookie))
+            }
+        };
+        callback(h, provider, &format!("{query}{extra}"), &cookies).await
+    }
+
+    fn iss_param(value: &str) -> String {
+        form_urlencoded::Serializer::new(String::new())
+            .append_pair("iss", value)
+            .finish()
+    }
+
+    fn token_requests(h: &Harness) -> usize {
+        requests(h)
+            .iter()
+            .filter(|url| url.ends_with("/token"))
+            .count()
+    }
+
+    #[tokio::test]
+    async fn a_callback_with_another_empty_or_repeated_iss_is_refused_before_the_code_is_sent() {
+        for provider in ["github", "google"] {
+            let issuer = Kind::from_id(provider).unwrap().issuer();
+            for extra in [
+                format!("&{}", iss_param("https://evil.example")),
+                format!("&{}", iss_param("")),
+                format!("&{}", iss_param("accounts.google.com")),
+                format!("&{}", iss_param(&format!("{issuer}/"))),
+                format!("&{0}&{0}", iss_param(issuer)),
+            ] {
+                for flow in [Flow::SignIn, Flow::Invitation, Flow::AccountPage] {
+                    let h = harness().await;
+                    let reply = run_flow(&h, provider, flow, &extra).await;
+                    let case = format!("{provider} {flow:?} {extra}");
+                    assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{case}");
+                    let fields = &reply.audit.as_ref().unwrap()["fields"];
+                    assert_eq!(fields["reason"], "issuer_mismatch", "{case}");
+                    assert_eq!(fields["outcome"], "failure", "{case}");
+                    assert!(
+                        reply
+                            .body
+                            .contains(&format!("issuer_mismatch ({provider})")),
+                        "{case}"
+                    );
+                    assert!(!reply.headers.contains_key(header::LOCATION), "{case}");
+                    assert_eq!(token_requests(&h), 0, "{case}");
+                    let kind = Kind::from_id(provider).unwrap();
+                    let owner = linked_to(&h, kind, &subject_at(kind)).await;
+                    let expected = matches!(flow, Flow::SignIn).then(|| "alice".to_owned());
+                    assert_eq!(owner, expected, "{case}");
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_callback_with_the_matching_or_no_iss_completes() {
+        for provider in ["github", "google"] {
+            let issuer = Kind::from_id(provider).unwrap().issuer();
+            for extra in [String::new(), format!("&{}", iss_param(issuer))] {
+                for flow in [Flow::SignIn, Flow::Invitation, Flow::AccountPage] {
+                    let h = harness().await;
+                    let reply = run_flow(&h, provider, flow, &extra).await;
+                    let case = format!("{provider} {flow:?} {extra}");
+                    let expected = match flow {
+                        Flow::Invitation => StatusCode::OK,
+                        Flow::SignIn | Flow::AccountPage => StatusCode::SEE_OTHER,
+                    };
+                    assert_eq!(reply.status, expected, "{case}: {}", reply.body);
+                    assert_eq!(
+                        reply.audit.as_ref().unwrap()["fields"]["outcome"],
+                        "success",
+                        "{case}"
+                    );
+                    let kind = Kind::from_id(provider).unwrap();
+                    let owner = linked_to(&h, kind, &subject_at(kind)).await;
+                    let user = if matches!(flow, Flow::Invitation) {
+                        "dana"
+                    } else {
+                        "alice"
+                    };
+                    assert_eq!(owner.as_deref(), Some(user), "{case}");
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_pending_request_without_its_issuer_or_with_another_is_refused() {
+        for (change, reason) in [
+            (Value::Null, "invalid_pending"),
+            (json!("https://idp.example"), "provider_changed"),
+        ] {
+            let h = harness().await;
+            link(&h, Kind::Google, GOOGLE_SUB, "alice").await;
+            let flow = authorize(&h, "openid").await;
+            let started = start(&h, "google", &json!({}), &format!("{FLOW_COOKIE}={flow}")).await;
+            let url = started.json()["redirect_to"].as_str().unwrap().to_owned();
+            let query = provider_issues_code(&h, &url, "code-1");
+            let sealer = &h.service.sign_in.oauth.sealer;
+            let mut pending: Value = serde_json::from_slice(
+                &sealer
+                    .open(
+                        "zeabur-identity/upstream/v1",
+                        &started.cookie(UPSTREAM_COOKIE),
+                    )
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(pending["issuer"], GOOGLE_ISSUER);
+            if change.is_null() {
+                pending.as_object_mut().unwrap().remove("issuer");
+            } else {
+                pending["issuer"] = change;
+            }
+            let resealed = sealer
+                .seal(
+                    "zeabur-identity/upstream/v1",
+                    &serde_json::to_vec(&pending).unwrap(),
+                )
+                .unwrap();
+            let cookies = format!("{FLOW_COOKIE}={flow}; {UPSTREAM_COOKIE}={resealed}");
+            let reply = callback(&h, "google", &query, &cookies).await;
+            assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{reason}");
+            assert_eq!(reply.audit.as_ref().unwrap()["fields"]["reason"], reason);
+            assert!(!reply.headers.contains_key(header::LOCATION));
+            assert_eq!(token_requests(&h), 0, "{reason}");
+        }
+    }
 }
