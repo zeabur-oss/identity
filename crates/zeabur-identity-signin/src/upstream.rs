@@ -33,13 +33,19 @@
 //! same name, but every object gets a distinct UID ([Object Names and IDs]). Thus a link left
 //! over from a removed person does not sign in as a new person with the same username.
 //!
-//! The pending request (`state`, `nonce`, PKCE verifier and purpose) is sealed into a `__Host-`
-//! cookie with `SameSite=Lax`, the strictest setting that still accompanies the provider's
-//! top-level redirect back. `state` is compared in constant time and accepted once
-//! (RFC 6749 §10.12, RFC 9700 §2.1). The callback answers with HTML; errors never echo the
-//! provider's text.
+//! The pending request (`state`, `nonce`, PKCE verifier, the provider's issuer and purpose) is
+//! sealed into a `__Host-` cookie with `SameSite=Lax`, the strictest setting that still
+//! accompanies the provider's top-level redirect back. `state` is compared in constant time and
+//! accepted once (RFC 6749 §10.12, RFC 9700 §2.1). The callback answers with HTML; errors never
+//! echo the provider's text.
+//!
+//! The callback checks the `iss` parameter of the authorization response ([RFC 9207] §2.4)
+//! against the issuer recorded when the request started, before the code is sent anywhere. A
+//! response without `iss` is accepted, as §2.4 allows: no provider is configured as one that
+//! sends it. Such a provider gets no protection from this check.
 //!
 //! [Object Names and IDs]: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/
+//! [RFC 9207]: https://www.rfc-editor.org/rfc/rfc9207.html#section-2.4
 
 pub mod http;
 pub mod provider;
@@ -56,7 +62,7 @@ use axum::routing::{get, post};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::{Deserialize, Serialize};
-use zeabur_identity_api::upstream::ProviderId;
+use zeabur_identity_api::upstream::{Issuer, ProviderId};
 use zeabur_identity_core::account::Method;
 use zeabur_identity_core::clock::{Clock, UnixTime};
 use zeabur_identity_core::crypto::{ct_eq, hex, random, sha256};
@@ -152,11 +158,14 @@ where
         .with_state(service)
 }
 
-/// Sealed into [`UPSTREAM_COOKIE`].
+/// Sealed into [`UPSTREAM_COOKIE`]. A cookie without one of the required fields does not
+/// open, so the callback refuses it as `invalid_pending`.
 #[derive(Debug, Serialize, Deserialize)]
 struct Pending {
     id: String,
     provider: ProviderId,
+    /// The provider's issuer when the request started.
+    issuer: Issuer,
     state: String,
     nonce: String,
     verifier: String,
@@ -273,6 +282,7 @@ where
     let pending = Pending {
         id: hex(&random::<16>().map_err(internal)?),
         provider: provider.id().clone(),
+        issuer: provider.issuer().clone(),
         state: random_text::<32>()?,
         nonce: random_text::<32>()?,
         verifier: random_text::<32>()?,
@@ -442,6 +452,23 @@ async fn refuse_admin<D: Directory>(directory: &D, user: &User) -> Result<(), Fa
         })
 }
 
+/// Checks the `iss` parameters of the authorization response against `expected`.
+///
+/// [RFC 9207] §2.4: the client compares `iss` with the issuer the request was sent to by simple
+/// string comparison, and if it does not match, "MUST reject the authorization response and MUST
+/// NOT proceed with the authorization grant". [RFC 6749] §3.1: a response parameter "MUST NOT be
+/// included more than once", so two `iss` values are refused too. No `iss` passes (§2.4 MAY).
+///
+/// [RFC 9207]: https://www.rfc-editor.org/rfc/rfc9207.html#section-2.4
+/// [RFC 6749]: https://www.rfc-editor.org/rfc/rfc6749.html#section-3.1
+fn issuer_matches<'a>(mut iss: impl Iterator<Item = &'a str>, expected: &Issuer) -> bool {
+    match (iss.next(), iss.next()) {
+        (None, _) => true,
+        (Some(value), None) => value == expected.as_str(),
+        (Some(_), Some(_)) => false,
+    }
+}
+
 /// A provider answer that did not verify. An ID token outside its validity window usually means
 /// this server's clock is off. HTTP errors are not shown: they can carry the provider's text.
 fn verification_failure(error: &UpstreamError) -> Failure {
@@ -512,6 +539,10 @@ where
         let provider = service
             .provider(pending.provider.as_str())
             .ok_or(("provider_unavailable", ErrorReason::ProviderFailed, None))?;
+        // The provider now has another issuer: the code is not sent to it.
+        if *provider.issuer() != pending.issuer {
+            return Err(("provider_changed", ErrorReason::ProviderFailed, None));
+        }
         // The provider refused, or the user cancelled (RFC 6749 §4.1.2.1).
         let (Some(code), Some(state)) = (param("code"), param("state")) else {
             return Err(("provider_denied", ErrorReason::ProviderDenied, None));
@@ -523,6 +554,13 @@ where
                 != Use::First
         {
             return Err(("invalid_state", ErrorReason::StateMismatch, None));
+        }
+        let iss = params
+            .iter()
+            .filter(|(k, _)| k == "iss")
+            .map(|(_, v)| v.as_str());
+        if !issuer_matches(iss, &pending.issuer) {
+            return Err(("issuer_mismatch", ErrorReason::ProviderFailed, None));
         }
         // Linking from the account page: the session that started must still be signed in.
         let account = match &pending.account {
