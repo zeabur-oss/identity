@@ -271,7 +271,7 @@ async fn run<S: KeyStore, D: Directory, G: GrantStore, K: CredentialStore, T: Se
         credentials,
         setup,
         used_ceremonies: OneTimeIds::default(),
-        providers: kinds.clone(),
+        providers: providers.iter().map(Provider::descriptor).collect(),
     });
     let mut app = router(AppState::new(
         metadata,

@@ -14,13 +14,13 @@ use zeabur_identity_ui::pages::{
     account_page, error_page, login_page, notice_page, page_lang, setup_page,
 };
 
-const GITHUB: ProviderButton = ProviderButton {
+const GITHUB: ProviderButton<'static> = ProviderButton {
     id: "github",
     label: "GitHub",
     icon: "GithubLogo",
 };
-const PROVIDERS: [ProviderButton; 1] = [GITHUB];
-const BOTH: [ProviderButton; 2] = [
+const PROVIDERS: [ProviderButton<'static>; 1] = [GITHUB];
+const BOTH: [ProviderButton<'static>; 2] = [
     GITHUB,
     ProviderButton {
         id: "google",

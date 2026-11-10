@@ -247,6 +247,11 @@ mod tests {
 
     /// The harness, with the OpenID provider shown as Google at `issuer`.
     async fn harness_at(google_issuer: &str) -> Harness {
+        harness_with(google_issuer, &["github", "google"]).await
+    }
+
+    /// The harness with only the providers named in `configured`, in that order.
+    async fn harness_with(google_issuer: &str, configured: &[&str]) -> Harness {
         let manager = KeyManager::new(
             MemoryKeyStore::default(),
             SystemClock,
@@ -294,13 +299,31 @@ mod tests {
             &token_hash(INVITATION.as_bytes()),
             zeabur_identity_core::clock::UnixTime::from_secs(SystemClock.now().as_secs() + 3600),
         );
+        let mut providers = Vec::new();
+        for id in configured {
+            let provider = match *id {
+                "github" => Provider::github(
+                    "gh-client".into(),
+                    "gh-secret".into(),
+                    GitHubEndpoints {
+                        authorize: "https://github.test/authorize".into(),
+                        token: "https://github.test/token".into(),
+                        user: "https://api.github.test/user".into(),
+                    },
+                )
+                .unwrap(),
+                "google" => google_provider(google_issuer),
+                other => panic!("no provider {other} in the harness"),
+            };
+            providers.push(provider);
+        }
         let sign_in = Arc::new(SignIn {
             oauth: Arc::clone(&oauth),
             passkeys: Passkeys::new(&issuer).unwrap(),
             credentials: MemoryCredentialStore::default(),
             setup,
             used_ceremonies: OneTimeIds::default(),
-            providers: vec![Kind::GitHub, Kind::Google],
+            providers: providers.iter().map(Provider::descriptor).collect(),
         });
         let fake = Arc::new(Fake {
             issuer: google_issuer.to_owned(),
@@ -310,20 +333,9 @@ mod tests {
         let google_key = Arc::new(SigningKey::generate(Algorithm::Rs256).unwrap());
         *fake.google_key.lock().unwrap() = Some(Arc::clone(&google_key));
         *fake.published_key.lock().unwrap() = Some(google_key);
-        let github = Provider::github(
-            "gh-client".into(),
-            "gh-secret".into(),
-            GitHubEndpoints {
-                authorize: "https://github.test/authorize".into(),
-                token: "https://github.test/token".into(),
-                user: "https://api.github.test/user".into(),
-            },
-        )
-        .unwrap();
-        let google = google_provider(google_issuer);
         let service = Arc::new(Upstream {
             sign_in: Arc::clone(&sign_in),
-            providers: vec![github, google],
+            providers,
             http: FakeHttp(Arc::clone(&fake)),
             used_states: OneTimeIds::default(),
         });
@@ -1355,6 +1367,78 @@ mod tests {
             Some("alice"),
             Some("uid-alice"),
         );
+    }
+
+    /// The link buttons on an account page: each one's provider ID and text, in page order.
+    fn link_buttons(page: &str) -> Vec<(String, String)> {
+        let mut buttons = Vec::new();
+        for rest in page.split(r#"data-link=""#).skip(1) {
+            let (id, rest) = rest.split_once('"').unwrap();
+            let (inside, _) = rest.split_once("</button>").unwrap();
+            let text = inside.rsplit_once('>').unwrap().1;
+            buttons.push((id.to_owned(), text.to_owned()));
+        }
+        buttons
+    }
+
+    #[tokio::test]
+    async fn the_account_page_offers_exactly_the_configured_providers_and_each_starts_its_own() {
+        let authorize = |id: &str| match id {
+            "github" => "https://github.test/authorize?",
+            "google" => "https://google.test/authorize?",
+            other => panic!("no provider {other}"),
+        };
+        let label = |id: &str| match id {
+            "github" => "Link GitHub",
+            "google" => "Link Google",
+            other => panic!("no provider {other}"),
+        };
+        let sets: [&[&str]; 4] = [
+            &[],
+            &["google"],
+            &["github", "google"],
+            &["google", "github"],
+        ];
+        for configured in sets {
+            let h = harness_with(GOOGLE_ISSUER, configured).await;
+            let session = account_session(&h, "alice", 0).await;
+            let page = account_page(&h, &session).await;
+            let mut expected = Vec::new();
+            for id in configured {
+                expected.push(((*id).to_owned(), label(id).to_owned()));
+            }
+            assert_eq!(link_buttons(&page), expected, "{configured:?}");
+
+            for id in configured {
+                let started = account_post(
+                    &h,
+                    "/account/links/start",
+                    &json!({ "csrf": session.csrf, "provider": id }),
+                    &session.cookie,
+                )
+                .await;
+                assert_eq!(started.status, StatusCode::OK, "{}", started.body);
+                let url = started.json()["redirect_to"].as_str().unwrap().to_owned();
+                assert!(url.starts_with(authorize(id)), "{id}: {url}");
+            }
+            for id in ["github", "google"] {
+                if configured.contains(&id) {
+                    continue;
+                }
+                let started = account_post(
+                    &h,
+                    "/account/links/start",
+                    &json!({ "csrf": session.csrf, "provider": id }),
+                    &session.cookie,
+                )
+                .await;
+                assert_eq!(
+                    started.status,
+                    StatusCode::NOT_FOUND,
+                    "{id} in {configured:?}"
+                );
+            }
+        }
     }
 
     #[tokio::test]
