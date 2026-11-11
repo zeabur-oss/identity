@@ -56,6 +56,7 @@ use axum::routing::{get, post};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::{Deserialize, Serialize};
+use zeabur_identity_api::upstream::ProviderId;
 use zeabur_identity_core::account::Method;
 use zeabur_identity_core::clock::{Clock, UnixTime};
 use zeabur_identity_core::crypto::{ct_eq, hex, random, sha256};
@@ -111,6 +112,13 @@ impl<D, G, C, K, S, H> std::fmt::Debug for Upstream<D, G, C, K, S, H> {
     }
 }
 
+impl<D, G, C, K, S, H> Upstream<D, G, C, K, S, H> {
+    /// The enabled provider with this [`Provider::id`].
+    fn provider(&self, id: &str) -> Option<&Provider> {
+        self.providers.iter().find(|p| p.id().as_str() == id)
+    }
+}
+
 type Shared<D, G, C, K, S, H> = Arc<Upstream<D, G, C, K, S, H>>;
 
 /// The upstream routes.
@@ -143,7 +151,7 @@ where
 #[derive(Debug, Serialize, Deserialize)]
 struct Pending {
     id: String,
-    provider: String,
+    provider: ProviderId,
     state: String,
     nonce: String,
     verifier: String,
@@ -184,8 +192,8 @@ struct StartResponse {
     redirect_to: String,
 }
 
-fn redirect_uri(issuer: &str, kind: Kind) -> String {
-    format!("{issuer}/upstream/{}/callback", kind.id())
+fn redirect_uri(issuer: &str, provider: &ProviderId) -> String {
+    format!("{issuer}/upstream/{}/callback", provider.as_str())
 }
 
 fn random_text<const N: usize>() -> Result<String, Problem> {
@@ -210,9 +218,7 @@ where
     let result: Result<Response, Problem> = async {
         let sign_in = &service.sign_in;
         check_request(&headers, sign_in.oauth.issuer.as_str())?;
-        let provider = Kind::from_id(&provider)
-            .and_then(|kind| service.providers.iter().find(|p| p.kind() == kind))
-            .ok_or(UNKNOWN_PROVIDER)?;
+        let provider = service.provider(&provider).ok_or(UNKNOWN_PROVIDER)?;
         let request: StartRequest = parse(&body)?;
         let now = sign_in.oauth.now();
         if let Some(token) = &request.token {
@@ -252,7 +258,7 @@ fn begin<D, G, C, K, S>(
 ) -> Result<Response, Problem> {
     let pending = Pending {
         id: hex(&random::<16>().map_err(internal)?),
-        provider: provider.kind().id().to_owned(),
+        provider: provider.id().clone(),
         state: random_text::<32>()?,
         nonce: random_text::<32>()?,
         verifier: random_text::<32>()?,
@@ -262,7 +268,7 @@ fn begin<D, G, C, K, S>(
     };
     let challenge = URL_SAFE_NO_PAD.encode(sha256(pending.verifier.as_bytes()));
     let url = provider.authorize_url(
-        &redirect_uri(sign_in.oauth.issuer.as_str(), provider.kind()),
+        &redirect_uri(sign_in.oauth.issuer.as_str(), provider.id()),
         &pending.state,
         &pending.nonce,
         &challenge,
@@ -314,8 +320,8 @@ where
         let account = signed_in(sign_in, &headers, &request.csrf, now).await?;
         audit.session = Some(account.token.name().to_owned());
         user = Some(account.user.clone());
-        let provider = Kind::from_id(&request.provider)
-            .and_then(|kind| service.providers.iter().find(|p| p.kind() == kind))
+        let provider = service
+            .provider(&request.provider)
             .ok_or(UNKNOWN_PROVIDER)?;
         require_fresh(&account, now)?;
         check_account(&sign_in.oauth.directory, &account.user, Method::Upstream).await?;
@@ -376,7 +382,7 @@ where
         }
     }
     let audit = Audit {
-        credential: Some(external.name),
+        credential: Some(external.name()),
         session: Some(account.token.name().to_owned()),
         requester: Some(requester),
         ..Audit::default()
@@ -475,15 +481,15 @@ where
             .and_then(|sealed| oauth.sealer.open(PURPOSE, sealed))
             .and_then(|json| serde_json::from_slice(&json).ok());
         let pending = pending
-            .filter(|p| p.expires_at > now && p.provider == provider)
+            .filter(|p| p.expires_at > now && p.provider.as_str() == provider)
             .ok_or(("invalid_pending", ErrorReason::StateMismatch, None))?;
         event = match (&pending.account, &pending.link) {
             (Some(_), _) => "account.upstream_linked",
             (None, Some(_)) => "auth.account_link",
             (None, None) => "auth.sign_in",
         };
-        let provider = Kind::from_id(&pending.provider)
-            .and_then(|kind| service.providers.iter().find(|p| p.kind() == kind))
+        let provider = service
+            .provider(pending.provider.as_str())
             .ok_or(("provider_unavailable", ErrorReason::ProviderFailed, None))?;
         // The provider refused, or the user cancelled (RFC 6749 §4.1.2.1).
         let (Some(code), Some(state)) = (param("code"), param("state")) else {
@@ -513,18 +519,17 @@ where
         let exchange = Exchange {
             code,
             verifier: &pending.verifier,
-            redirect_uri: &redirect_uri(oauth.issuer.as_str(), provider.kind()),
+            redirect_uri: &redirect_uri(oauth.issuer.as_str(), provider.id()),
             nonce: &pending.nonce,
         };
-        let subject = provider
+        let id = provider
             .identify(&service.http, exchange, now)
             .await
             .map_err(|error| {
                 tracing::warn!(reason = "provider_verification_failed", %error, "upstream provider verification failed");
                 verification_failure(&error)
             })?;
-        let issuer = provider.kind().issuer();
-        let name = external_credential_name(issuer, &subject);
+        let name = external_credential_name(&id);
         let linked = sign_in
             .credentials
             .linked_account(&name)
@@ -539,11 +544,9 @@ where
             })?;
         if let Some(account) = account {
             let external = NewExternal {
-                name,
+                id,
                 user: account.user.name.clone(),
                 kind: provider.kind().credential_type(),
-                issuer: issuer.to_owned(),
-                subject,
                 user_subject: account.user.subject.clone(),
             };
             return finish_account_link(sign_in, &account, external, linked.is_some(), &requester, now)
@@ -621,17 +624,15 @@ where
             }
         }
         let external = NewExternal {
-            name,
+            id,
             user: stored.user,
             kind: provider.kind().credential_type(),
-            issuer: issuer.to_owned(),
-            subject,
             user_subject,
         };
         match sign_in.credentials.link(&external).await {
             Ok(CreateCredential::Created) => {
                 let audit = Audit {
-                    credential: Some(external.name.clone()),
+                    credential: Some(name),
                     requester: Some(&requester),
                     ..Audit::default()
                 };

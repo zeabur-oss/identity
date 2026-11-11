@@ -17,6 +17,7 @@ use axum::http::{Method, Request, StatusCode, header};
 use serde::Deserialize;
 use thiserror::Error;
 use zeabur_identity_api::credential::CredentialType;
+use zeabur_identity_api::upstream::{ExternalId, InvalidValue, Issuer, ProviderId, Subject};
 use zeabur_identity_core::clock::UnixTime;
 use zeabur_identity_keys::Algorithm;
 use zeabur_identity_keys::verify::{VerificationKey, parse_jwk_set, verify_compact};
@@ -41,7 +42,7 @@ pub enum Kind {
 }
 
 impl Kind {
-    /// The path segment and CLI name.
+    /// The path segment and CLI name: the default [`Provider::id`].
     #[must_use]
     pub const fn id(self) -> &'static str {
         match self {
@@ -107,7 +108,7 @@ impl Kind {
         }
     }
 
-    /// The issuer recorded with a linked account.
+    /// The issuer recorded with a linked account: the default [`Provider::issuer`].
     #[must_use]
     pub const fn issuer(self) -> &'static str {
         match self {
@@ -165,6 +166,8 @@ impl Endpoints {
 /// A configured provider.
 pub struct Provider {
     kind: Kind,
+    id: ProviderId,
+    issuer: Issuer,
     client_id: String,
     client_secret: String,
     endpoints: Endpoints,
@@ -175,6 +178,7 @@ impl std::fmt::Debug for Provider {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Provider")
             .field("kind", &self.kind)
+            .field("id", &self.id)
             .field("client_id", &self.client_id)
             .finish_non_exhaustive()
     }
@@ -242,27 +246,44 @@ pub struct Exchange<'a> {
 }
 
 impl Provider {
-    /// A provider with its client registration.
-    #[must_use]
-    pub const fn new(
+    /// A provider with its client registration, at [`Kind::id`] and with [`Kind::issuer`].
+    ///
+    /// # Errors
+    ///
+    /// [`InvalidValue`] if the ID or the issuer is malformed.
+    pub fn new(
         kind: Kind,
         client_id: String,
         client_secret: String,
         endpoints: Endpoints,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, InvalidValue> {
+        Ok(Self {
             kind,
+            id: ProviderId::new(kind.id())?,
+            issuer: Issuer::new(kind.issuer())?,
             client_id,
             client_secret,
             endpoints,
             jwks: Mutex::new(None),
-        }
+        })
     }
 
     /// Which provider.
     #[must_use]
     pub const fn kind(&self) -> Kind {
         self.kind
+    }
+
+    /// The path segment of its routes.
+    #[must_use]
+    pub const fn id(&self) -> &ProviderId {
+        &self.id
+    }
+
+    /// The issuer of its accounts.
+    #[must_use]
+    pub const fn issuer(&self) -> &Issuer {
+        &self.issuer
     }
 
     /// The authorization request URL.
@@ -302,7 +323,8 @@ impl Provider {
         format!("{}{separator}{}", self.endpoints.authorize, query.finish())
     }
 
-    /// Exchanges the code and returns the account's stable identifier.
+    /// Exchanges the code and returns the account: this provider's issuer and the account's stable
+    /// identifier.
     ///
     /// # Errors
     ///
@@ -312,7 +334,7 @@ impl Provider {
         http: &H,
         exchange: Exchange<'_>,
         now: UnixTime,
-    ) -> Result<String, UpstreamError> {
+    ) -> Result<ExternalId, UpstreamError> {
         let form = form_urlencoded::Serializer::new(String::new())
             .append_pair("grant_type", "authorization_code")
             .append_pair("code", exchange.code)
@@ -334,28 +356,32 @@ impl Provider {
         }
         let tokens: TokenResponse = serde_json::from_slice(response.body())
             .map_err(|_json| UpstreamError::Protocol("token response"))?;
-        match self.kind {
+        let subject = match self.kind {
             Kind::GitHub => {
                 let access = tokens
                     .access_token
                     .ok_or(UpstreamError::Protocol("no access token"))?;
-                self.github_user(http, &access).await
+                self.github_user(http, &access).await?
             }
             Kind::Google => {
                 let id_token = tokens
                     .id_token
                     .ok_or(UpstreamError::Protocol("no ID token"))?;
                 self.google_subject(http, &id_token, exchange.nonce, now)
-                    .await
+                    .await?
             }
-        }
+        };
+        Ok(ExternalId {
+            issuer: self.issuer.clone(),
+            subject,
+        })
     }
 
     async fn github_user<H: HttpClient>(
         &self,
         http: &H,
         access_token: &str,
-    ) -> Result<String, UpstreamError> {
+    ) -> Result<Subject, UpstreamError> {
         let url = self
             .endpoints
             .user
@@ -376,7 +402,7 @@ impl Provider {
         }
         let user: GitHubUser = serde_json::from_slice(response.body())
             .map_err(|_json| UpstreamError::Protocol("user response"))?;
-        Ok(user.id.to_string())
+        Subject::new(user.id.to_string()).map_err(|_invalid| UpstreamError::Protocol("user ID"))
     }
 
     async fn keys<H: HttpClient>(
@@ -426,7 +452,7 @@ impl Provider {
         id_token: &str,
         nonce: &str,
         now: UnixTime,
-    ) -> Result<String, UpstreamError> {
+    ) -> Result<Subject, UpstreamError> {
         const ALGORITHMS: [Algorithm; 2] = [Algorithm::Rs256, Algorithm::Es256];
         let keys = self.keys(http, now, false).await?;
         let verified = match verify_compact(id_token, &keys, &ALGORITHMS) {
@@ -470,9 +496,6 @@ impl Provider {
         if claims.nonce.as_deref() != Some(nonce) {
             return Err(UpstreamError::IdToken("nonce"));
         }
-        if claims.sub.is_empty() || claims.sub.len() > 255 {
-            return Err(UpstreamError::IdToken("subject"));
-        }
-        Ok(claims.sub)
+        Subject::new(claims.sub).map_err(|_invalid| UpstreamError::IdToken("subject"))
     }
 }

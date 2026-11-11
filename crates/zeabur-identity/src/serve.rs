@@ -160,12 +160,8 @@ fn upstream_providers(config: &ServeConfig) -> Result<Vec<Provider>, ServeError>
                 Kind::GitHub => Endpoints::github(),
                 Kind::Google => Endpoints::google(),
             };
-            Ok(Provider::new(
-                upstream.kind,
-                upstream.client_id.clone(),
-                secret,
-                endpoints,
-            ))
+            Provider::new(upstream.kind, upstream.client_id.clone(), secret, endpoints)
+                .map_err(|error| ServeError::Config(format!("{}: {error}", upstream.kind.id())))
         })
         .collect()
 }

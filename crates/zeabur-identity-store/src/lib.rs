@@ -1,6 +1,7 @@
 #![doc = include_str!("../README.md")]
 
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::future::{self, Future};
 use std::sync::{Mutex, PoisonError};
 
@@ -8,6 +9,7 @@ use thiserror::Error;
 use zeabur_identity_api::ADMIN_GROUP;
 use zeabur_identity_api::client::ClientType;
 use zeabur_identity_api::credential::CredentialType;
+use zeabur_identity_api::upstream::ExternalId;
 use zeabur_identity_core::account::{AccountType, Settings};
 use zeabur_identity_core::clock::UnixTime;
 use zeabur_identity_core::crypto::ct_eq;
@@ -660,18 +662,22 @@ pub struct AccountEvent {
 /// An upstream account to link to a user.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewExternal {
-    /// Object name (see [`external_credential_name`]).
-    pub name: String,
+    /// The upstream account.
+    pub id: ExternalId,
     /// `User` object name.
     pub user: String,
     /// The provider.
     pub kind: CredentialType,
-    /// Upstream issuer.
-    pub issuer: String,
-    /// Upstream subject: the stable account ID.
-    pub subject: String,
     /// The [`User::subject`] (UID) of the user the account signs in as.
     pub user_subject: String,
+}
+
+impl NewExternal {
+    /// The object name: [`external_credential_name`] of [`NewExternal::id`].
+    #[must_use]
+    pub fn name(&self) -> String {
+        external_credential_name(&self.id)
+    }
 }
 
 /// The user an upstream account is linked to.
@@ -711,12 +717,15 @@ pub fn passkey_credential_name(credential_id: &[u8]) -> String {
 
 /// The `Credential` name for an upstream account. Derived from the issuer and subject, so finding
 /// the user is a single read and linking one account twice fails with `AlreadyExists`.
+///
+/// The input is the bytes of the issuer and the subject as given, so the name of an account does
+/// not change.
 #[must_use]
-pub fn external_credential_name(issuer: &str, subject: &str) -> String {
+pub fn external_credential_name(id: &ExternalId) -> String {
     let mut input = b"zeabur-identity/external/v1/".to_vec();
-    input.extend_from_slice(issuer.as_bytes());
+    input.extend_from_slice(id.issuer.as_str().as_bytes());
     input.push(0);
-    input.extend_from_slice(subject.as_bytes());
+    input.extend_from_slice(id.subject.as_str().as_bytes());
     format!(
         "c-{}",
         zeabur_identity_core::crypto::hex(&zeabur_identity_core::crypto::sha256(&input))
@@ -951,20 +960,18 @@ impl CredentialStore for MemoryCredentialStore {
             .externals
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        let outcome = if externals.contains_key(&external.name) {
-            CreateCredential::AlreadyExists
-        } else {
-            externals.insert(
-                external.name.clone(),
-                (
+        let outcome = match externals.entry(external.name()) {
+            Entry::Occupied(_) => CreateCredential::AlreadyExists,
+            Entry::Vacant(entry) => {
+                entry.insert((
                     LinkedAccount {
                         user: external.user.clone(),
                         user_subject: Some(external.user_subject.clone()),
                     },
                     external.kind,
-                ),
-            );
-            CreateCredential::Created
+                ));
+                CreateCredential::Created
+            }
         };
         drop(externals);
         future::ready(Ok(outcome))
@@ -1224,7 +1231,34 @@ impl SetupStore for MemorySetupStore {
 
 #[cfg(test)]
 mod tests {
+    use zeabur_identity_api::upstream::{Issuer, Subject};
+
     use super::*;
+
+    #[test]
+    fn linked_accounts_keep_the_names_they_had() {
+        // Computed with `external_credential_name(issuer: &str, subject: &str)` before the typed
+        // values: the names of existing `Credential` objects.
+        let cases = [
+            (
+                "https://github.com",
+                "583231",
+                "c-7de39252447e608075f56f721487e3974c942e34378410bbe7ab9e5edf75c0fc",
+            ),
+            (
+                "https://accounts.google.com",
+                "110169484474386276334",
+                "c-d3f6b2f13020356c1f6300ea8a5f58bdc30666d6578da93b2a77ac11c52c4612",
+            ),
+        ];
+        for (issuer, subject, name) in cases {
+            let id = ExternalId {
+                issuer: Issuer::new(issuer).unwrap(),
+                subject: Subject::new(subject).unwrap(),
+            };
+            assert_eq!(external_credential_name(&id), name);
+        }
+    }
 
     fn client(id: &str, display_name: Option<&str>, home_url: Option<&str>) -> Client {
         Client {

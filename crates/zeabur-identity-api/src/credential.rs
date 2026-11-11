@@ -9,6 +9,8 @@ use kube::{CustomResource, KubeSchema};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::upstream::ExternalId;
+
 /// Kind of credential.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema)]
 pub enum CredentialType {
@@ -68,7 +70,7 @@ pub struct CredentialSpec {
     pub passkey: Option<Passkey>,
     /// Upstream identity, when `type` is `GitHub` or `Google`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub external: Option<ExternalIdentity>,
+    pub external: Option<ExternalId>,
 }
 
 /// The public part of a WebAuthn credential. Nothing here is secret.
@@ -97,18 +99,6 @@ pub struct Passkey {
     pub label: Option<String>,
 }
 
-/// A linked account at an upstream provider.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct ExternalIdentity {
-    /// Upstream issuer.
-    #[schemars(length(min = 1, max = 256))]
-    pub issuer: String,
-    /// Upstream subject: the stable account ID, never an email address.
-    #[schemars(length(min = 1, max = 256))]
-    pub subject: String,
-}
-
 /// What changes after enrolment. Written by Zeabur Identity only.
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -126,4 +116,53 @@ pub struct CredentialStatus {
     #[serde(default)]
     #[schemars(range(min = 0))]
     pub revision: i64,
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+    use crate::upstream::{Issuer, Subject};
+
+    #[test]
+    fn a_stored_linked_account_reads_back_to_the_same_typed_values() {
+        let stored = json!({
+            "apiVersion": "identity.zeabur.com/v1alpha1",
+            "kind": "Credential",
+            "metadata": {
+                "name": "c-7de39252447e608075f56f721487e3974c942e34378410bbe7ab9e5edf75c0fc"
+            },
+            "spec": {
+                "user": "alice",
+                "type": "GitHub",
+                "external": {"issuer": "https://github.com", "subject": "583231"}
+            }
+        });
+        let credential: Credential = serde_json::from_value(stored.clone()).unwrap();
+        let expected = ExternalId {
+            issuer: Issuer::new("https://github.com").unwrap(),
+            subject: Subject::new("583231").unwrap(),
+        };
+        assert_eq!(credential.spec.external, Some(expected));
+        assert_eq!(
+            serde_json::to_value(&credential).unwrap()["spec"],
+            stored["spec"]
+        );
+    }
+
+    #[test]
+    fn a_stored_credential_with_a_malformed_subject_is_refused() {
+        let stored = json!({
+            "apiVersion": "identity.zeabur.com/v1alpha1",
+            "kind": "Credential",
+            "metadata": {"name": "c-0"},
+            "spec": {
+                "user": "alice",
+                "type": "GitHub",
+                "external": {"issuer": "https://github.com", "subject": "alice smith"}
+            }
+        });
+        assert!(serde_json::from_value::<Credential>(stored).is_err());
+    }
 }
