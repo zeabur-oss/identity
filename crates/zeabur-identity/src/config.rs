@@ -16,17 +16,6 @@ pub struct Store {
     pub key_secret: String,
 }
 
-/// An upstream identity provider's client registration.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UpstreamConfig {
-    /// Which provider.
-    pub kind: zeabur_identity_signin::upstream::provider::Kind,
-    /// OAuth client ID.
-    pub client_id: String,
-    /// File holding the client secret (a mounted Secret).
-    pub client_secret_file: std::path::PathBuf,
-}
-
 /// Configuration for `zeabur-identity`.
 #[derive(Debug, Clone)]
 pub struct ServeConfig {
@@ -40,10 +29,6 @@ pub struct ServeConfig {
     pub metadata_max_age: Duration,
     /// Whether invitations are accepted.
     pub invitations: bool,
-    /// Enabled upstream identity providers.
-    pub upstream: Vec<UpstreamConfig>,
-    /// The OpenID issuer that Google sign-in discovers.
-    pub google_issuer: zeabur_identity_api::upstream::Issuer,
     /// Where the internal TLS listener binds (Kubernetes store only).
     pub internal_listen: SocketAddr,
     /// Overrides the internal base URL recorded in the certificate Secret.

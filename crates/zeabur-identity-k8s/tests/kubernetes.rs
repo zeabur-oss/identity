@@ -1249,9 +1249,9 @@ mod tests {
     async fn user_recreation_collects_only_the_original_users_dependents() {
         use base64::Engine as _;
         use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-        use zeabur_identity_api::credential::{Credential, CredentialType};
+        use zeabur_identity_api::credential::Credential;
         use zeabur_identity_api::invitation::Invitation;
-        use zeabur_identity_api::upstream::{ExternalId, Issuer, Subject};
+        use zeabur_identity_api::upstream::{ExternalId, Issuer, ProviderId, Subject};
         use zeabur_identity_core::clock::UnixTime;
         use zeabur_identity_core::config::BaseUrl;
         use zeabur_identity_k8s::credentials::KubeCredentialStore;
@@ -1333,7 +1333,7 @@ mod tests {
                     subject: Subject::new(generation).unwrap(),
                 },
                 user: "alice".into(),
-                kind: CredentialType::GitHub,
+                provider: ProviderId::new("github").unwrap(),
                 user_subject: uid.clone(),
             };
             credential_store.link(&external).await.unwrap();
@@ -1710,6 +1710,486 @@ mod tests {
     }
 
     /// Runs `kubectl` with `stdin`; returns whether it succeeded and its stderr.
+    /// Creates `value` with `api` and expects the API server to refuse it with 422.
+    async fn refused(api: &Api<kube::api::DynamicObject>, value: serde_json::Value, case: &str) {
+        let object: kube::api::DynamicObject = serde_json::from_value(value).unwrap();
+        let error = api
+            .create(&PostParams::default(), &object)
+            .await
+            .unwrap_err();
+        assert_eq!(status_code(&error), Some(422), "{case}: {error}");
+    }
+
+    fn dynamic_api(
+        client: &Client,
+        namespace: &str,
+        resource: &kube::api::ApiResource,
+    ) -> Api<kube::api::DynamicObject> {
+        Api::namespaced_with(client.clone(), namespace, resource)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[ignore = "needs a Kubernetes cluster (KUBECONFIG)"]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one admission and access table per kind"
+    )]
+    async fn upstream_providers_admit_only_fitting_fields_and_are_read_only() {
+        use kube::api::{ApiResource, Patch, PatchParams};
+        use serde_json::json;
+        use zeabur_identity_api::credential::Credential;
+        use zeabur_identity_api::upstream_provider::{SECRET, UpstreamProvider};
+
+        let env = Env::new().await;
+        let providers = dynamic_api(
+            &env.admin,
+            &env.namespace,
+            &ApiResource::erase::<UpstreamProvider>(&()),
+        );
+        let provider = |name: &str, spec: serde_json::Value| {
+            json!({"apiVersion": "identity.zeabur.com/v1alpha1", "kind": "UpstreamProvider",
+                "metadata": {"name": name}, "spec": spec})
+        };
+        let github = json!({"type": "GitHub", "clientId": "Iv1.abc", "clientSecretKey": "github"});
+        let keycloak = json!({"type": "OpenID", "issuer": "https://sso.example/realms/dev",
+            "displayName": "Keycloak", "clientId": "identity", "clientSecretKey": "keycloak",
+            "scopes": ["profile"]});
+        for (name, spec) in [("github", &github), ("keycloak", &keycloak)] {
+            let object: kube::api::DynamicObject =
+                serde_json::from_value(provider(name, spec.clone())).unwrap();
+            providers
+                .create(&PostParams::default(), &object)
+                .await
+                .unwrap();
+        }
+        let with = |base: &serde_json::Value, key: &str, value: serde_json::Value| {
+            let mut spec = base.clone();
+            if value.is_null() {
+                spec.as_object_mut().unwrap().remove(key);
+            } else {
+                spec[key] = value;
+            }
+            spec
+        };
+        for (case, name, spec) in [
+            (
+                "OpenID without issuer",
+                "a",
+                with(&keycloak, "issuer", json!(null)),
+            ),
+            (
+                "OpenID without displayName",
+                "b",
+                with(&keycloak, "displayName", json!(null)),
+            ),
+            (
+                "GitHub with issuer",
+                "c",
+                with(&github, "issuer", json!("https://github.com")),
+            ),
+            (
+                "GitHub with displayName",
+                "d",
+                with(&github, "displayName", json!("GitHub")),
+            ),
+            (
+                "GitHub with scopes",
+                "e",
+                with(&github, "scopes", json!(["user"])),
+            ),
+            (
+                "http issuer",
+                "f",
+                with(&keycloak, "issuer", json!("http://sso.example")),
+            ),
+            (
+                "issuer with a query",
+                "g",
+                with(&keycloak, "issuer", json!("https://sso.example?x=1")),
+            ),
+            (
+                "issuer with a fragment",
+                "h",
+                with(&keycloak, "issuer", json!("https://sso.example#x")),
+            ),
+            (
+                "issuer with user information",
+                "i",
+                with(&keycloak, "issuer", json!("https://u@sso.example")),
+            ),
+            (
+                "scope with a space",
+                "j",
+                with(&keycloak, "scopes", json!(["a b"])),
+            ),
+            (
+                "secret key with a slash",
+                "k",
+                with(&keycloak, "clientSecretKey", json!("a/b")),
+            ),
+            (
+                "empty client ID",
+                "l",
+                with(&keycloak, "clientId", json!("")),
+            ),
+            ("unknown type", "m", with(&github, "type", json!("SAML"))),
+            ("name with a capital", "GitHub", github.clone()),
+            ("name with a dot", "git.hub", github.clone()),
+            ("name ending in a dash", "github-", github.clone()),
+        ] {
+            refused(&providers, provider(name, spec), case).await;
+        }
+
+        // Credentials: the provider goes with type Upstream only; the old types are gone.
+        let credentials = dynamic_api(
+            &env.admin,
+            &env.namespace,
+            &ApiResource::erase::<Credential>(&()),
+        );
+        let credential = |name: &str, spec: serde_json::Value| {
+            json!({"apiVersion": "identity.zeabur.com/v1alpha1", "kind": "Credential",
+                "metadata": {"name": name}, "spec": spec})
+        };
+        let external = json!({"issuer": "https://github.com", "subject": "1"});
+        for (case, spec) in [
+            (
+                "old type GitHub",
+                json!({"user": "alice", "type": "GitHub", "external": external}),
+            ),
+            (
+                "Upstream without provider",
+                json!({"user": "alice", "type": "Upstream", "external": external}),
+            ),
+            (
+                "Upstream with a bad provider",
+                json!({"user": "alice", "type": "Upstream", "external": external, "provider": "Git"}),
+            ),
+            (
+                "Upstream without external",
+                json!({"user": "alice", "type": "Upstream", "provider": "github"}),
+            ),
+        ] {
+            refused(&credentials, credential("c-refused", spec), case).await;
+        }
+        let linked: kube::api::DynamicObject = serde_json::from_value(credential(
+            "c-linked",
+            json!({"user": "alice", "type": "Upstream", "external": external, "provider": "github"}),
+        ))
+        .unwrap();
+        credentials
+            .create(&PostParams::default(), &linked)
+            .await
+            .unwrap();
+
+        // Zeabur Identity reads providers and their one Secret, and writes neither. It may patch
+        // a credential, but admission keeps the spec as it is.
+        let as_identity: Api<UpstreamProvider> = env.zeabur_identity_api();
+        assert!(as_identity.get("keycloak").await.is_ok());
+        assert!(as_identity.list(&ListParams::default()).await.is_ok());
+        let new: UpstreamProvider =
+            serde_json::from_value(provider("other", github.clone())).unwrap();
+        assert_eq!(
+            status_code(
+                &as_identity
+                    .create(&PostParams::default(), &new)
+                    .await
+                    .unwrap_err()
+            ),
+            Some(403)
+        );
+        assert_eq!(
+            status_code(
+                &as_identity
+                    .delete("github", &DeleteParams::default())
+                    .await
+                    .unwrap_err()
+            ),
+            Some(403)
+        );
+        let secrets: Api<Secret> = env.zeabur_identity_api();
+        assert_eq!(
+            status_code(&secrets.get(SECRET).await.unwrap_err()),
+            Some(404)
+        );
+        let identity_credentials = dynamic_api(
+            &env.identity,
+            &env.namespace,
+            &ApiResource::erase::<Credential>(&()),
+        );
+        for (case, spec) in [
+            ("another provider", json!({"spec": {"provider": "google"}})),
+            ("another user", json!({"spec": {"user": "mallory"}})),
+            (
+                "back to an old type",
+                json!({"spec": {"type": "GitHub", "provider": null}}),
+            ),
+        ] {
+            let error = identity_credentials
+                .patch("c-linked", &PatchParams::default(), &Patch::Merge(&spec))
+                .await
+                .unwrap_err();
+            assert_eq!(status_code(&error), Some(422), "{case}: {error}");
+        }
+        env.cleanup().await;
+    }
+
+    /// With the chart's RBAC, the watch publishes each added, changed and deleted provider, and
+    /// the client secret is read fresh at each call.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[ignore = "needs a Kubernetes cluster (KUBECONFIG)"]
+    #[expect(clippy::too_many_lines, reason = "one watch and one rotation scenario")]
+    async fn provider_changes_and_secret_rotation_are_seen_without_a_restart() {
+        use k8s_openapi::ByteString;
+        use kube::api::{Patch, PatchParams};
+        use serde_json::json;
+        use zeabur_identity_api::upstream_provider::{SECRET, UpstreamProvider};
+        use zeabur_identity_k8s::upstream;
+
+        let env = Env::new().await;
+        let (tx, mut rx) = watch::channel(None::<Vec<(String, Option<String>)>>);
+        let watcher = tokio::spawn(upstream::watch(env.zeabur_identity_api(), move |objects| {
+            let seen = objects
+                .iter()
+                .map(|o| (o.name_any(), o.spec.issuer.clone()))
+                .collect();
+            tx.send_replace(Some(seen));
+        }));
+        let mut wait_for = async |expected: Vec<(&str, Option<&str>)>| {
+            let expected: Vec<(String, Option<String>)> = expected
+                .into_iter()
+                .map(|(n, i)| (n.to_owned(), i.map(str::to_owned)))
+                .collect();
+            tokio::time::timeout(
+                Duration::from_secs(30),
+                rx.wait_for(|seen| seen.as_ref() == Some(&expected)),
+            )
+            .await
+            .unwrap_or_else(|_| panic!("watch never published {expected:?}"))
+            .unwrap();
+        };
+        wait_for(vec![]).await;
+
+        let providers: Api<UpstreamProvider> = env.admin_api();
+        let keycloak = |issuer: &str| -> UpstreamProvider {
+            serde_json::from_value(json!({"apiVersion": "identity.zeabur.com/v1alpha1",
+                "kind": "UpstreamProvider", "metadata": {"name": "keycloak"},
+                "spec": {"type": "OpenID", "issuer": issuer, "displayName": "Keycloak",
+                    "clientId": "identity", "clientSecretKey": "keycloak"}}))
+            .unwrap()
+        };
+        providers
+            .create(
+                &PostParams::default(),
+                &keycloak("https://sso.example/realms/a"),
+            )
+            .await
+            .unwrap();
+        wait_for(vec![("keycloak", Some("https://sso.example/realms/a"))]).await;
+        providers
+            .patch(
+                "keycloak",
+                &PatchParams::default(),
+                &Patch::Merge(json!({"spec": {"issuer": "https://sso.example/realms/b"}})),
+            )
+            .await
+            .unwrap();
+        wait_for(vec![("keycloak", Some("https://sso.example/realms/b"))]).await;
+        providers
+            .delete("keycloak", &DeleteParams::default())
+            .await
+            .unwrap();
+        wait_for(vec![]).await;
+        watcher.abort();
+
+        let identity_secrets: Api<Secret> = env.zeabur_identity_api();
+        let missing = upstream::client_secret(&identity_secrets, "keycloak")
+            .await
+            .unwrap_err();
+        assert!(missing.contains("does not exist"), "{missing}");
+        let admin_secrets: Api<Secret> = env.admin_api();
+        let secret = |value: &str| Secret {
+            metadata: ObjectMeta {
+                name: Some(SECRET.to_owned()),
+                ..ObjectMeta::default()
+            },
+            data: Some(BTreeMap::from([(
+                "keycloak".to_owned(),
+                ByteString(value.as_bytes().to_vec()),
+            )])),
+            ..Secret::default()
+        };
+        admin_secrets
+            .create(&PostParams::default(), &secret("first\n"))
+            .await
+            .unwrap();
+        assert_eq!(
+            upstream::client_secret(&identity_secrets, "keycloak")
+                .await
+                .unwrap(),
+            "first"
+        );
+        let missing = upstream::client_secret(&identity_secrets, "github")
+            .await
+            .unwrap_err();
+        assert!(missing.contains("has no key github"), "{missing}");
+        admin_secrets
+            .replace(SECRET, &PostParams::default(), &secret("second"))
+            .await
+            .unwrap();
+        assert_eq!(
+            upstream::client_secret(&identity_secrets, "keycloak")
+                .await
+                .unwrap(),
+            "second"
+        );
+        env.cleanup().await;
+    }
+
+    /// The migration on a copy of the `Credential` CRD under another group whose `type` still
+    /// allows `GitHub` and `Google`, as the CRD of v0.1 did.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[ignore = "needs a Kubernetes cluster (KUBECONFIG)"]
+    #[expect(clippy::too_many_lines, reason = "one migration scenario")]
+    async fn linked_accounts_migrate_with_their_names_owners_and_labels() {
+        use kube::api::{ApiResource, DynamicObject, Patch, PatchParams};
+        use serde_json::json;
+        use zeabur_identity_api::credential::Credential;
+        use zeabur_identity_k8s::migrate;
+
+        const GROUP: &str = "migration-test.identity.zeabur.com";
+        let env = Env::new().await;
+        let mut crd = <Credential as kube::CustomResourceExt>::crd();
+        crd.metadata.name = Some(format!("credentials.{GROUP}"));
+        crd.spec.group = GROUP.to_owned();
+        let mut value = serde_json::to_value(&crd).unwrap();
+        let types = &mut value["spec"]["versions"][0]["schema"]["openAPIV3Schema"]["properties"]["spec"]
+            ["properties"]["type"]["enum"];
+        types
+            .as_array_mut()
+            .unwrap()
+            .extend([json!("GitHub"), json!("Google")]);
+        let crd: CustomResourceDefinition = serde_json::from_value(value).unwrap();
+        let crds: Api<CustomResourceDefinition> = Api::all(env.admin.clone());
+        let name = crd.name_any();
+        match crds.create(&PostParams::default(), &crd).await {
+            Ok(_) => {}
+            Err(error) if status_code(&error) == Some(409) => {
+                let mut desired = crd.clone();
+                desired.metadata.resource_version =
+                    crds.get(&name).await.unwrap().metadata.resource_version;
+                crds.replace(&name, &PostParams::default(), &desired)
+                    .await
+                    .unwrap();
+            }
+            Err(error) => panic!("{error}"),
+        }
+        let mut resource = ApiResource::erase::<Credential>(&());
+        resource.group = GROUP.to_owned();
+        resource.api_version = format!("{GROUP}/{}", resource.version);
+        let api = dynamic_api(&env.admin, &env.namespace, &resource);
+
+        let users: Api<User> = env.admin_api();
+        let alice = users
+            .create(&PostParams::default(), &user_object("alice"))
+            .await
+            .unwrap();
+        let owner = json!([{"apiVersion": "identity.zeabur.com/v1alpha1", "kind": "User",
+            "name": "alice", "uid": alice.uid().unwrap()}]);
+        let object = |name: &str, spec: serde_json::Value| -> DynamicObject {
+            serde_json::from_value(
+                json!({"apiVersion": resource.api_version, "kind": "Credential",
+                "metadata": {"name": name, "ownerReferences": owner,
+                    "labels": {"identity.zeabur.com/user": "alice", "example.com/team": "a"}},
+                "spec": spec}),
+            )
+            .unwrap()
+        };
+        let github = json!({"issuer": "https://github.com", "subject": "583231"});
+        let google = json!({"issuer": "https://accounts.google.com", "subject": "1047"});
+        let passkey = json!({"user": "alice", "type": "Passkey", "passkey": {
+            "credentialId": "AAAA", "record": "{}", "backupEligible": false}});
+        // The CRD may still be starting to serve the new group.
+        let mut before = Vec::new();
+        for (name, spec) in [
+            (
+                "c-github",
+                json!({"user": "alice", "type": "GitHub", "external": github}),
+            ),
+            (
+                "c-google",
+                json!({"user": "alice", "type": "Google", "external": google}),
+            ),
+            ("p-passkey", passkey.clone()),
+        ] {
+            let mut created = None;
+            for _ in 0..50 {
+                match api
+                    .create(&PostParams::default(), &object(name, spec.clone()))
+                    .await
+                {
+                    Ok(done) => {
+                        created = Some(done);
+                        break;
+                    }
+                    Err(error) if status_code(&error) == Some(404) => {
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                    }
+                    Err(error) => panic!("{name}: {error}"),
+                }
+            }
+            before.push(created.unwrap());
+        }
+
+        // The rule allows the migration step only: not another provider or another account.
+        for (case, patch) in [
+            (
+                "wrong provider",
+                json!({"spec": {"type": "Upstream", "provider": "google"}}),
+            ),
+            (
+                "changed account",
+                json!({"spec": {"type": "Upstream", "provider": "github",
+                "external": {"issuer": "https://github.com", "subject": "1"}}}),
+            ),
+            (
+                "changed user",
+                json!({"spec": {"type": "Upstream", "provider": "github", "user": "bob"}}),
+            ),
+        ] {
+            let error = api
+                .patch("c-github", &PatchParams::default(), &Patch::Merge(&patch))
+                .await
+                .unwrap_err();
+            assert_eq!(status_code(&error), Some(422), "{case}: {error}");
+        }
+
+        let migrated = migrate::linked_accounts_at(env.admin.clone(), &env.namespace, &resource)
+            .await
+            .unwrap();
+        assert_eq!(migrated, 2);
+        for (old, provider) in before.iter().zip([Some("github"), Some("google"), None]) {
+            let new = api.get(&old.name_any()).await.unwrap();
+            assert_eq!(new.uid(), old.uid());
+            assert_eq!(new.metadata.owner_references, old.metadata.owner_references);
+            assert_eq!(new.metadata.labels, old.metadata.labels);
+            assert_eq!(new.data["spec"]["user"], old.data["spec"]["user"]);
+            match provider {
+                Some(provider) => {
+                    assert_eq!(new.data["spec"]["type"], "Upstream");
+                    assert_eq!(new.data["spec"]["provider"], provider);
+                    assert_eq!(new.data["spec"]["external"], old.data["spec"]["external"]);
+                }
+                None => assert_eq!(new.data["spec"], old.data["spec"]),
+            }
+        }
+        // Done objects are left alone.
+        let again = migrate::linked_accounts_at(env.admin.clone(), &env.namespace, &resource)
+            .await
+            .unwrap();
+        assert_eq!(again, 0);
+        env.cleanup().await;
+    }
+
     fn kubectl(args: &[&str], stdin: &str) -> (bool, String) {
         use std::io::Write as _;
         use std::process::{Command, Stdio};

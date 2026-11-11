@@ -37,6 +37,9 @@ pub enum ConfigError {
     /// The key rotation timings are inconsistent.
     #[error("key rotation: {0}")]
     BadRotationPolicy(&'static str),
+    /// A removed option was given. The message names it and what replaces it.
+    #[error("{0}")]
+    Removed(&'static str),
 }
 
 /// A rule for issuer-style base URLs.

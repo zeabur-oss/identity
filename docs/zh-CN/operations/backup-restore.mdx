@@ -38,12 +38,12 @@ Zeabur Identity 用 `User` 对象的 UID 识别每个人。每个令牌的 `sub`
 | 备份项目 | 用途 |
 |---|---|
 | 集群的数据存储备份，以及发行版打开备份所需的服务器令牌、加密密钥与集群证书 | 这是保留 UID 与通行密钥的唯一方式。无法解密的快照无法用于恢复。 |
-| `users`、`credentials`、`oauthclients`（`*.identity.zeabur.com`） | 保存用户与组、通行密钥记录、已关联的 GitHub 或 Google 账号，以及已注册的客户端。 |
+| `users`、`credentials`、`oauthclients`、`upstreamproviders`（`*.identity.zeabur.com`） | 保存用户与组、通行密钥记录、已关联的 GitHub 或 Google 账号、已注册的客户端，以及登录提供方。 |
 | Secret `zeabur-identity-signing-keys` | 保存所有签名私钥，包括即将启用与已退役的密钥。其他数据无法重建这些密钥。 |
 | Secret `zeabur-identity-internal-ca` | 保存根 CA 与私钥。cert-manager 用它签发证书，供 kube-apiserver 连接内部地址时验证。这份 Secret 要与每台控制平面机器上的认证文件一起保存。cert-manager 会用它重新签发 `zeabur-identity-internal-tls`。 |
 | Deployment、Service、ServiceAccount、Role 与 RoleBinding `zeabur-identity`，以及 ClusterRoleBinding `zeabur-identity-cluster-admins` | 保存 Zeabur Identity 的运行方式与管理员权限。也要备份你为其他应用创建的 RoleBinding。 |
 | ConfigMap `zeabur-identity-settings`，如果你创建过 | 保存 `teams` 与 `admin-aal3` 配置。缺少它时，所有配置都会回到默认值。 |
-| 挂载到 Zeabur Identity 的 Secret，例如 `zeabur-identity-config` | 保存 GitHub 与 Google 的客户端密钥。也要保留上游应用的注册信息。 |
+| Secret `zeabur-identity-upstream` | 保存登录提供方的客户端密钥。也要保留在这些提供方注册的应用信息。 |
 | 公网 TLS 与路由 | 入门安装使用 Secret `zeabur-identity-tls` 与 Ingress `zeabur-identity`。登录速率限制还使用 Ingress `zeabur-identity-rate-limited`、Middleware `zeabur-identity-rate-limit`，以及 `kube-system` 中的 HelmChartConfig `traefik`。 |
 | 每台控制平面机器上的 kube-apiserver 配置 | k3s 使用 `/etc/rancher/k3s/zeabur-identity/authn.yaml`，以及加载这份文件的配置。 |
 | 机密客户端应用各自密钥存储中的客户端密钥 | Zeabur Identity 只保存哈希值。 |

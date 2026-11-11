@@ -77,7 +77,7 @@ use zeabur_identity_ui::i18n::Lang;
 use zeabur_identity_ui::pages::{ErrorReason, accept_language, error_page, notice_page};
 
 use self::http::HttpClient;
-use self::provider::{Authorization, Exchange, Kind, Provider, UpstreamError};
+use self::provider::{Authorization, Exchange, Provider, UpstreamError};
 use crate::account::{Account, Audit, current, log_outcome, record, require_fresh, signed_in};
 use crate::device::Requester;
 use crate::problem::Problem;
@@ -107,8 +107,6 @@ const PROVIDER_UNAVAILABLE: Problem = Problem::new(
 pub struct Upstream<D, G, C, K, S, H> {
     /// Passkey sign-in (its authorization server, credentials and enrolment tokens).
     pub sign_in: Arc<SignIn<D, G, C, K, S>>,
-    /// The enabled providers.
-    pub providers: Vec<Provider>,
     /// Outgoing HTTPS.
     pub http: H,
     /// `state` values already returned by a provider.
@@ -118,15 +116,15 @@ pub struct Upstream<D, G, C, K, S, H> {
 impl<D, G, C, K, S, H> std::fmt::Debug for Upstream<D, G, C, K, S, H> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Upstream")
-            .field("providers", &self.providers)
+            .field("providers", &self.sign_in.providers)
             .finish_non_exhaustive()
     }
 }
 
 impl<D, G, C, K, S, H> Upstream<D, G, C, K, S, H> {
-    /// The enabled provider with this [`Provider::id`].
-    fn provider(&self, id: &str) -> Option<&Provider> {
-        self.providers.iter().find(|p| p.id().as_str() == id)
+    /// The provider with this [`Provider::id`] now.
+    fn provider(&self, id: &str) -> Option<Arc<Provider>> {
+        self.sign_in.providers.get(id)
     }
 }
 
@@ -228,7 +226,9 @@ where
     S: SetupStore,
     H: HttpClient,
 {
-    let normalized_provider = Kind::from_id(&provider).map(Kind::id);
+    // Only a configured provider's ID is logged, never another path segment.
+    let configured = service.provider(&provider);
+    let normalized_provider = configured.as_ref().map(|p| p.id().as_str());
     let result: Result<Response, Problem> = async {
         let sign_in = &service.sign_in;
         check_request(&headers, sign_in.oauth.issuer.as_str())?;
@@ -247,7 +247,7 @@ where
                 .and_then(|sealed| open_flow(&sign_in.oauth, sealed))
                 .ok_or(NO_REQUEST)?;
         }
-        begin(&service, provider, request.token, None, now).await
+        begin(&service, &provider, request.token, None, now).await
     }
     .await;
     match &result {
@@ -361,7 +361,7 @@ where
             user: account.user.name.clone(),
             subject: account.user.subject.clone(),
         };
-        begin(&service, provider, None, Some(bound), now).await
+        begin(&service, &provider, None, Some(bound), now).await
     }
     .await;
     log_outcome(
@@ -469,8 +469,9 @@ fn issuer_matches<'a>(mut iss: impl Iterator<Item = &'a str>, expected: &Issuer)
     }
 }
 
-/// A provider answer that did not verify. An ID token outside its validity window usually means
-/// this server's clock is off. HTTP errors are not shown: they can carry the provider's text.
+/// A provider answer that did not verify, or a client secret that could not be read. An ID token
+/// outside its validity window usually means this server's clock is off. HTTP errors are not shown:
+/// they can carry the provider's text.
 fn verification_failure(error: &UpstreamError) -> Failure {
     let reason = "provider_verification_failed";
     match error {
@@ -481,6 +482,11 @@ fn verification_failure(error: &UpstreamError) -> Failure {
             (reason, ErrorReason::ProviderFailed, Some(error.to_string()))
         }
         UpstreamError::Http(_) => (reason, ErrorReason::ProviderFailed, None),
+        // The page does not name the Secret or its keys; the server log does.
+        UpstreamError::Secret(note) => {
+            tracing::error!(reason = "provider_unavailable", %note, "upstream client secret unavailable");
+            ("provider_unavailable", ErrorReason::ProviderFailed, None)
+        }
     }
 }
 
@@ -508,7 +514,9 @@ where
     let sign_in = &service.sign_in;
     let oauth = &sign_in.oauth;
     let now = oauth.now();
-    let normalized_provider = Kind::from_id(&provider).map(Kind::id);
+    // Only a configured provider's ID is logged, never another path segment.
+    let configured = service.provider(&provider);
+    let normalized_provider = configured.as_ref().map(|p| p.id().as_str());
     let mut event = "auth.upstream_callback";
     let mut identity = None;
     let mut link_user = None;
@@ -605,7 +613,7 @@ where
             let external = NewExternal {
                 id,
                 user: account.user.name.clone(),
-                kind: provider.kind().credential_type(),
+                provider: provider.id().clone(),
                 user_subject: account.user.subject.clone(),
             };
             return finish_account_link(sign_in, &account, external, linked.is_some(), &requester, now)
@@ -685,7 +693,7 @@ where
         let external = NewExternal {
             id,
             user: stored.user,
-            kind: provider.kind().credential_type(),
+            provider: provider.id().clone(),
             user_subject,
         };
         match sign_in.credentials.link(&external).await {

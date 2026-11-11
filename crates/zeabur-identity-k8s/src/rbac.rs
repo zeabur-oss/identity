@@ -7,16 +7,18 @@
 //! another namespace.
 //!
 //! - **Secrets by name only.** `get`/`update` on the signing keys, `get`/`delete` on the setup
-//!   token (redeeming is deleting), `get` on the internal certificate. RBAC cannot limit `create`
-//!   or `deletecollection` to a name, and `list` or `watch` on Secrets reveals their contents
-//!   ([RBAC], [RBAC good practices]), so Zeabur Identity has none of these on Secrets: the
-//!   installer creates the empty key Secret and the cluster admin's `zeabur-identityctl` writes the
-//!   other two.
-//! - **Configuration is read-only.** Users, credentials and clients are written by admins or
-//!   GitOps; Zeabur Identity reads them and creates or deletes credentials when a passkey is
-//!   enrolled, removed or an account is linked. On credentials it may write only `status` (the
-//!   label a user gives a passkey, and when it was last used), never the key material. It has no
-//!   write access to users.
+//!   token (redeeming is deleting), `get` on the internal certificate and on the upstream client
+//!   secrets ([`upstream_provider::SECRET`]). RBAC cannot limit `create` or `deletecollection` to a
+//!   name, and `list` or `watch` on Secrets reveals their contents ([RBAC], [RBAC good practices]),
+//!   so Zeabur Identity has none of these on Secrets: the installer creates the empty key Secret
+//!   and the cluster admin's `zeabur-identityctl` writes the other two.
+//! - **Configuration is read-only.** Users, credentials, clients and upstream providers are written
+//!   by admins or GitOps; Zeabur Identity reads them and creates or deletes credentials when a
+//!   passkey is enrolled, removed or an account is linked. On credentials it writes `status` (the
+//!   label a user gives a passkey, and when it was last used). It may also `patch` a credential,
+//!   but the CRD keeps the spec unchanged except for one step: a linked account from before
+//!   `UpstreamProvider` becomes an `Upstream` credential ([`crate::migrate`]). It has no write
+//!   access to users or upstream providers.
 //! - **Account settings.** It reads one `ConfigMap`, [`SETTINGS_CONFIG_MAP`], by name. Admins write
 //!   it.
 //! - **Account events.** It creates core `Event`s about users who change their own passkeys or
@@ -45,7 +47,7 @@ use k8s_openapi::api::rbac::v1::{
 };
 use kube::api::ObjectMeta;
 use serde_json::Value;
-use zeabur_identity_api::{ADMIN_GROUP, GROUP, IDENTITY_PREFIX};
+use zeabur_identity_api::{ADMIN_GROUP, GROUP, IDENTITY_PREFIX, upstream_provider};
 use zeabur_identity_core::account::SETTINGS_CONFIG_MAP;
 
 use super::keys::SECRET_TYPE;
@@ -84,15 +86,23 @@ pub fn rules() -> Vec<PolicyRule> {
         rule(&[""], &["secrets"], &[SETUP_SECRET], &["get", "delete"]),
         // Internal listener certificate: read one Secret; the cluster admin writes it.
         rule(&[""], &["secrets"], &[internal_tls::SECRET], &["get"]),
+        // Upstream client secrets: read one Secret at each use; the cluster admin writes it.
+        rule(&[""], &["secrets"], &[upstream_provider::SECRET], &["get"]),
         // Configuration and identities, written by admins or GitOps.
         rule(
             &[GROUP],
-            &["users", "credentials", "oauthclients"],
+            &["users", "credentials", "oauthclients", "upstreamproviders"],
             &[],
             &["get", "list", "watch"],
         ),
-        // Runtime state Zeabur Identity owns.
-        rule(&[GROUP], &["credentials"], &[], &["create", "delete"]),
+        // Runtime state Zeabur Identity owns. `patch` only migrates linked accounts: the CRD
+        // rejects every other spec change.
+        rule(
+            &[GROUP],
+            &["credentials"],
+            &[],
+            &["create", "delete", "patch"],
+        ),
         rule(&[GROUP], &["credentials/status"], &[], &["update", "patch"]),
         rule(
             &[GROUP],
@@ -246,7 +256,8 @@ mod tests {
                 assert!(
                     names == [KEY_SECRET]
                         || names == [SETUP_SECRET]
-                        || names == [internal_tls::SECRET],
+                        || names == [internal_tls::SECRET]
+                        || names == [upstream_provider::SECRET],
                     "{names:?}"
                 );
                 assert!(

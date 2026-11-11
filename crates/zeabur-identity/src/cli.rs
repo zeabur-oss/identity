@@ -5,12 +5,10 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use clap::{Parser, ValueEnum};
-use zeabur_identity_api::upstream::Issuer;
 use zeabur_identity_core::config::{BaseUrl, ConfigError, parse_duration};
 use zeabur_identity_keys::rotation::RotationPolicy;
-use zeabur_identity_signin::upstream::provider::{GOOGLE_ISSUER, Kind};
 
-use crate::config::{ServeConfig, Store, UpstreamConfig};
+use crate::config::{ServeConfig, Store};
 
 /// `Cache-Control: max-age` for discovery documents and the JWK set.
 pub const METADATA_MAX_AGE: Duration = Duration::from_mins(5);
@@ -67,49 +65,21 @@ pub struct ServeArgs {
     #[arg(long, env = "ZEABUR_IDENTITY_INVITATIONS")]
     pub invitations: bool,
 
-    /// Enable "Continue with GitHub": the OAuth app's client ID. Register
-    /// `<issuer>/upstream/github/callback` as its callback URL.
-    #[arg(
-        long,
-        env = "ZEABUR_IDENTITY_GITHUB_CLIENT_ID",
-        requires = "github_client_secret_file"
-    )]
+    /// Removed: an `UpstreamProvider` object configures GitHub.
+    #[arg(long, env = "ZEABUR_IDENTITY_GITHUB_CLIENT_ID", hide = true)]
     pub github_client_id: Option<String>,
 
-    /// File holding the GitHub OAuth app's client secret.
-    #[arg(
-        long,
-        env = "ZEABUR_IDENTITY_GITHUB_CLIENT_SECRET_FILE",
-        requires = "github_client_id"
-    )]
+    /// Removed: the Secret `zeabur-identity-upstream` holds client secrets.
+    #[arg(long, env = "ZEABUR_IDENTITY_GITHUB_CLIENT_SECRET_FILE", hide = true)]
     pub github_client_secret_file: Option<PathBuf>,
 
-    /// Enable "Continue with Google": the OAuth client ID. Register
-    /// `<issuer>/upstream/google/callback` as an authorized redirect URI.
-    #[arg(
-        long,
-        env = "ZEABUR_IDENTITY_GOOGLE_CLIENT_ID",
-        requires = "google_client_secret_file"
-    )]
+    /// Removed: an `UpstreamProvider` object configures Google.
+    #[arg(long, env = "ZEABUR_IDENTITY_GOOGLE_CLIENT_ID", hide = true)]
     pub google_client_id: Option<String>,
 
-    /// File holding the Google OAuth client secret.
-    #[arg(
-        long,
-        env = "ZEABUR_IDENTITY_GOOGLE_CLIENT_SECRET_FILE",
-        requires = "google_client_id"
-    )]
+    /// Removed: the Secret `zeabur-identity-upstream` holds client secrets.
+    #[arg(long, env = "ZEABUR_IDENTITY_GOOGLE_CLIENT_SECRET_FILE", hide = true)]
     pub google_client_secret_file: Option<PathBuf>,
-
-    /// The OpenID Connect issuer for "Continue with Google". Zeabur Identity reads its endpoints
-    /// from `<issuer>/.well-known/openid-configuration`.
-    #[arg(
-        long,
-        env = "ZEABUR_IDENTITY_GOOGLE_ISSUER",
-        default_value = GOOGLE_ISSUER,
-        value_parser = parse_upstream_issuer
-    )]
-    pub google_issuer: Issuer,
 
     /// Lifetime of an admin account's access and ID tokens. They carry `cluster-admin`.
     #[arg(long, env = "ZEABUR_IDENTITY_ADMIN_TOKEN_LIFETIME", default_value = "5m", value_parser = parse_duration)]
@@ -140,10 +110,6 @@ fn parse_issuer(input: &str) -> Result<BaseUrl, ConfigError> {
     BaseUrl::parse("issuer", input)
 }
 
-fn parse_upstream_issuer(input: &str) -> Result<Issuer, String> {
-    Issuer::new(input).map_err(|error| error.to_string())
-}
-
 fn parse_internal_url(input: &str) -> Result<BaseUrl, ConfigError> {
     BaseUrl::parse("internal URL", input)
 }
@@ -155,34 +121,13 @@ impl ServeArgs {
     ///
     /// Returns [`ConfigError`] if the values are inconsistent.
     pub fn config(&self) -> Result<ServeConfig, ConfigError> {
+        self.reject_removed()?;
         let config = ServeConfig {
             issuer: self.issuer.clone(),
             listen: self.listen,
             rotation: RotationPolicy::DEFAULT,
             metadata_max_age: METADATA_MAX_AGE,
             invitations: self.invitations,
-            upstream: [
-                (
-                    Kind::GitHub,
-                    &self.github_client_id,
-                    &self.github_client_secret_file,
-                ),
-                (
-                    Kind::Google,
-                    &self.google_client_id,
-                    &self.google_client_secret_file,
-                ),
-            ]
-            .into_iter()
-            .filter_map(|(kind, id, secret)| {
-                Some(UpstreamConfig {
-                    kind,
-                    client_id: id.clone()?,
-                    client_secret_file: secret.clone()?,
-                })
-            })
-            .collect(),
-            google_issuer: self.google_issuer.clone(),
             internal_listen: self.internal_listen,
             internal_url: self.internal_url.clone(),
             store: Store {
@@ -200,6 +145,39 @@ impl ServeArgs {
         };
         config.validate()?;
         Ok(config)
+    }
+
+    /// Refuses the upstream flags that `UpstreamProvider` objects replaced, naming the flag and
+    /// the replacement, so that an upgrade does not start without the sign-in it had.
+    fn reject_removed(&self) -> Result<(), ConfigError> {
+        let removed = [
+            (
+                self.github_client_id.is_some(),
+                "--github-client-id (ZEABUR_IDENTITY_GITHUB_CLIENT_ID) was removed: create an \
+                 UpstreamProvider named github of type GitHub instead",
+            ),
+            (
+                self.github_client_secret_file.is_some(),
+                "--github-client-secret-file (ZEABUR_IDENTITY_GITHUB_CLIENT_SECRET_FILE) was \
+                 removed: put the client secret in the Secret zeabur-identity-upstream instead",
+            ),
+            (
+                self.google_client_id.is_some(),
+                "--google-client-id (ZEABUR_IDENTITY_GOOGLE_CLIENT_ID) was removed: create an \
+                 UpstreamProvider named google of type OpenID instead",
+            ),
+            (
+                self.google_client_secret_file.is_some(),
+                "--google-client-secret-file (ZEABUR_IDENTITY_GOOGLE_CLIENT_SECRET_FILE) was \
+                 removed: put the client secret in the Secret zeabur-identity-upstream instead",
+            ),
+        ];
+        for (given, message) in removed {
+            if given {
+                return Err(ConfigError::Removed(message));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -219,17 +197,46 @@ mod tests {
     }
 
     #[test]
-    fn rejects_bad_issuers_and_inconsistent_timings() {
-        assert!(parse(&["--issuer", "http://login.example.com"]).is_err());
+    fn a_removed_upstream_flag_names_itself_and_its_replacement() {
+        for (flag, replacement) in [
+            ("--github-client-id", "UpstreamProvider named github"),
+            (
+                "--github-client-secret-file",
+                "Secret zeabur-identity-upstream",
+            ),
+            ("--google-client-id", "UpstreamProvider named google"),
+            (
+                "--google-client-secret-file",
+                "Secret zeabur-identity-upstream",
+            ),
+        ] {
+            let args = parse(&["--issuer", "https://login.example.com", flag, "x"]).unwrap();
+            let error = args.config().unwrap_err().to_string();
+            assert!(error.starts_with(flag), "{error}");
+            assert!(error.contains(replacement), "{error}");
+        }
+        // Never released, so simply unknown.
         assert!(
             parse(&[
                 "--issuer",
                 "https://login.example.com",
                 "--google-issuer",
-                "http://accounts.example.com",
+                "https://accounts.google.com",
             ])
             .is_err()
         );
+    }
+
+    #[test]
+    fn removed_flags_are_not_in_the_help() {
+        let help = ServeArgs::command().render_long_help().to_string();
+        assert!(!help.contains("client-id"), "{help}");
+        assert!(!help.contains("client-secret"), "{help}");
+    }
+
+    #[test]
+    fn rejects_bad_issuers_and_inconsistent_timings() {
+        assert!(parse(&["--issuer", "http://login.example.com"]).is_err());
         let args = parse(&[
             "--issuer",
             "https://login.example.com",

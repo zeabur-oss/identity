@@ -10,9 +10,11 @@ pub mod internal_tls;
 pub mod invitations;
 pub mod keys;
 pub mod kube_config;
+pub mod migrate;
 pub mod objects;
 pub mod rbac;
 pub mod setup;
+pub mod upstream;
 pub mod users;
 pub mod watch;
 

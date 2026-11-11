@@ -15,8 +15,7 @@ mod tests {
     use kube::api::Api;
     use serde_json::{Value, json};
     use tokio::sync::{Barrier, Mutex};
-    use zeabur_identity_api::credential::CredentialType;
-    use zeabur_identity_api::upstream::{ExternalId, Issuer, Subject};
+    use zeabur_identity_api::upstream::{ExternalId, Issuer, ProviderId, Subject};
     use zeabur_identity_core::clock::UnixTime;
     use zeabur_identity_k8s::credentials::KubeCredentialStore;
     use zeabur_identity_k8s::grants::KubeGrantStore;
@@ -240,7 +239,7 @@ mod tests {
         json!({"apiVersion":"identity.zeabur.com/v1alpha1","kind":"Credential",
             "metadata":{"name":name,"labels":{"identity.zeabur.com/user":"alice"},
                 "ownerReferences":owners},
-            "spec":{"user":"alice","type":"GitHub",
+            "spec":{"user":"alice","type":"Upstream","provider":"github",
                 "external":{"issuer":"https://github.com","subject":name}}})
     }
 
@@ -395,7 +394,7 @@ mod tests {
                 subject: Subject::new("new").unwrap(),
             },
             user: "alice".into(),
-            kind: CredentialType::GitHub,
+            provider: ProviderId::new("github").unwrap(),
             user_subject: "uid-old-alice".into(),
         };
         assert!(store.link(&stale).await.is_err());
