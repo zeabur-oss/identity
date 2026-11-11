@@ -2156,7 +2156,7 @@ mod tests {
         );
         let session = account_session(&h, "alice", 0).await;
         let page = account_page(&h, &session).await;
-        assert!(page.contains("accounts.google.com"), "{page}");
+        assert!(page.contains("accounts.google.com"));
 
         registry(&h).replace(vec![Arc::new(openid_provider(
             "workspace",
