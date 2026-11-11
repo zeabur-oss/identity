@@ -214,15 +214,17 @@ cargo doc --workspace --open
 | Project requirement | Add, rename, remove, and session revocation leave a `zeabur_identity::audit` log line and an `Event` on the `User` (actor, credential, AAGUID, client IP, user agent) | MUST | `account.rs` `log_outcome`, `record`; `zeabur-identity-k8s/src/credentials.rs` `record` | `adding_and_removing_need_a_recent_verified_passkey`, `rename_needs_the_csrf_token_and_same_origin`; `zeabur-identity-k8s/tests/account.rs: only_the_users_own_passkeys_are_listed_or_changed` | Met |
 | Project requirement | A passkey's label is the one the user typed; without one, the account page names it by its creation date | — | `lib.rs` `new_passkey`; `zeabur-identity-ui/templates/account.html` | `a_passkey_without_a_label_shows_its_creation_date` | Met |
 
-## 上游登录（GitHub、Google）
+## 上游登录（GitHub、OpenID 提供方）
 
 测试位于 `zeabur-identity-signin/tests/upstream.rs`。
 
 | Source | Requirement | Code (`zeabur-identity-signin/src/`) | Test | Status |
 |---|---|---|---|---|
 | RFC 6749 §10.12; RFC 9700 §2.1 | `state` bound to the browser, compared in constant time, used once | `upstream.rs` | `unlinked_disabled_and_replayed_sign_ins_fail` | Met |
+| RFC 9207 Authorization server issuer identification | RFC | Met |
 | RFC 7636 | PKCE toward the provider | `upstream/provider.rs` | `a_linked_github_account_signs_in_and_gets_a_code` (fake provider checks the verifier) | Met |
-| OIDC Core §3.1.3.7 | ID token: signature from the provider's JWK set, `iss`, `aud` exactly the client ID (no other audience trusted), `azp` if present equal to it, `exp`, `iat`, `nonce` | `upstream/provider.rs` | `google_id_tokens_are_validated` | Met |
+| OIDC Discovery §4, §4.3, §3 | An OpenID provider's endpoints come from `<issuer>/.well-known/openid-configuration`. The document's `issuer` is identical to the configured issuer and its endpoints are https, or the sign-in fails with no fixed endpoint to fall back to | `upstream/provider.rs` `metadata` | `the_openid_provider_is_reached_at_the_endpoints_its_discovery_document_names`, `an_unusable_discovery_document_ends_the_sign_in_with_no_other_endpoint_tried` | Met |
+| OIDC Core §3.1.3.7 | ID token: signature from the JWK set that discovery names, `iss` exactly the issuer (Google also `accounts.google.com`, the second form its documentation lists), `aud` exactly the client ID (no other audience trusted), `azp` if present equal to it, `exp`, `iat`, `nonce` | `upstream/provider.rs` | `google_id_tokens_are_validated`, `another_openid_issuer_signs_in_through_the_same_checks` | Met |
 | Project requirement | Only linked accounts sign in; linking only through an enrollment link, once, or from a signed-in account page | `upstream.rs` | `an_invitation_links_an_account_once`, `unlinked_disabled_and_replayed_sign_ins_fail`, `a_signed_in_user_links_an_account_on_the_account_page` | Met |
 | RFC 6749 §10.12 | A link from the account page starts only with a fresh verified passkey and the CSRF token; its sealed state names the session, user, and UID, and the callback links nothing unless that session is still signed in for that user | `upstream.rs` `account_start`, `Bound` | `linking_needs_a_fresh_confirmation_and_the_session_that_started_it` | Met |
 | Project requirement | An upstream account already linked to any user is not linked again; admin accounts cannot link, checked at the start and at the callback | `upstream.rs` `finish_account_link` | `an_account_linked_to_anyone_is_not_linked_again`, `admin_accounts_cannot_link_from_the_account_page` | Met |
