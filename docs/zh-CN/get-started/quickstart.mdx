@@ -510,7 +510,7 @@ kubectl -n default delete configmap zeabur-identity-permission-check
 | 界面或结果 | 接下来处理 |
 |---|---|
 | 浏览器显示证书错误，或没有通行密钥选项 | 在运行浏览器的环境中运行 `mkcert -install`，确认信任 mkcert 的 CA。检查证书名称是否符合 Issuer 的主机名。 |
-| `kubectl` 显示 **Unauthorized** | 检查步骤 5 的配置是否成功加载。配置文件有错时，kube-apiserver 会忽略这个文件，文件再次更改后才会重新读取。在 k3s 服务器运行 `sudo journalctl -u k3s \| grep -i "authentication config"` 查看原因。 |
+| `kubectl` 显示 `Unauthorized` | 检查步骤 5 的配置是否成功加载。配置文件有错时，kube-apiserver 会忽略这个文件，文件再次更改后才会重新读取。在 k3s 服务器运行 `sudo journalctl -u k3s \| grep -i "authentication config"` 查看原因。 |
 | 端口 8000 已占用 | kubelogin 使用这个端口接收浏览器重定向。同时修改 `--listen-address` 和 `--oidc-redirect-url`。已注册的重定向 URI 接受 127.0.0.1 上的任意端口。 |
 
 ## 清理

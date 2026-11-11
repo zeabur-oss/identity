@@ -4887,7 +4887,6 @@ dependencies = [
  "zeabur-identity-store",
  "zeabur-identity-test-support",
  "zeabur-identity-tls",
- "zeabur-identity-ui",
 ]
 
 [[package]]
@@ -4956,13 +4955,11 @@ dependencies = [
  "kube",
  "proptest",
  "rustls",
- "schemars 1.2.3",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
  "time",
  "tokio",
- "tokio-rustls",
  "tower",
  "tracing",
  "url",
@@ -5006,7 +5003,6 @@ dependencies = [
  "proptest",
  "serde",
  "serde_json",
- "thiserror 2.0.21",
  "tokio",
  "tower",
  "tracing",
@@ -5028,7 +5024,6 @@ dependencies = [
  "bytes",
  "form_urlencoded",
  "http-body-util",
- "hyper",
  "hyper-rustls",
  "hyper-util",
  "passkey",
@@ -5056,7 +5051,6 @@ dependencies = [
 name = "zeabur-identity-store"
 version = "0.1.2"
 dependencies = [
- "serde",
  "thiserror 2.0.21",
  "zeabur-identity-api",
  "zeabur-identity-core",
@@ -5098,7 +5092,6 @@ dependencies = [
  "axum",
  "brotli-decompressor",
  "form_urlencoded",
- "serde",
  "tokio",
  "tracing",
  "zeabur-identity-core",

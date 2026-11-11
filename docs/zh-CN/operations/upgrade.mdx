@@ -7,7 +7,7 @@ description: 备份并记录当前部署，检查版本差异后升级 Zeabur Id
 
 ### 目前不保证的事项
 
-Zeabur Identity 目前处于 alpha 阶段，不保证升级与回滚能成功。资源版本仍是 `v1alpha1`，版本之间没有转换机制。在发行说明明确承诺前，不要假设任何方向的版本切换都能成功。记录实际运行的完整 commit 与镜像，不要只记录会重复使用的标签，例如 `zeabur-identity:dev`。
+资源版本仍是 `v1alpha1`，版本之间没有转换机制。新版可能改变数据的存储方式（见下方的升级须知），所以不要假设任何方向的版本切换一定会成功。记录实际运行的完整 commit 与镜像，不要只记录会重复使用的标签，例如 `zeabur-identity:dev`。
 
 `kubectl rollout undo` 只会回滚 Pod 模板，不会回滚 CRD、用户、签名密钥、Secret、RBAC、Service、Ingress 或 kube-apiserver 的文件。新版 Zeabur Identity 写入数据后，不保证旧版能读取。
 
@@ -36,7 +36,7 @@ v0.2 改用 `UpstreamProvider` 对象配置 GitHub 与 Google 登录，不再用
 
 #### 3. 在新的 Deployment 之前创建登录提供方
 
-如果你使用 GitHub 或 Google 登录，请在 **检查并应用资源清单** 这一步，应用新的 CRD 之后、应用新的资源清单之前完成。没做的话，**Continue with GitHub** 和 **Continue with Google** 按钮会消失，直到补上为止。
+如果你使用 GitHub 或 Google 登录，请在**检查并应用资源清单**这一步，应用新的 CRD 之后、应用新的资源清单之前完成。补上之前，登录页不会出现 **Continue with GitHub** 和 **Continue with Google** 按钮。
 
 把每个客户端密钥存入 Secret `zeabur-identity-upstream`，键为 `github` 或 `google`。沿用 v0.1 的客户端密钥即可。没用到的提供方不用加：
 
@@ -88,7 +88,7 @@ v0.2 启动时，会把每个已关联的 GitHub 或 Google 账号，也就是 `
 
 v0.1 读取不了 `type: Upstream` 的 `Credential`，它的 CRD 也不接受。v0.2 的 CRD 只允许从 `GitHub` 或 `Google` 改为 `Upstream`，v0.1 的 CRD 完全不允许修改，所以无法直接把类型改回去。要回到 v0.1，需要 v0.1 的 CRD，还要把每个已关联账号用旧的类型重新写入。
 
-按下方 **回滚** 的说明恢复升级前的备份，这两件事都会完成。如果要保留升级后的变更，改为在 Zeabur Identity 停止的状态下运行下列命令。通过 `github`、`google` 以外的提供方关联的账号在 v0.1 中没有对应的形式，会被删除：
+按下方**回滚**的说明恢复升级前的备份，这两件事都会完成。如果要保留升级后的变更，改为在 Zeabur Identity 停止的状态下运行下列命令。通过 `github`、`google` 以外的提供方关联的账号在 v0.1 中没有对应的形式，会被删除：
 
 ```sh
 kubectl -n "$NS" get credentials.identity.zeabur.com -o json | jq '.items |= map(
@@ -163,7 +163,7 @@ kubectl -n "$NS" rollout history deployment/zeabur-identity > upgrade-record/rol
 
 ### 检查版本差异并试升级
 
-先完成上方 **各版本升级须知** 中每个经过的版本要做的事，再阅读两个版本之间的发行说明，包括 CRD schema、存储格式、选项与令牌声明。
+先完成上方**各版本升级须知**中每个经过的版本要做的事，再阅读两个版本之间的发行说明，包括 CRD schema、存储格式、选项与令牌声明。
 
 先在用备份恢复出的环境上测试完全相同的升级流程，也要使用现有通行密钥登录。
 

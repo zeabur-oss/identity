@@ -23,7 +23,6 @@ futures-util.workspace = true
 k8s-openapi.workspace = true
 kube.workspace = true
 rustls.workspace = true
-schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -39,7 +38,6 @@ http-body-util.workspace = true
 tower = { workspace = true, features = ["util"] }
 zeabur-identity-oauth.workspace = true
 zeabur-identity-test-support.workspace = true
-tokio-rustls.workspace = true
 rustls.workspace = true
 time.workspace = true
 proptest.workspace = true
