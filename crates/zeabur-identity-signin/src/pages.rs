@@ -19,14 +19,18 @@ use zeabur_identity_ui::pages::{AppLink, ProviderButton, login_page, page_lang, 
 use crate::cookie;
 use crate::upstream::provider::Kind;
 
-type Shared<D, G, C> = (Arc<AuthorizationServer<D, G, C>>, Arc<[ProviderButton]>);
+type Shared<D, G, C> = (
+    Arc<AuthorizationServer<D, G, C>>,
+    Arc<[ProviderButton<'static>]>,
+);
 
 /// The page routes and `/assets/{name}`. `providers` are the upstream providers offered.
 pub fn router<D: Directory, G: GrantStore, C: Clock>(
     server: Arc<AuthorizationServer<D, G, C>>,
     providers: &[Kind],
 ) -> Router {
-    let buttons: Arc<[ProviderButton]> = providers.iter().map(|kind| kind.button()).collect();
+    let buttons: Arc<[ProviderButton<'static>]> =
+        providers.iter().map(|kind| kind.button()).collect();
     Router::new()
         .route("/login", get(login::<D, G, C>))
         .route("/setup", get(setup::<D, G, C>))
