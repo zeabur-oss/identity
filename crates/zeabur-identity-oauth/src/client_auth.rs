@@ -13,7 +13,8 @@ use axum::http::{HeaderMap, header};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use zeabur_identity_api::client::ClientType;
-use zeabur_identity_core::crypto::{ct_eq, hash_secret};
+use zeabur_identity_api::token_hash;
+use zeabur_identity_core::crypto::ct_eq;
 use zeabur_identity_store::{Client, Directory};
 
 use super::error::{ErrorCode, OAuthError};
@@ -129,7 +130,7 @@ pub async fn authenticate<D: Directory>(
         (ClientType::Public, _, None) => Ok(client),
         (ClientType::Confidential, Some(expected), Some(secret))
             if ct_eq(
-                hash_secret(secret.as_bytes()).as_bytes(),
+                token_hash(secret.as_bytes()).as_bytes(),
                 expected.as_bytes(),
             ) =>
         {

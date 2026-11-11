@@ -9,10 +9,10 @@ use kube::api::{Api, ObjectMeta, PostParams};
 use kube::{Client, Resource as _, ResourceExt as _};
 use zeabur_identity_api::invitation::{Invitation, InvitationSpec};
 use zeabur_identity_api::user::{AccountType, User, UserSpec};
-use zeabur_identity_api::{EXPIRES_AT_ANNOTATION, EXPIRY_BUCKET_LABEL, USER_LABEL};
+use zeabur_identity_api::{EXPIRES_AT_ANNOTATION, EXPIRY_BUCKET_LABEL, USER_LABEL, token_hash};
 use zeabur_identity_core::clock::UnixTime;
 use zeabur_identity_core::config::BaseUrl;
-use zeabur_identity_core::crypto::{hash_secret, hex, random};
+use zeabur_identity_core::crypto::{hex, random};
 
 use super::MANAGED_BY;
 use super::setup::{LinkError, check_valid_for, issued_note, prepare_enrolment, record_issued};
@@ -129,7 +129,7 @@ pub async fn invite(
         },
         spec: InvitationSpec {
             user: invitee.username.clone(),
-            token_hash: hash_secret(token.as_bytes()),
+            token_hash: token_hash(token.as_bytes()),
             expires_at: i64::try_from(expires_at.as_secs()).unwrap_or(i64::MAX),
         },
     };

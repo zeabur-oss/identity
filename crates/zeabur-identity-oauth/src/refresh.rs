@@ -40,7 +40,8 @@
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use zeabur_identity_core::crypto::{CryptoError, ct_eq, hash_secret, random};
+use zeabur_identity_api::token_hash;
+use zeabur_identity_core::crypto::{CryptoError, ct_eq, random};
 use zeabur_identity_store::Grant;
 
 /// A parsed refresh token.
@@ -93,7 +94,7 @@ impl RefreshToken {
     /// The stored form of the secret.
     #[must_use]
     pub fn hash(&self) -> String {
-        hash_secret(self.secret.as_bytes())
+        token_hash(self.secret.as_bytes())
     }
 
     /// Proves possession of a current or previous family secret, independently of expiry.

@@ -18,12 +18,12 @@ mod tests {
     use tokio::sync::Barrier;
     use tower::ServiceExt as _;
     use tracing::instrument::WithSubscriber as _;
-    use zeabur_identity_api::ADMIN_GROUP;
     use zeabur_identity_api::client::ClientType;
+    use zeabur_identity_api::{ADMIN_GROUP, token_hash};
     use zeabur_identity_core::account::{AccountType, Settings, Teams};
     use zeabur_identity_core::clock::{Clock, UnixTime};
     use zeabur_identity_core::config::BaseUrl;
-    use zeabur_identity_core::crypto::{Sealer, hash_secret};
+    use zeabur_identity_core::crypto::Sealer;
     use zeabur_identity_keys::Algorithm;
     use zeabur_identity_keys::manager::{KeyManager, Published};
     use zeabur_identity_keys::rotation::RotationPolicy;
@@ -158,7 +158,7 @@ mod tests {
             kind: ClientType::Confidential,
             redirect_uris: vec!["https://app.example.com/cb".into()],
             audiences: vec![],
-            secret_hash: Some(hash_secret(WEB_SECRET.as_bytes())),
+            secret_hash: Some(token_hash(WEB_SECRET.as_bytes())),
             id_token_alg: Algorithm::Rs256,
             home_url: None,
         });

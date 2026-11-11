@@ -55,10 +55,10 @@ use zeabur_identity_api::credential::Credential;
 use zeabur_identity_api::grant::Grant;
 use zeabur_identity_api::invitation::Invitation;
 use zeabur_identity_api::user::{AccountType, User, UserSpec};
-use zeabur_identity_api::{EXPIRES_AT_ANNOTATION, USER_LABEL};
+use zeabur_identity_api::{EXPIRES_AT_ANNOTATION, USER_LABEL, token_hash};
 use zeabur_identity_core::clock::UnixTime;
 use zeabur_identity_core::config::BaseUrl;
-use zeabur_identity_core::crypto::{hash_secret, random};
+use zeabur_identity_core::crypto::random;
 use zeabur_identity_store::{
     AccountEvent, Consume, CredentialStore as _, SetupStore, SetupToken, StoreError,
     invitation_name,
@@ -404,7 +404,7 @@ pub async fn issue_setup_link(
             ),
             (
                 HASH_KEY.to_owned(),
-                ByteString(hash_secret(token.as_bytes()).into_bytes()),
+                ByteString(token_hash(token.as_bytes()).into_bytes()),
             ),
         ])),
         ..Secret::default()

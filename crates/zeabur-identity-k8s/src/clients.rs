@@ -1,7 +1,7 @@
 //! Client registration: the admin's side (`zeabur-identityctl client create`).
 //!
 //! A confidential client's secret is stored as an unsalted SHA-256 hash
-//! ([`zeabur_identity_core::crypto::hash_secret`]), which anyone with `get` on `OAuthClient`
+//! ([`zeabur_identity_api::token_hash`]), which anyone with `get` on `OAuthClient`
 //! objects, or with the GitOps repository, can read. That is safe only for a high-entropy secret: a
 //! fast, unsalted hash of a password falls to an offline dictionary attack, and the server cannot
 //! tell, because it only ever sees the hash. So the secret is generated here, never chosen by a
@@ -17,7 +17,8 @@ use zeabur_identity_api::client::{
     ClientType, MAX_AUDIENCE, MAX_AUDIENCES, MAX_DISPLAY_NAME, MAX_REDIRECT_URI, MAX_REDIRECT_URIS,
     OAuthClient, OAuthClientSpec,
 };
-use zeabur_identity_core::crypto::{hash_secret, hex, random};
+use zeabur_identity_api::token_hash;
+use zeabur_identity_core::crypto::{hex, random};
 use zeabur_identity_keys::Algorithm;
 
 /// Longest client ID. The client ID is the `OAuthClient` object name and also the
@@ -119,7 +120,7 @@ pub fn register(new: NewClient, namespace: &str) -> Result<Registration, ClientE
             audiences: new.audiences,
             secret_hash: secret
                 .as_deref()
-                .map(|secret| hash_secret(secret.as_bytes())),
+                .map(|secret| token_hash(secret.as_bytes())),
             id_token_signing_alg: new.id_token_signing_alg,
             home_url: new.home_url,
         },
@@ -253,7 +254,7 @@ mod tests {
         assert_ne!(Some(&secret), second.secret.as_ref());
         assert_eq!(
             first.client.spec.secret_hash,
-            Some(hash_secret(secret.as_bytes()))
+            Some(token_hash(secret.as_bytes()))
         );
         let json = serde_json::to_string(&first.client).unwrap();
         assert!(!json.contains(&secret));

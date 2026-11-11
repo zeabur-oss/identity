@@ -35,9 +35,10 @@ use webauthn_rs::prelude::{
     DiscoverableAuthentication, PasskeyRegistration, PublicKeyCredential,
     RegisterPublicKeyCredential, Uuid,
 };
+use zeabur_identity_api::token_hash;
 use zeabur_identity_core::account::{AccountType, Method};
 use zeabur_identity_core::clock::{Clock, UnixTime};
-use zeabur_identity_core::crypto::{CryptoError, ct_eq, hash_secret, hex, random, sha256};
+use zeabur_identity_core::crypto::{CryptoError, ct_eq, hex, random, sha256};
 use zeabur_identity_oauth::Use;
 use zeabur_identity_store::{
     AccountEvent, Classification, CreateCredential, CreateGrant, CredentialStore, Directory, Grant,
@@ -212,7 +213,7 @@ impl SessionToken {
     /// The stored form of the secret.
     #[must_use]
     pub fn hash(&self) -> String {
-        hash_secret(self.secret.as_bytes())
+        token_hash(self.secret.as_bytes())
     }
 
     /// The CSRF token for this session: derived from the secret, so it needs no storage and
