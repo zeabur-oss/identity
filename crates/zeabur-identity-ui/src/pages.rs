@@ -372,8 +372,6 @@ pub struct SessionRow<'a> {
 pub struct AccountView<'a> {
     /// The username.
     pub username: &'a str,
-    /// The session's CSRF token, sent back with every change.
-    pub csrf: &'a str,
     /// The user's passkeys.
     pub passkeys: &'a [PasskeyRow<'a>],
     /// The user's linked upstream accounts.
@@ -449,7 +447,6 @@ struct SessionItem<'a> {
 
 struct AccountItems<'a> {
     username: &'a str,
-    csrf: &'a str,
     passkeys: Vec<PasskeyItem<'a>>,
     linked: Vec<LinkedItem<'a>>,
     providers: &'a [ProviderButton<'a>],
@@ -476,7 +473,6 @@ pub fn account_page(lang: Lang, view: Option<AccountView<'_>>) -> Response {
     let m = lang.messages();
     let view = view.map(|view| AccountItems {
         username: view.username,
-        csrf: view.csrf,
         passkeys: view
             .passkeys
             .iter()

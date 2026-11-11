@@ -1223,7 +1223,6 @@ mod tests {
     /// An account-page session for `user`, as a passkey sign-in `age` ago creates it.
     struct Session {
         cookie: String,
-        csrf: String,
         name: String,
     }
 
@@ -1258,7 +1257,6 @@ mod tests {
             .unwrap();
         Session {
             cookie: format!("{SESSION_COOKIE}={}", token.encode()),
-            csrf: token.csrf(),
             name: token.name().to_owned(),
         }
     }
@@ -1286,7 +1284,7 @@ mod tests {
         let started = account_post(
             h,
             "/account/links/start",
-            &json!({ "csrf": session.csrf, "provider": provider }),
+            &json!({ "provider": provider }),
             &session.cookie,
         )
         .await;
@@ -1460,7 +1458,7 @@ mod tests {
                 let started = account_post(
                     &h,
                     "/account/links/start",
-                    &json!({ "csrf": session.csrf, "provider": id }),
+                    &json!({ "provider": id }),
                     &session.cookie,
                 )
                 .await;
@@ -1475,7 +1473,7 @@ mod tests {
                 let started = account_post(
                     &h,
                     "/account/links/start",
-                    &json!({ "csrf": session.csrf, "provider": id }),
+                    &json!({ "provider": id }),
                     &session.cookie,
                 )
                 .await;
@@ -1489,20 +1487,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn linking_needs_a_fresh_confirmation_and_the_session_that_started_it() {
+    async fn linking_needs_a_fresh_confirmation_and_a_session() {
         let h = harness().await;
         let stale = account_session(&h, "alice", 600).await;
         let fresh = account_session(&h, "alice", 0).await;
         let cases = [
-            (&stale.cookie, stale.csrf.as_str(), "reauth-required"),
-            (&fresh.cookie, stale.csrf.as_str(), "csrf"),
-            (&String::new(), fresh.csrf.as_str(), "signed-out"),
+            (&stale.cookie, "reauth-required"),
+            (&String::new(), "signed-out"),
         ];
-        for (cookie, csrf, kind) in cases {
+        for (cookie, kind) in cases {
             let reply = account_post(
                 &h,
                 "/account/links/start",
-                &json!({ "csrf": csrf, "provider": "github" }),
+                &json!({ "provider": "github" }),
                 cookie,
             )
             .await;
@@ -1523,7 +1520,7 @@ mod tests {
         let reply = account_post(
             &h,
             "/account/links/start",
-            &json!({ "csrf": fresh.csrf, "provider": "gitlab" }),
+            &json!({ "provider": "gitlab" }),
             &fresh.cookie,
         )
         .await;
@@ -1620,7 +1617,7 @@ mod tests {
         let reply = account_post(
             &h,
             "/account/links/start",
-            &json!({ "csrf": session.csrf, "provider": "github" }),
+            &json!({ "provider": "github" }),
             &session.cookie,
         )
         .await;
@@ -1656,7 +1653,7 @@ mod tests {
         let stale = account_session(&h, "alice", 600).await;
         let session = account_session(&h, "alice", 0).await;
         let unlink = |session: &Session, name: &str| {
-            let body = json!({ "csrf": session.csrf, "name": name });
+            let body = json!({ "name": name });
             let cookie = session.cookie.clone();
             let h = &h;
             async move { account_post(h, "/account/links/remove", &body, &cookie).await }

@@ -255,7 +255,6 @@ async fn account(Path(state): Path<String>, RawQuery(q): RawQuery, h: HeaderMap)
     let lang = lang(q.as_deref(), &h);
     let view = |passkeys, linked, admin| AccountView {
         username: "admin",
-        csrf: "preview",
         passkeys,
         linked,
         providers: &MANY,

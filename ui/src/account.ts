@@ -19,7 +19,6 @@ import {
 
 const root = document.getElementById("account")
 const text = messages(root)
-const csrf = text("csrf")
 
 const errors: Record<string, string> = {
   "passkey-failed": "msgFailed",
@@ -99,8 +98,8 @@ async function assertion(
 
 async function reauthenticate(place: Place): Promise<Reply> {
   write(place.status, text("msgConfirm"))
-  const credential = await assertion("/account/reauth/options", { csrf })
-  return post("/account/reauth", { csrf, credential: assertionJson(credential) })
+  const credential = await assertion("/account/reauth/options", {})
+  return post("/account/reauth", { credential: assertionJson(credential) })
 }
 
 /** Runs `action`; if the server wants a fresh confirmation, gets one and runs it again. */
@@ -161,7 +160,7 @@ function addPasskey(event: SubmitEvent): void {
   event.preventDefault()
   const label = document.querySelector<HTMLInputElement>("#add-label")?.value.trim()
   run(async () => {
-    const started = await fresh(header, () => post("/account/passkeys/options", { csrf }))
+    const started = await fresh(header, () => post("/account/passkeys/options", {}))
     if (!started.ok) return started
     write(header.status, text("msgWorking"))
     const credential = await navigator.credentials.create({
@@ -170,7 +169,6 @@ function addPasskey(event: SubmitEvent): void {
     if (!(credential instanceof PublicKeyCredential))
       throw new DOMException("no credential", "NotAllowedError")
     return post("/account/passkeys", {
-      csrf,
       credential: registrationJson(credential),
       label: label || null,
     })
@@ -203,7 +201,7 @@ function wireDialog(
 function wireRemove(item: HTMLElement, path: string, name: string, passkey: string): void {
   wireDialog(item, "confirm", () => {
     const place = rowPlace(item)
-    run(() => fresh(place, () => post(path, { csrf, name })), place, passkey)
+    run(() => fresh(place, () => post(path, { name })), place, passkey)
   })
 }
 
@@ -212,15 +210,14 @@ function wirePasskey(item: HTMLElement): void {
   wireRemove(item, "/account/passkeys/remove", name, name)
   wireDialog(item, "rename", (dialog) => {
     const label = dialog.querySelector("input")?.value.trim() ?? ""
-    if (label)
-      run(() => post("/account/passkeys/rename", { csrf, name, label }), rowPlace(item), name)
+    if (label) run(() => post("/account/passkeys/rename", { name, label }), rowPlace(item), name)
   })
 }
 
 /** Starts linking: after a fresh confirmation, the server answers with the provider's URL. */
 function link(provider: string): void {
   run(async () => {
-    const reply = await fresh(header, () => post("/account/links/start", { csrf, provider }))
+    const reply = await fresh(header, () => post("/account/links/start", { provider }))
     if (!reply.ok || typeof reply.body.redirect_to !== "string") return reply
     window.location.assign(reply.body.redirect_to)
     return null
@@ -240,13 +237,13 @@ if (root) {
   localizeDates()
   document
     .getElementById("sign-out")
-    ?.addEventListener("click", () => run(() => post("/account/sign-out", { csrf })))
+    ?.addEventListener("click", () => run(() => post("/account/sign-out", {})))
   document.getElementById("sign-out-others")?.addEventListener("click", () => {
-    run(() => post("/account/sessions/revoke-others", { csrf }))
+    run(() => post("/account/sessions/revoke-others", {}))
   })
   for (const item of document.querySelectorAll<HTMLElement>("[data-session]")) {
     item.querySelector("[data-action=revoke]")?.addEventListener("click", () => {
-      run(() => post("/account/sessions/revoke", { csrf, name: item.dataset.session ?? "" }))
+      run(() => post("/account/sessions/revoke", { name: item.dataset.session ?? "" }))
     })
   }
   const signInButton = document.getElementById("account-sign-in")

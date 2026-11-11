@@ -5,7 +5,7 @@
 {%- block title %}{{ m.account_title }}{% endblock -%}
 {%- block head %}<script type="module" src="/assets/account.js?v={{ assets.account_js }}"></script>{% endblock -%}
 {%- block content %}
-<div id="account" class="flex flex-col gap-5"{% if let Some(view) = view %} data-csrf="{{ view.csrf }}"{% endif %} data-lang="{{ lang.tag() }}"
+<div id="account" class="flex flex-col gap-5" data-lang="{{ lang.tag() }}"
      data-msg-failed="{{ m.passkey_failed }}" data-msg-cancelled="{{ m.passkey_cancelled }}"
      data-msg-working="{{ m.working }}" data-msg-error="{{ m.generic_error }}" data-msg-confirm="{{ m.confirm_working }}"
      data-msg-exists="{{ m.passkey_exists }}" data-msg-last="{{ m.last_passkey_error }}"

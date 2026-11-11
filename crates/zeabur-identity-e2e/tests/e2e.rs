@@ -1125,9 +1125,8 @@ mod tests {
         http(address, Method::GET, &path, &[("cookie", cookies)], None).await
     }
 
-    /// The account session cookie and CSRF token after signing in to the account page with
-    /// `device`.
-    async fn account_session(address: &str, device: &mut Device) -> (String, String) {
+    /// The account session cookie after signing in to the account page with `device`.
+    async fn account_session(address: &str, device: &mut Device) -> String {
         let origin = Url::parse(ISSUER).unwrap();
         let reply = post_json(address, "/account/session/options", &json!({}), "").await;
         assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
@@ -1145,32 +1144,20 @@ mod tests {
         )
         .await;
         assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
-        let session = format!("{SESSION_COOKIE}={}", reply.cookie(SESSION_COOKIE));
-        let page = http(
-            address,
-            Method::GET,
-            "/account",
-            &[("cookie", &session)],
-            None,
-        )
-        .await;
-        let html = String::from_utf8_lossy(&page.body).into_owned();
-        let csrf = html.get(html.find("data-csrf=\"").unwrap() + 11..).unwrap();
-        let csrf = csrf.get(..csrf.find('"').unwrap()).unwrap().to_owned();
-        (session, csrf)
+        format!("{SESSION_COOKIE}={}", reply.cookie(SESSION_COOKIE))
     }
 
     /// Links the Keycloak user `kc` from the account page.
     async fn link_from_account(
         address: &str,
         keycloak: &Keycloak,
-        (session, csrf): (&str, &str),
+        session: &str,
         kc: (&str, &str, &str),
     ) {
         let started = post_json(
             address,
             "/account/links/start",
-            &json!({ "csrf": csrf, "provider": "keycloak" }),
+            &json!({ "provider": "keycloak" }),
             session,
         )
         .await;
@@ -1415,13 +1402,13 @@ mod tests {
         assert!(String::from_utf8_lossy(&reply.body).contains("account_unlinked (keycloak)"));
 
         // Link kc-alice from the account page; it signs in as alice.
-        let (session, csrf) = account_session(&address, &mut device).await;
-        link_from_account(&address, &keycloak, (&session, &csrf), KC_ALICE).await;
+        let session = account_session(&address, &mut device).await;
+        link_from_account(&address, &keycloak, &session, KC_ALICE).await;
         let reply = keycloak_sign_in(&address, &keycloak, KC_ALICE).await;
         assert_eq!(signed_in_subject(&address, &reply).await, alice);
 
         // A second Keycloak account, linked to alice too, signs in as alice.
-        link_from_account(&address, &keycloak, (&session, &csrf), KC_BOB).await;
+        link_from_account(&address, &keycloak, &session, KC_BOB).await;
         let reply = keycloak_sign_in(&address, &keycloak, KC_BOB).await;
         assert_eq!(signed_in_subject(&address, &reply).await, alice);
 
@@ -1446,7 +1433,7 @@ mod tests {
         let reply = post_json(
             &address,
             "/account/links/remove",
-            &json!({ "csrf": csrf, "name": bob }),
+            &json!({ "name": bob }),
             &session,
         )
         .await;
