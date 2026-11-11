@@ -1,13 +1,12 @@
-//! A kube-runtime [`watcher()`] that relists when a watch response is not a watch stream.
+//! A kube-runtime [`watcher()`] that relists when the API server answers a watch with `410 Gone`.
 //!
 //! kube-runtime relists only on a `410 Gone` *watch event*. When the API server answers the watch
-//! request itself with an error (for example `410 Gone` for a `resourceVersion` it no longer has,
-//! after a restart), kube-client 4.2 does not check the HTTP status: it parses the body line by
-//! line as watch events. A one-line `Status` becomes `Error::Api`; an indented one becomes one
-//! `Error::SerdeError` per line. Neither makes the watcher relist, so it reconnects with the same
-//! stale `resourceVersion` and fails the same way forever. This wrapper starts a new watcher, and
-//! with it a fresh `LIST`, on either error.
-
+//! request itself with `410 Gone` (a `resourceVersion` it no longer has, for example after a
+//! restart), kube-client 5 returns `Error::Api` and the watcher reports `WatchStartFailed`, then
+//! reconnects with the same stale `resourceVersion` and fails the same way forever. Older
+//! kube-client versions read the body as watch events instead, which gives `WatchFailed` with
+//! `Error::Api` or, for an indented `Status`, `Error::SerdeError`. This wrapper starts a new
+//! watcher, and with it a fresh `LIST`, on any of these errors.
 use std::fmt::Debug;
 
 use futures_util::stream::{self, BoxStream};
@@ -45,7 +44,8 @@ where
 
 fn must_relist(error: &watcher::Error) -> bool {
     match error {
-        watcher::Error::WatchFailed(Error::Api(status)) => status.code == 410,
+        watcher::Error::WatchStartFailed(Error::Api(status))
+        | watcher::Error::WatchFailed(Error::Api(status)) => status.code == 410,
         watcher::Error::WatchFailed(Error::SerdeError(_)) => true,
         watcher::Error::WatchFailed(_)
         | watcher::Error::InitialListFailed(_)
