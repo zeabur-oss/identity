@@ -1417,7 +1417,7 @@ mod tests {
                     &session.cookie,
                 )
                 .await;
-                assert_eq!(started.status, StatusCode::OK, "{}", started.body);
+                assert_eq!(started.status, StatusCode::OK, "{id}");
                 let url = started.json()["redirect_to"].as_str().unwrap().to_owned();
                 assert!(url.starts_with(authorize(id)), "{id}: {url}");
             }
