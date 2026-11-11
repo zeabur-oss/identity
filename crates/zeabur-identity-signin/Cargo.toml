@@ -23,7 +23,6 @@ base64.workspace = true
 bytes.workspace = true
 form_urlencoded.workspace = true
 http-body-util.workspace = true
-hyper.workspace = true
 hyper-rustls.workspace = true
 hyper-util.workspace = true
 rustls.workspace = true
@@ -39,6 +38,8 @@ webauthn-rs.workspace = true
 zeabur-identity-test-support.workspace = true
 http-body-util.workspace = true
 passkey.workspace = true
+# Not used by name: the tests need its `serialize_bytes_as_base64_string` feature, which makes
+# `passkey` serialize byte fields as base64 strings.
 passkey-types.workspace = true
 async-trait.workspace = true
 public-suffix.workspace = true

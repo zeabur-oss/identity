@@ -29,8 +29,8 @@ the crates and `ui/package.json` carry the full version (`0.1.2-beta.1`).
    `prerelease: rc` for a release candidate. knope turns the change files in `.changeset/` into the
    next `CHANGELOG.md` section and sets the workspace version in `Cargo.toml`;
    `bun scripts/release.ts bump` sets `Cargo.lock` and `ui/package.json`, and zeabur-oss-bot opens
-   `chore(release): vX.Y.Z`. Edit `CHANGELOG.md` on that branch to add the alpha status, platform
-   scope and known limitations. Use level-three headings within each version and keep each
+   `chore(release): vX.Y.Z`. Edit `CHANGELOG.md` on that branch to add the platform scope and known
+   limitations. Use level-three headings within each version and keep each
    paragraph and list item on one line; the release notes are the matching version section as it is.
 2. In GitHub Actions, select **Release → Run workflow**, choose `release/next` and enter
    the matching version, such as `v0.1.1`. This builds and smokes both platforms without

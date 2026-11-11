@@ -7,7 +7,7 @@ Back up and record your current deployment, then review version differences, app
 
 ### Upgrade risks
 
-Zeabur Identity is currently in alpha and provides no upgrade or rollback guarantees. Resource versions are still `v1alpha1`, and there's no conversion mechanism between versions. Until the release notes explicitly guarantee compatibility, don't assume that switching versions in either direction will succeed. Record the full commit and image that's actually running. Don't record only a reusable tag such as `zeabur-identity:dev`.
+Resource versions are still `v1alpha1`, and there's no conversion mechanism between versions. A newer version can change how it stores data, as the upgrade notes below list, so don't assume that switching versions in either direction will succeed. Record the full commit and image that's actually running. Don't record only a reusable tag such as `zeabur-identity:dev`.
 
 `kubectl rollout undo` only restores the Pod template. It doesn't restore CRDs, users, signing keys, Secrets, RBAC, Services, Ingresses, or kube-apiserver files. After a newer version of Zeabur Identity writes data, there's no guarantee that an older version can read it.
 

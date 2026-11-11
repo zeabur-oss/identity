@@ -5,8 +5,8 @@ description: Implement or change a protocol behaviour in Zeabur Identity (OAuth,
 
 # Specification-driven work
 
-Follow `zeabur-oss-spec-work` (install: `npx skills add zeabur-oss/skills --skill
-zeabur-oss-spec-work`; `skills-lock.json` pins it): read the source, cite it in rustdoc, fail
+Follow `zeabur-oss-spec-work` (committed in `.claude/skills`; the Update workflow copies it from
+zeabur-oss/skills): read the source, cite it in rustdoc, fail
 closed, test the attack. In Zeabur Identity also:
 
 1. **Single-use things** (codes, links, ceremonies, PAR URIs, upstream `state`) are consumed by

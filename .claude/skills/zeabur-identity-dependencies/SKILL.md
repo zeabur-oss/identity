@@ -5,8 +5,8 @@ description: Add or upgrade a Rust or frontend dependency in Zeabur Identity und
 
 # Dependencies
 
-Follow `zeabur-oss-dependencies` (install: `npx skills add zeabur-oss/skills --skill
-zeabur-oss-dependencies`; `skills-lock.json` pins it). This skill adds what is Zeabur
+Follow `zeabur-oss-dependencies` (committed in `.claude/skills`; the Update workflow copies it from
+zeabur-oss/skills). This skill adds what is Zeabur
 Identity's own.
 
 ## Rust

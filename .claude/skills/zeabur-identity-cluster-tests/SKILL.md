@@ -5,8 +5,8 @@ description: Run Zeabur Identity's Kubernetes integration and end-to-end tests o
 
 # Cluster tests
 
-Follow `zeabur-oss-cluster-tests` (install: `npx skills add zeabur-oss/skills --skill
-zeabur-oss-cluster-tests`; `skills-lock.json` pins it): a disposable cluster on a Linux machine
+Follow `zeabur-oss-cluster-tests` (committed in `.claude/skills`; the Update workflow copies it from
+zeabur-oss/skills): a disposable cluster on a Linux machine
 or VM, a snapshot restored after every run, and the common failures. Sync with
 `rsync -a --delete --exclude target ./ host:zeabur-identity/`.
 

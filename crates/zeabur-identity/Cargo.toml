@@ -15,7 +15,6 @@ zeabur-identity-api.workspace = true
 zeabur-identity-core.workspace = true
 zeabur-identity-keys.workspace = true
 zeabur-identity-store.workspace = true
-zeabur-identity-ui.workspace = true
 zeabur-identity-tls.workspace = true
 zeabur-identity-oauth.workspace = true
 zeabur-identity-signin.workspace = true
