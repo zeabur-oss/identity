@@ -163,3 +163,30 @@ pub struct OAuthClientSpec {
     ))]
     pub home_url: Option<String>,
 }
+
+/// What `zeabur-identityctl client create --output json` writes to stdout, as one JSON object.
+///
+/// For a confidential client, `token_hash(secret)` is the manifest's `spec.secretHash`
+/// ([`crate::token_hash`]).
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientRegistration {
+    /// The `client_id`, also the name of the manifest.
+    pub client_id: String,
+    /// The plaintext secret of a confidential client: 64 lowercase hex digits. Absent for a
+    /// public client. Nothing else holds it, and the manifest holds only its hash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret: Option<String>,
+    /// The `OAuthClient` to apply.
+    pub manifest: OAuthClient,
+}
+
+impl std::fmt::Debug for ClientRegistration {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClientRegistration")
+            .field("client_id", &self.client_id)
+            .field("secret", &self.secret.as_ref().map(|_secret| "<redacted>"))
+            .field("manifest", &self.manifest)
+            .finish()
+    }
+}

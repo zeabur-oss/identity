@@ -92,6 +92,8 @@ zeabur-identityctl client create grafana --type confidential --display-name Graf
 
 命令会将密钥输出到终端的 stderr，与对象输出分开。
 
+在脚本中使用时，加上 `--output json`。命令会在 stdout 输出一个 JSON 对象，stderr 不输出内容。对象包含 `clientId`、`secret`（只有机密客户端才有）和 `manifest`（即 `OAuthClient`）。应用 `manifest` 字段，例如 `jq .manifest | kubectl apply -f -`，再把 `secret` 字段交给应用。
+
 <Callout type="warn">
 
 密钥只会显示一次。集群只保留密钥的 SHA-256 哈希值，请立即将密钥交给应用。
