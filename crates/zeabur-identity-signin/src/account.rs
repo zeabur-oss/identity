@@ -38,7 +38,7 @@ use webauthn_rs::prelude::{
 use zeabur_identity_api::token_hash;
 use zeabur_identity_core::account::{AccountType, Method};
 use zeabur_identity_core::clock::{Clock, UnixTime};
-use zeabur_identity_core::crypto::{CryptoError, ct_eq, hex, random, sha256};
+use zeabur_identity_core::crypto::{CryptoError, hex, random};
 use zeabur_identity_oauth::Use;
 use zeabur_identity_store::{
     AccountEvent, Classification, CreateCredential, CreateGrant, CredentialStore, Directory, Grant,

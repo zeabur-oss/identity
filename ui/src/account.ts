@@ -210,8 +210,7 @@ function wirePasskey(item: HTMLElement): void {
   wireRemove(item, "/account/passkeys/remove", name, name)
   wireDialog(item, "rename", (dialog) => {
     const label = dialog.querySelector("input")?.value.trim() ?? ""
-    if (label)
-      run(() => post("/account/passkeys/rename", { name, label }), rowPlace(item), name)
+    if (label) run(() => post("/account/passkeys/rename", { name, label }), rowPlace(item), name)
   })
 }
 

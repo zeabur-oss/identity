@@ -1490,6 +1490,7 @@ mod tests {
     async fn linking_needs_a_fresh_confirmation_and_a_session() {
         let h = harness().await;
         let stale = account_session(&h, "alice", 600).await;
+        let fresh = account_session(&h, "alice", 0).await;
         let cases = [
             (&stale.cookie, "reauth-required"),
             (&String::new(), "signed-out"),
