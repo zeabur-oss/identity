@@ -24,7 +24,7 @@ mod tests {
     use zeabur_identity_core::account::AccountType;
     use zeabur_identity_core::clock::{Clock, SystemClock};
     use zeabur_identity_core::config::BaseUrl;
-    use zeabur_identity_core::crypto::{Sealer, sha256};
+    use zeabur_identity_core::crypto::{Sealer, random, sha256};
     use zeabur_identity_keys::Algorithm;
     use zeabur_identity_keys::jwk::JwkSet;
     use zeabur_identity_keys::jws::sign_compact;
@@ -1716,11 +1716,13 @@ mod tests {
 
             // At the callback, the code is not sent anywhere.
             let fresh = google_provider(GOOGLE_ISSUER);
+            let verifier = URL_SAFE_NO_PAD.encode(random::<32>().unwrap());
+            let nonce = URL_SAFE_NO_PAD.encode(random::<32>().unwrap());
             let exchange = Exchange {
                 code: "code-1",
-                verifier: VERIFIER,
+                verifier: &verifier,
                 redirect_uri: "https://login.example.com/upstream/google/callback",
-                nonce: "nonce",
+                nonce: &nonce,
             };
             assert!(
                 fresh
