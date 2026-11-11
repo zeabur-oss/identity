@@ -752,7 +752,7 @@ approved = "2026-10-28"
 name = "chacha20"
 kind = "unsafe"
 reason = "WebAuthn relying party: SIMD backends of the ChaCha20 generator behind rand 0.10"
-approved = "pending"
+approved = "2026-11-11"
 
 [[crate]]
 name = "cmov"
@@ -764,7 +764,7 @@ approved = "2026-10-29"
 name = "const-oid"
 kind = "unsafe"
 reason = "WebAuthn relying party: one `unsafe` in OID parsing (RustCrypto, used by crypto-glue)"
-approved = "pending"
+approved = "2026-11-11"
 
 [[crate]]
 name = "cpufeatures"
@@ -794,7 +794,7 @@ approved = "2026-10-28"
 name = "der"
 kind = "unsafe"
 reason = "WebAuthn relying party: DER encoding of attestation certificates and keys (RustCrypto)"
-approved = "pending"
+approved = "2026-11-11"
 
 [[crate]]
 name = "deranged"
@@ -806,7 +806,7 @@ approved = "2026-10-28"
 name = "elliptic-curve"
 kind = "unsafe"
 reason = "WebAuthn relying party: verifying ECDSA passkey signatures with public keys (RustCrypto)"
-approved = "pending"
+approved = "2026-11-11"
 
 [[crate]]
 name = "flagset"
@@ -926,7 +926,7 @@ approved = "2026-10-28"
 name = "scrypt"
 kind = "unsafe"
 reason = "WebAuthn relying party: reached through pkcs8's encrypted-key support; passkey verification does not call it"
-approved = "pending"
+approved = "2026-11-11"
 
 [[crate]]
 name = "serde_with"
@@ -980,7 +980,7 @@ approved = "2026-10-28"
 name = "utf_types"
 kind = "unsafe"
 reason = "URL and IDNA parsing: UTF-8 iteration under utf8_iter 1.1"
-approved = "pending"
+approved = "2026-11-11"
 
 [[crate]]
 name = "uuid"
