@@ -7,7 +7,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
-k3s_image="${K3S_IMAGE:-rancher/k3s:v1.36.5-k3s1}"
+k3s_image="${K3S_IMAGE:-rancher/k3s:v1.37.2-k3s1}"
 cluster=zeabur-identity
 work="$(mktemp -d -p "${RUNNER_TEMP:-${TMPDIR:-/tmp}}" zeabur-identity-ci.XXXXXX)"
 

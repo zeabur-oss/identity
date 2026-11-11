@@ -61,7 +61,7 @@ tower-http = { version = "0.7", default-features = false, features = ["timeout"]
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "json", "std"] }
 url = "2"
-webauthn-rs = { version = "=0.6.1-dev", features = ["conditional-ui", "danger-allow-state-serialisation"] }
+webauthn-rs = { version = "=0.6.2", features = ["conditional-ui", "danger-allow-state-serialisation"] }
 
 # Lint policy (see CONTRIBUTING.md).
 # Everything is `warn` so work in progress still compiles; CI runs with `-D warnings`.
