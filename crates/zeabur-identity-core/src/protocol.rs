@@ -1,4 +1,4 @@
-//! Names that several parts of Zeabur Identity, and kube-apiserver's configuration, must agree on.
+//! Endpoint paths that several parts of Zeabur Identity must agree on.
 
 /// Path of the authorization endpoint.
 pub const AUTHORIZATION_PATH: &str = "/authorize";
@@ -16,10 +16,3 @@ pub const OPENID_CONFIGURATION_PATH: &str = "/.well-known/openid-configuration";
 pub const USERINFO_PATH: &str = "/userinfo";
 /// RFC 8414 location for an issuer without a path (RFC 8414 §3).
 pub const OAUTH_METADATA_PATH: &str = "/.well-known/oauth-authorization-server";
-
-/// Prefix kube-apiserver puts before every Zeabur Identity username and group.
-pub const IDENTITY_PREFIX: &str = "zeabur:";
-/// The group every token of an admin account carries, and no other token. Installed RBAC makes
-/// `zeabur:admins` cluster admin. A regular account cannot hold this group (see
-/// [`crate::account`]).
-pub const ADMIN_GROUP: &str = "admins";

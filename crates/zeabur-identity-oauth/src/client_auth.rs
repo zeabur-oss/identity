@@ -12,8 +12,9 @@
 use axum::http::{HeaderMap, header};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
+use zeabur_identity_api::client::ClientType;
 use zeabur_identity_core::crypto::{ct_eq, hash_secret};
-use zeabur_identity_store::{Client, ClientType, Directory};
+use zeabur_identity_store::{Client, Directory};
 
 use super::error::{ErrorCode, OAuthError};
 use super::params::Params;

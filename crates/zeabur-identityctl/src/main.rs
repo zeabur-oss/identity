@@ -7,8 +7,8 @@ mod output;
 use std::process::ExitCode;
 
 use clap::Parser as _;
+use zeabur_identity_api::user::AccountType;
 use zeabur_identity_core::clock::Clock as _;
-use zeabur_identity_k8s::crd::user::AccountType;
 
 use crate::cli::{
     AccountTypeArg, AccountTypeArgs, Cli, ClientCommand, ClientCreateArgs, ClientKind, Command,
@@ -18,7 +18,7 @@ use crate::cli::{
 fn main() -> ExitCode {
     match Cli::parse().command {
         Command::SetupLink(args) => setup_link(&args),
-        Command::Crds => print_json(zeabur_identity_k8s::crd::definitions_json()),
+        Command::Crds => print_json(zeabur_identity_api::definitions_json()),
         Command::Rbac { namespace } => {
             print_json(zeabur_identity_k8s::rbac::manifests_json(&namespace))
         }
@@ -53,7 +53,7 @@ fn resources() -> ExitCode {
 }
 
 fn client_create(args: ClientCreateArgs) -> ExitCode {
-    use zeabur_identity_k8s::crd::client::ClientType;
+    use zeabur_identity_api::client::ClientType;
     let new = zeabur_identity_k8s::clients::NewClient {
         kind: match args.kind {
             ClientKind::Public => ClientType::Public,

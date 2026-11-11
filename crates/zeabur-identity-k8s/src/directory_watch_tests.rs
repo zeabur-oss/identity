@@ -593,7 +593,7 @@ async fn known_clients_read_latest_authorization_during_watch_interruption() {
     assert_eq!(current.display_name.as_deref(), Some("Updated"));
     assert_eq!(
         current.kind,
-        zeabur_identity_store::ClientType::Confidential
+        zeabur_identity_api::client::ClientType::Confidential
     );
     assert_eq!(
         current.secret_hash,

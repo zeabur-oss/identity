@@ -15,13 +15,14 @@ mod tests {
     use kube::api::Api;
     use serde_json::{Value, json};
     use tokio::sync::{Barrier, Mutex};
+    use zeabur_identity_api::credential::CredentialType;
     use zeabur_identity_core::clock::UnixTime;
     use zeabur_identity_k8s::credentials::KubeCredentialStore;
     use zeabur_identity_k8s::grants::KubeGrantStore;
     use zeabur_identity_k8s::setup::KubeSetupStore;
     use zeabur_identity_store::{
-        AccountEvent, CredentialStore as _, CredentialType, GrantStore as _, NewExternal, Removal,
-        Rename, SetupStore as _, Unlink, User, Verification,
+        AccountEvent, CredentialStore as _, GrantStore as _, NewExternal, Removal, Rename,
+        SetupStore as _, Unlink, User, Verification,
     };
 
     const ALICE_UID: &str = "uid-alice";

@@ -11,6 +11,7 @@ publish = false
 
 [workspace.dependencies]
 # Workspace crates, levelled from the bottom up.
+zeabur-identity-api = { path = "crates/zeabur-identity-api" }
 zeabur-identity-core = { path = "crates/zeabur-identity-core" }
 zeabur-identity-keys = { path = "crates/zeabur-identity-keys" }
 zeabur-identity-store = { path = "crates/zeabur-identity-store" }

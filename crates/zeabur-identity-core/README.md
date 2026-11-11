@@ -12,8 +12,7 @@ Primitives every Zeabur Identity crate shares. Nothing here performs I/O.
   protocol state with AES-256-GCM-SIV.
 - [`config`](crate::config): validated configuration values, in particular
   [`BaseUrl`](crate::config::BaseUrl), the form of the issuer identifier.
-- [`protocol`](crate::protocol): endpoint paths and group names that several crates and the
-  kube-apiserver configuration must agree on.
+- [`protocol`](crate::protocol): endpoint paths that several crates must agree on.
 - [`account`](crate::account): account types, the install-wide settings, and which sign-in
   methods each account type may use.
 

@@ -14,6 +14,7 @@ mod tests {
     use serde_json::{Value, json};
     use tokio::sync::Mutex;
     use tower::ServiceExt as _;
+    use zeabur_identity_api::client::ClientType;
     use zeabur_identity_core::account::AccountType;
     use zeabur_identity_core::clock::{Clock as _, SystemClock};
     use zeabur_identity_core::config::BaseUrl;
@@ -27,7 +28,7 @@ mod tests {
     use zeabur_identity_oauth::endpoints::router;
     use zeabur_identity_oauth::refresh::RefreshToken;
     use zeabur_identity_oauth::{AuthorizationServer, Lifetimes, OneTimeIds};
-    use zeabur_identity_store::{Client, ClientType, MemoryDirectory, User};
+    use zeabur_identity_store::{Client, MemoryDirectory, User};
 
     struct Backend {
         credentials: bool,

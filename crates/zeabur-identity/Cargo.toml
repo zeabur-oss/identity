@@ -11,6 +11,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+zeabur-identity-api.workspace = true
 zeabur-identity-core.workspace = true
 zeabur-identity-keys.workspace = true
 zeabur-identity-store.workspace = true

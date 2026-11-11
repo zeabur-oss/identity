@@ -1,8 +1,9 @@
-//! Custom resources in the `identity.zeabur.com` API group.
+#![doc = include_str!("../README.md")]
+//! # Custom resources
 //!
 //! Zeabur Identity's long-term state lives in five namespaced kinds; private key material lives in
-//! Secrets ([`crate::keys`], [`crate::setup`], [`crate::internal_tls`]). Short-lived state
-//! (pre-login flows, WebAuthn challenges, authorization codes) never reaches the API server.
+//! Secrets. Short-lived state (pre-login flows, WebAuthn challenges, authorization codes) never
+//! reaches the API server.
 //! Each kind exists because a native object cannot do its job:
 //!
 //! - [`user::User`]: admins or GitOps own `spec`; Zeabur Identity only reads it. A custom resource
@@ -56,6 +57,14 @@ use kube::CustomResourceExt as _;
 
 /// The API group.
 pub const GROUP: &str = "identity.zeabur.com";
+
+/// Prefix kube-apiserver puts before every Zeabur Identity username and group.
+pub const IDENTITY_PREFIX: &str = "zeabur:";
+
+/// The group every token of an admin account carries, and no other token. Kubernetes sees it as
+/// `zeabur:admins`, which the install binds to `cluster-admin`. A `User` gets it only from
+/// `accountType: Admin`.
+pub const ADMIN_GROUP: &str = "admins";
 
 /// Label naming the `User` object a record belongs to.
 pub const USER_LABEL: &str = "identity.zeabur.com/user";

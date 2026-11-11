@@ -10,6 +10,7 @@ mod tests {
     use axum::http::{HeaderMap, Request, StatusCode, header};
     use http_body_util::BodyExt as _;
     use tower::ServiceExt as _;
+    use zeabur_identity_api::client::ClientType;
     use zeabur_identity_core::clock::SystemClock;
     use zeabur_identity_core::config::BaseUrl;
     use zeabur_identity_core::crypto::Sealer;
@@ -21,7 +22,7 @@ mod tests {
     use zeabur_identity_oauth::{AuthorizationServer, Lifetimes, OneTimeIds};
     use zeabur_identity_signin::pages;
     use zeabur_identity_signin::upstream::provider::Kind;
-    use zeabur_identity_store::{Client, ClientType, MemoryDirectory, MemoryGrantStore};
+    use zeabur_identity_store::{Client, MemoryDirectory, MemoryGrantStore};
     use zeabur_identity_ui::CSP;
 
     const CHALLENGE: &str = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";

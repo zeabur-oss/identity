@@ -18,6 +18,7 @@ mod tests {
     use serde_json::{Value, json};
     use tower::ServiceExt as _;
     use tracing::instrument::WithSubscriber as _;
+    use zeabur_identity_api::client::ClientType;
     use zeabur_identity_core::account::AccountType;
     use zeabur_identity_core::clock::{Clock, SystemClock};
     use zeabur_identity_core::config::BaseUrl;
@@ -38,9 +39,9 @@ mod tests {
     use zeabur_identity_signin::upstream::provider::{Endpoints, Kind, Provider};
     use zeabur_identity_signin::upstream::{self, UPSTREAM_COOKIE, Upstream};
     use zeabur_identity_store::{
-        Client, ClientType, CredentialStore as _, Directory as _, GrantStore as _,
-        MemoryCredentialStore, MemoryDirectory, MemoryGrantStore, MemorySetupStore, NewExternal,
-        NewGrant, SetupStore as _, User, external_credential_name,
+        Client, CredentialStore as _, Directory as _, GrantStore as _, MemoryCredentialStore,
+        MemoryDirectory, MemoryGrantStore, MemorySetupStore, NewExternal, NewGrant,
+        SetupStore as _, User, external_credential_name,
     };
     use zeabur_identity_test_support::logging::Capture;
     use zeabur_identity_ui::i18n::Lang;

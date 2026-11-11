@@ -11,9 +11,9 @@ mod tests {
     use axum::{Json, Router};
     use http_body_util::BodyExt as _;
     use serde_json::{Value, json};
+    use zeabur_identity_api::user::AccountType;
     use zeabur_identity_core::clock::UnixTime;
     use zeabur_identity_core::config::BaseUrl;
-    use zeabur_identity_k8s::crd::user::AccountType;
     use zeabur_identity_k8s::invitations::{Invitee, invite};
     use zeabur_identity_k8s::setup::{LinkError, MAX_VALID_FOR, issue_setup_link};
 

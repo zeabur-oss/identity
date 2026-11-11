@@ -45,12 +45,12 @@ use k8s_openapi::api::rbac::v1::{
 };
 use kube::api::ObjectMeta;
 use serde_json::Value;
+use zeabur_identity_api::{ADMIN_GROUP, GROUP, IDENTITY_PREFIX};
 use zeabur_identity_core::account::SETTINGS_CONFIG_MAP;
 
 use super::keys::SECRET_TYPE;
-use super::setup::{ADMIN_GROUP, SETUP_SECRET};
+use super::setup::SETUP_SECRET;
 use super::{KEY_SECRET, MANAGED_BY, internal_tls};
-use crate::crd::GROUP;
 
 /// Name of the service account, `Role` and `RoleBinding`.
 pub const NAME: &str = "zeabur-identity";
@@ -58,8 +58,6 @@ pub const NAME: &str = "zeabur-identity";
 /// Name of the `ClusterRoleBinding` that binds `zeabur:admins` (the admin accounts) to
 /// `cluster-admin`.
 pub const ADMINS_BINDING: &str = "zeabur-identity-cluster-admins";
-
-pub use zeabur_identity_core::protocol::IDENTITY_PREFIX;
 
 /// Default namespace.
 pub const DEFAULT_NAMESPACE: &str = "zeabur-identity";

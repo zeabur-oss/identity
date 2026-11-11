@@ -51,6 +51,11 @@ use k8s_openapi::api::core::v1::Secret;
 use kube::api::{Api, DeleteParams, ListParams, ObjectMeta, PostParams};
 use kube::{Client, Resource as _, ResourceExt as _};
 use thiserror::Error;
+use zeabur_identity_api::credential::Credential;
+use zeabur_identity_api::grant::Grant;
+use zeabur_identity_api::invitation::Invitation;
+use zeabur_identity_api::user::{AccountType, User, UserSpec};
+use zeabur_identity_api::{EXPIRES_AT_ANNOTATION, USER_LABEL};
 use zeabur_identity_core::clock::UnixTime;
 use zeabur_identity_core::config::BaseUrl;
 use zeabur_identity_core::crypto::{hash_secret, random};
@@ -63,17 +68,11 @@ use super::MANAGED_BY;
 use super::credentials::KubeCredentialStore;
 use super::objects::{DeleteOutcome, delete_if_unchanged};
 use super::users::{owned_by_another, user_owner_uid};
-use crate::crd::credential::Credential;
-use crate::crd::grant::Grant;
-use crate::crd::invitation::Invitation;
-use crate::crd::user::{AccountType, User, UserSpec};
-use crate::crd::{EXPIRES_AT_ANNOTATION, USER_LABEL};
 
 /// Name of the setup Secret.
 pub const SETUP_SECRET: &str = "zeabur-identity-setup";
 /// Its `type`.
 pub const SECRET_TYPE: &str = "identity.zeabur.com/setup";
-pub use zeabur_identity_core::protocol::ADMIN_GROUP;
 
 /// The longest a setup link or an invitation stays valid.
 pub const MAX_VALID_FOR: Duration = Duration::from_hours(7 * 24);

@@ -45,10 +45,10 @@ use kube::runtime::watcher::{self, Event};
 use kube::{Client, Resource};
 use serde::de::DeserializeOwned;
 use tokio::sync::watch;
+use zeabur_identity_api::{EXPIRES_AT_ANNOTATION, EXPIRY_BUCKET_LABEL};
 use zeabur_identity_core::clock::{Clock, UnixTime};
 
 use super::objects::{DeleteOutcome, delete_if_unchanged};
-use crate::crd::{EXPIRES_AT_ANNOTATION, EXPIRY_BUCKET_LABEL};
 use crate::watch::relisting_watcher;
 
 /// How long to wait before retrying a delete that failed for an infrastructure reason.

@@ -13,10 +13,10 @@ mod tests {
     use axum::http::{HeaderValue, Uri};
     use proptest::prelude::*;
     use url::{Host, Url};
+    use zeabur_identity_api::client::{ClientType, MAX_REDIRECT_URI};
     use zeabur_identity_k8s::clients::redirect_uri_allowed;
-    use zeabur_identity_k8s::crd::client::MAX_REDIRECT_URI;
     use zeabur_identity_oauth::authorize::response_location;
-    use zeabur_identity_store::{Client, ClientType};
+    use zeabur_identity_store::Client;
 
     use crate::redirect_uri_candidates::candidate;
 

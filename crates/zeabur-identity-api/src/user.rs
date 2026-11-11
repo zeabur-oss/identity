@@ -83,8 +83,7 @@ pub struct UserSpec {
     pub account_type: AccountType,
 }
 
-/// What kind of account a `User` is. See
-/// [`zeabur_identity_core::account::AccountType`].
+/// What kind of account a `User` is.
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum AccountType {
     /// Day-to-day work.
@@ -92,13 +91,4 @@ pub enum AccountType {
     Regular,
     /// Administers the cluster.
     Admin,
-}
-
-impl From<AccountType> for zeabur_identity_core::account::AccountType {
-    fn from(value: AccountType) -> Self {
-        match value {
-            AccountType::Regular => Self::Regular,
-            AccountType::Admin => Self::Admin,
-        }
-    }
 }

@@ -6,8 +6,54 @@
 )]
 
 use kube::{CustomResource, KubeSchema};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-pub use zeabur_identity_store::ClientType;
+
+/// Client type (RFC 6749 §2.1).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema)]
+pub enum ClientType {
+    /// Cannot keep a secret; identifies itself with `client_id` only. Like every client, it
+    /// must use PKCE.
+    Public,
+    /// Authenticates at the token endpoint.
+    Confidential,
+}
+
+/// A JWS signing algorithm this issuer uses.
+///
+/// kube-apiserver accepts only the RS, ES and PS families ([kube-apiserver OIDC]), so EdDSA is
+/// not offered. ES256 is the default for every token: smaller tokens and faster signing than
+/// RS256, and [RFC 7518] §3.1 marks it "Recommended+". RS256 exists only because
+/// [OIDC Discovery] §3 requires it in `id_token_signing_alg_values_supported`.
+///
+/// [kube-apiserver OIDC]: https://github.com/kubernetes/kubernetes/blob/master/staging/src/k8s.io/apiserver/plugin/pkg/authenticator/token/oidc/oidc.go
+/// [RFC 7518]: https://www.rfc-editor.org/rfc/rfc7518
+/// [OIDC Discovery]: https://openid.net/specs/openid-connect-discovery-1_0.html
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
+pub enum Algorithm {
+    /// ECDSA using P-256 and SHA-256 (RFC 7518 §3.4).
+    #[serde(rename = "ES256")]
+    Es256,
+    /// RSASSA-PKCS1-v1_5 using SHA-256 (RFC 7518 §3.3).
+    #[serde(rename = "RS256")]
+    Rs256,
+}
+
+impl Algorithm {
+    /// All algorithms, in the order they are advertised.
+    pub const ALL: [Self; 2] = [Self::Es256, Self::Rs256];
+
+    /// The JWA name.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Es256 => "ES256",
+            Self::Rs256 => "RS256",
+        }
+    }
+}
 
 /// Longest display name.
 pub const MAX_DISPLAY_NAME: usize = 128;
@@ -25,8 +71,9 @@ pub const MAX_AUDIENCE: usize = 256;
 /// loopback `http` (`127.0.0.1` or `[::1]`) with a path. Printable ASCII only, so the redirect's
 /// `Location` header can carry it; no fragment (RFC 6749 §3.1.2) and no user information. This is
 /// the floor that keeps a GitOps mistake from reaching the server, not a full URL grammar: Go
-/// accepts some hosts and ports that browsers reject. [`crate::clients::redirect_uri_allowed`]
-/// adds a browser's (WHATWG) parse on top, for tools that check before `kubectl apply`.
+/// accepts some hosts and ports that browsers reject.
+/// `zeabur_identity_k8s::clients::redirect_uri_allowed` adds a browser's (WHATWG) parse on top, for
+/// tools that check before `kubectl apply`.
 pub const REDIRECT_URI_RULE: &str = concat!(
     "self.all(u, u.matches('^[!-~]+$') && !u.contains('#') && isURL(u)",
     " && !u.matches('^[^/]*//[^/?]*@')",
@@ -40,7 +87,7 @@ pub const HOME_URL_RULE: &str = concat!(
     "self.matches('^[!-~]+$') && isURL(self) && !self.matches('^[^/]*//[^/?]*@')",
     " && url(self).getScheme() == 'https' && url(self).getHostname() != ''",
 );
-/// The stored secret: [`zeabur_identity_core::crypto::hash_secret`]'s output.
+/// The stored secret: `sha256:` and the lowercase hex SHA-256 of the secret.
 pub const SECRET_HASH_PATTERN: &str = r"^sha256:[0-9a-f]{64}$";
 
 /// A registered OAuth 2.0 / OpenID Connect client. The object name is the `client_id`.
@@ -104,7 +151,7 @@ pub struct OAuthClientSpec {
 
     /// Algorithm for ID tokens: `ES256` (default) or `RS256` for clients that need it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub id_token_signing_alg: Option<zeabur_identity_keys::Algorithm>,
+    pub id_token_signing_alg: Option<Algorithm>,
 
     /// Where people open this application, for example `https://zeabur.example.com/`. When set,
     /// the sign-in page links here, labelled with the display name, for anyone who reaches it with

@@ -9,6 +9,8 @@ use std::future::Future;
 
 use kube::ResourceExt as _;
 use kube::api::{Api, DeleteParams, ListParams, ObjectMeta};
+use zeabur_identity_api::grant::{Grant as GrantObject, GrantReauth, GrantSpec, GrantStatus};
+use zeabur_identity_api::{CLIENT_LABEL, EXPIRES_AT_ANNOTATION, EXPIRY_BUCKET_LABEL, USER_LABEL};
 use zeabur_identity_core::clock::UnixTime;
 use zeabur_identity_core::crypto::ct_eq;
 use zeabur_identity_store::{
@@ -20,8 +22,6 @@ use super::objects::{
     CreateOutcome, ReplaceOutcome, create_once, list_all, replace_status_if_unchanged,
 };
 use super::users::{owned_by_another, user_owner};
-use crate::crd::grant::{Grant as GrantObject, GrantReauth, GrantSpec, GrantStatus};
-use crate::crd::{CLIENT_LABEL, EXPIRES_AT_ANNOTATION, EXPIRY_BUCKET_LABEL, USER_LABEL};
 
 /// How many times a rotation re-reads after losing a compare-and-swap.
 const MAX_ATTEMPTS: usize = 4;

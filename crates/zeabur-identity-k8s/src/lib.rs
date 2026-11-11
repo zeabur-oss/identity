@@ -1,7 +1,6 @@
 #![doc = include_str!("../README.md")]
 
 pub mod clients;
-pub mod crd;
 pub mod credentials;
 pub mod deployment;
 pub mod directory;
