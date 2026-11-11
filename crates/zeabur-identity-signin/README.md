@@ -13,9 +13,9 @@ the sign-in pages.
 | `pages::router` | `GET /login`, `GET /setup`, `GET /assets/{name}` |
 
 `passkeys` wraps webauthn-rs as the relying party, `upstream::provider` talks to GitHub and
-Google, and `problem` renders errors as RFC 9457 problem details ([RFC 9457 §3][rfc9457]).
+to OpenID providers such as Google, which it finds through their discovery documents, and `problem` renders errors as RFC 9457 problem details ([RFC 9457 §3][rfc9457]).
 
-Depends on `zeabur-identity-core`, `zeabur-identity-keys` (Google ID token signatures), `zeabur-identity-store` (users,
+Depends on `zeabur-identity-core`, `zeabur-identity-keys` (upstream ID token signatures), `zeabur-identity-store` (users,
 credentials, enrolment tokens), `zeabur-identity-oauth` (the pending authorization request a sign-in
 completes) and `zeabur-identity-ui` (page rendering). Used by the `zeabur-identity` server and the end-to-end
 tests; `zeabur-identity-test-support` provides the software authenticator for the tests.

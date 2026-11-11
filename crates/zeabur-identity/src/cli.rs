@@ -5,9 +5,10 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use clap::{Parser, ValueEnum};
+use zeabur_identity_api::upstream::Issuer;
 use zeabur_identity_core::config::{BaseUrl, ConfigError, parse_duration};
 use zeabur_identity_keys::rotation::RotationPolicy;
-use zeabur_identity_signin::upstream::provider::Kind;
+use zeabur_identity_signin::upstream::provider::{GOOGLE_ISSUER, Kind};
 
 use crate::config::{ServeConfig, Store, UpstreamConfig};
 
@@ -100,6 +101,16 @@ pub struct ServeArgs {
     )]
     pub google_client_secret_file: Option<PathBuf>,
 
+    /// The OpenID Connect issuer for "Continue with Google". Zeabur Identity reads its endpoints
+    /// from `<issuer>/.well-known/openid-configuration`.
+    #[arg(
+        long,
+        env = "ZEABUR_IDENTITY_GOOGLE_ISSUER",
+        default_value = GOOGLE_ISSUER,
+        value_parser = parse_upstream_issuer
+    )]
+    pub google_issuer: Issuer,
+
     /// Lifetime of an admin account's access and ID tokens. They carry `cluster-admin`.
     #[arg(long, env = "ZEABUR_IDENTITY_ADMIN_TOKEN_LIFETIME", default_value = "5m", value_parser = parse_duration)]
     pub admin_token_lifetime: Duration,
@@ -127,6 +138,10 @@ pub struct ServeArgs {
 
 fn parse_issuer(input: &str) -> Result<BaseUrl, ConfigError> {
     BaseUrl::parse("issuer", input)
+}
+
+fn parse_upstream_issuer(input: &str) -> Result<Issuer, String> {
+    Issuer::new(input).map_err(|error| error.to_string())
 }
 
 fn parse_internal_url(input: &str) -> Result<BaseUrl, ConfigError> {
@@ -167,6 +182,7 @@ impl ServeArgs {
                 })
             })
             .collect(),
+            google_issuer: self.google_issuer.clone(),
             internal_listen: self.internal_listen,
             internal_url: self.internal_url.clone(),
             store: Store {
@@ -205,6 +221,15 @@ mod tests {
     #[test]
     fn rejects_bad_issuers_and_inconsistent_timings() {
         assert!(parse(&["--issuer", "http://login.example.com"]).is_err());
+        assert!(
+            parse(&[
+                "--issuer",
+                "https://login.example.com",
+                "--google-issuer",
+                "http://accounts.example.com",
+            ])
+            .is_err()
+        );
         let args = parse(&[
             "--issuer",
             "https://login.example.com",

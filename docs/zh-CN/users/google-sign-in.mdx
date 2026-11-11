@@ -10,7 +10,7 @@ description: 配置 Google OAuth 客户端并关联用户账号，让普通账�
 - 将 Zeabur Identity 安装在 `zeabur-identity` Namespace，并使用集群管理员的 kubeconfig 执行 `zeabur-identityctl` 和 `kubectl`。
 - 准备真实的公共域名。Google 只接受公共域名上的重定向 URI，详见 [Google 的 URI 验证规则](https://developers.google.com/identity/protocols/oauth2/web-server#uri-validation)。[在 k3s 上安装并登录](../get-started/quickstart.mdx)使用的本地名称 `identity.example.test` 不适用。
 - 确认浏览器能通过该域名连接 Zeabur Identity，并信任其 TLS 证书。
-- 确认 Zeabur Identity 的 Pod 能通过 HTTPS 向外连接 `oauth2.googleapis.com` 和 `www.googleapis.com`。
+- 确认 Zeabur Identity 的 Pod 能通过 HTTPS 向外连接 `accounts.google.com`、`oauth2.googleapis.com` 和 `www.googleapis.com`。
 
 以下示例使用 `https://identity.example.com`，请将各处示例替换成安装时配置的 Issuer：
 
@@ -147,5 +147,6 @@ kubectl -n zeabur-identity rollout status deploy/zeabur-identity
 | `org_internal` 或 Google 访问政策错误 | 检查应用的 **Audience** 和账号所属组织的政策，详见 [Google 的受众规则](https://support.google.com/cloud/answer/15549945)。 |
 | **This account is not linked to any user here** | 使用邀请将选定的 Google 账号关联到用户。Zeabur Identity 不按电子邮件地址或姓名匹配账号。 |
 | **Use a passkey for this account** | 该 Google 账号对应管理员账号。管理员只能使用通行密钥登录。 |
-| 登录页没有 Google 按钮，或 Pod 无法读取密钥 | 检查两个 `--google-*` 选项、`--config-secret zeabur-identity-config`、Secret 中的 `google-client-secret` 键和文件路径。如果你自定义了 Pod 的安全上下文，请保留生成的 `fsGroup`。 |
+| 登录页没有 Google 按钮，或 Pod 无法读取密钥 | 检查 `--google-client-id`、`--google-client-secret-file`、`--config-secret zeabur-identity-config`、Secret 中的 `google-client-secret` 键和文件路径。如果你自定义了 Pod 的安全上下文，请保留生成的 `fsGroup`。 |
+| 点击 **Continue with Google** 后没有跳转到 Google，而是显示错误 | Zeabur Identity 会先从 `https://accounts.google.com/.well-known/openid-configuration` 读取 Google 的端点。在日志（`kubectl -n zeabur-identity logs deploy/zeabur-identity`）中查找 `provider_unavailable`，并检查 Pod 能否通过 HTTPS 连接 `accounts.google.com`。 |
 | 从 Google 返回后登录失败 | 执行 `kubectl -n zeabur-identity logs deploy/zeabur-identity` 查看日志，并检查 Pod 能否通过 HTTPS 连接令牌和签名密钥主机：`oauth2.googleapis.com` 和 `www.googleapis.com`。 |

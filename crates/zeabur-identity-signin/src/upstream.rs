@@ -1,5 +1,5 @@
-//! Signing in with an upstream identity provider (GitHub, Google), and linking such an account
-//! to a user with an enrolment link or from the account page.
+//! Signing in with an upstream identity provider (GitHub, an OpenID provider such as Google), and
+//! linking such an account to a user with an enrolment link or from the account page.
 //!
 //! | Route | Purpose |
 //! |---|---|
@@ -71,7 +71,7 @@ use zeabur_identity_ui::i18n::Lang;
 use zeabur_identity_ui::pages::{ErrorReason, accept_language, error_page, notice_page};
 
 use self::http::HttpClient;
-use self::provider::{Exchange, Kind, Provider, UpstreamError};
+use self::provider::{Authorization, Exchange, Kind, Provider, UpstreamError};
 use crate::account::{Account, Audit, current, log_outcome, record, require_fresh, signed_in};
 use crate::device::Requester;
 use crate::problem::Problem;
@@ -90,6 +90,11 @@ const UNKNOWN_PROVIDER: Problem = Problem::new(
     StatusCode::NOT_FOUND,
     "unknown-provider",
     "This sign-in provider isn't enabled.",
+);
+const PROVIDER_UNAVAILABLE: Problem = Problem::new(
+    StatusCode::BAD_GATEWAY,
+    "provider-unavailable",
+    "This sign-in provider is unavailable. Try again later.",
 );
 
 /// Upstream sign-in state shared by the handlers.
@@ -233,7 +238,7 @@ where
                 .and_then(|sealed| open_flow(&sign_in.oauth, sealed))
                 .ok_or(NO_REQUEST)?;
         }
-        begin(sign_in, provider, request.token, None, now)
+        begin(&service, provider, request.token, None, now).await
     }
     .await;
     match &result {
@@ -249,13 +254,22 @@ where
 
 /// Seals a new pending request into [`UPSTREAM_COOKIE`] and answers with the provider's
 /// authorization URL.
-fn begin<D, G, C, K, S>(
-    sign_in: &SignIn<D, G, C, K, S>,
+async fn begin<D, G, C, K, S, H>(
+    service: &Upstream<D, G, C, K, S, H>,
     provider: &Provider,
     link: Option<String>,
     account: Option<Bound>,
     now: UnixTime,
-) -> Result<Response, Problem> {
+) -> Result<Response, Problem>
+where
+    D: Directory,
+    G: GrantStore,
+    C: Clock,
+    K: CredentialStore,
+    S: SetupStore,
+    H: HttpClient,
+{
+    let sign_in = &service.sign_in;
     let pending = Pending {
         id: hex(&random::<16>().map_err(internal)?),
         provider: provider.id().clone(),
@@ -267,12 +281,19 @@ fn begin<D, G, C, K, S>(
         expires_at: now.saturating_add(LIFETIME),
     };
     let challenge = URL_SAFE_NO_PAD.encode(sha256(pending.verifier.as_bytes()));
-    let url = provider.authorize_url(
-        &redirect_uri(sign_in.oauth.issuer.as_str(), provider.id()),
-        &pending.state,
-        &pending.nonce,
-        &challenge,
-    );
+    let request = Authorization {
+        redirect_uri: &redirect_uri(sign_in.oauth.issuer.as_str(), provider.id()),
+        state: &pending.state,
+        nonce: &pending.nonce,
+        challenge: &challenge,
+    };
+    let url = provider
+        .authorize_url(&service.http, now, request)
+        .await
+        .map_err(|error| {
+            tracing::warn!(reason = "provider_unavailable", %error, "upstream provider unavailable");
+            PROVIDER_UNAVAILABLE
+        })?;
     let sealed = serde_json::to_vec(&pending)
         .map_err(internal)
         .and_then(|json| sign_in.oauth.sealer.seal(PURPOSE, &json).map_err(internal))?;
@@ -330,7 +351,7 @@ where
             user: account.user.name.clone(),
             subject: account.user.subject.clone(),
         };
-        begin(sign_in, provider, None, Some(bound), now)
+        begin(&service, provider, None, Some(bound), now).await
     }
     .await;
     log_outcome(
@@ -429,7 +450,7 @@ fn verification_failure(error: &UpstreamError) -> Failure {
         UpstreamError::IdToken("expired" | "issued in the future") => {
             (reason, ErrorReason::ClockSkew, Some(error.to_string()))
         }
-        UpstreamError::IdToken(_) | UpstreamError::Protocol(_) => {
+        UpstreamError::IdToken(_) | UpstreamError::Protocol(_) | UpstreamError::Discovery(_) => {
             (reason, ErrorReason::ProviderFailed, Some(error.to_string()))
         }
         UpstreamError::Http(_) => (reason, ErrorReason::ProviderFailed, None),
