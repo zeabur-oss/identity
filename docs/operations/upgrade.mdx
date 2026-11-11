@@ -13,6 +13,99 @@ Zeabur Identity is currently in alpha and provides no upgrade or rollback guaran
 
 Zeabur Identity runs a single replica. Updates replace that replica rather than perform a rolling update. An upgrade briefly interrupts service, and users who are signing in at that time must sign in again. Don't add replicas to hide the interruption.
 
+## Upgrade notes
+
+Each version below lists what you must do before you upgrade to it. If you skip versions, read every section from the version you run now to the version you're moving to. The newest version is at the top.
+
+### v0.1 → v0.2
+
+v0.2 sets up GitHub and Google sign-in with `UpstreamProvider` objects instead of server options, removes several server options, and changes how linked accounts are stored. Passkeys aren't affected.
+
+#### 1. Remove the options v0.2 doesn't have
+
+The server refuses to start while one of these options or its `ZEABUR_IDENTITY_*` variable is set, and the log names the option. Leave them out of every `--serve-arg` when you generate the upgrade files, and delete any you added to the Deployment's `args` or `env` yourself:
+
+- `--github-client-id`, `--github-client-secret-file`, `--google-client-id`, `--google-client-secret-file`: replaced by `UpstreamProvider` objects (step 3).
+- `--store`: the server always keeps its state in Kubernetes objects.
+- `--upstream-ca-file`: the image's CA bundle already trusts GitHub and Google. If your cluster reaches them through a proxy that re-signs TLS with its own CA, mount that CA into a directory and set both `SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt` and `SSL_CERT_DIR=<that directory>` on the Deployment.
+- `--key-rotation-period`, `--key-publish-ahead`, `--key-retain-after`, `--metadata-max-age`, `--worker-threads`, `--key-secret`: the server always uses the former defaults.
+
+#### 2. Allow Google's discovery address
+
+If you use Google sign-in and your cluster limits outgoing traffic, also allow HTTPS to `accounts.google.com`. Zeabur Identity now reads Google's endpoints from `https://accounts.google.com/.well-known/openid-configuration` before each sign-in.
+
+#### 3. Create the sign-in providers before the new Deployment
+
+If you use GitHub or Google sign-in, do this after you apply the new CRDs and before you apply the new manifests in the **Review and apply the manifests** step. Otherwise the **Continue with GitHub** and **Continue with Google** buttons disappear until you do.
+
+Store each client secret in the Secret `zeabur-identity-upstream`, under the key `github` or `google`. Use the same client secrets as v0.1. Leave out a provider you don't use:
+
+```sh
+read -rs GITHUB_SECRET     # paste the GitHub client secret, then Enter
+read -rs GOOGLE_SECRET     # paste the Google client secret, then Enter
+kubectl -n "$NS" create secret generic zeabur-identity-upstream \
+  --from-file=github=<(printf %s "$GITHUB_SECRET") \
+  --from-file=google=<(printf %s "$GOOGLE_SECRET")
+unset GITHUB_SECRET GOOGLE_SECRET
+```
+
+Then create one `UpstreamProvider` for each, with the client IDs you passed to `--github-client-id` and `--google-client-id`. Keep the names `github` and `google`: they are part of the callback URLs registered at GitHub and Google, so those stay the same.
+
+```sh
+GITHUB_CLIENT_ID=Ov23li...                         # not a secret
+GOOGLE_CLIENT_ID=1234-abc.apps.googleusercontent.com
+kubectl apply -f - <<EOF
+apiVersion: identity.zeabur.com/v1alpha1
+kind: UpstreamProvider
+metadata: {name: github, namespace: $NS}
+spec: {type: GitHub, clientId: $GITHUB_CLIENT_ID, clientSecretKey: github}
+---
+apiVersion: identity.zeabur.com/v1alpha1
+kind: UpstreamProvider
+metadata: {name: google, namespace: $NS}
+spec:
+  type: OpenID
+  issuer: https://accounts.google.com
+  displayName: Google
+  clientId: $GOOGLE_CLIENT_ID
+  clientSecretKey: google
+EOF
+```
+
+#### 4. Keep v0.1's CRDs for a rollback
+
+Save v0.1's CRDs with the old `zeabur-identityctl` next to your upgrade record. A rollback needs them, see below.
+
+```sh
+/path/to/old/zeabur-identityctl crds > upgrade-record/crds.before.json
+```
+
+#### What changes at the first start
+
+When v0.2 starts, it changes each linked GitHub or Google account, a `Credential` of `type: GitHub` or `type: Google`, to `type: Upstream` with `provider: github` or `provider: google`. The name, owner, labels and linked account stay the same, so these accounts sign in as before. A `Credential` you create yourself for a linked account now needs `type: Upstream` and `provider`.
+
+#### Roll back to v0.1
+
+v0.1 can't read a `Credential` of `type: Upstream`, and its CRD doesn't accept one. The v0.2 CRD only allows the change from `GitHub` or `Google` to `Upstream`, and the v0.1 CRD allows no change at all, so the type can't be patched back in place. Going back to v0.1 needs both the v0.1 CRDs and each linked account written again with its old type.
+
+Restoring the pre-upgrade backup, as described under **Roll back** below, does both. If you need to keep what changed after the upgrade, do the following instead, with Zeabur Identity stopped. Accounts linked through a provider other than `github` or `google` have no v0.1 form, so this deletes them:
+
+```sh
+kubectl -n "$NS" get credentials.identity.zeabur.com -o json | jq '.items |= map(
+    select(.spec.type == "Upstream")
+    | {apiVersion, kind,
+       metadata: (.metadata | {name, namespace, labels, ownerReferences}),
+       spec: (.spec | .type = ({github: "GitHub", google: "Google"}[.provider]) | del(.provider))}
+    | select(.spec.type != null))' > upgrade-record/credentials.v0.1.json
+kubectl -n "$NS" get credentials.identity.zeabur.com -o json \
+  | jq -r '.items[] | select(.spec.type == "Upstream") | .metadata.name' \
+  | xargs -r kubectl -n "$NS" delete credentials.identity.zeabur.com
+kubectl apply --server-side -f upgrade-record/crds.before.json
+kubectl create -f upgrade-record/credentials.v0.1.json
+```
+
+Read `upgrade-record/credentials.v0.1.json` before you delete anything. Then switch back to the v0.1 image and manifests, with the options from step 1.
+
 ## Before upgrading
 
 <Steps>
@@ -70,7 +163,7 @@ Use the new version of `zeabur-identityctl` with your original installation opti
 
 ### Review version differences and test the upgrade
 
-Read the changes between the two versions, including the CRD schema, storage format, options, and token claims.
+Do what **Upgrade notes** above lists for each version you pass. Then read the release notes between the two versions, including the CRD schema, storage format, options, and token claims.
 
 Test the exact upgrade procedure on a restored copy first. Also test signing in with an existing passkey.
 

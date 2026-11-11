@@ -13,6 +13,99 @@ Zeabur Identity 目前处于 alpha 阶段，不保证升级与回滚能成功。
 
 Zeabur Identity 运行单个副本，更新时会替换副本，不采用滚动更新。升级会短暂中断服务，当时正在登录的用户必须重新登录。不要增加副本来掩盖中断。
 
+## 各版本升级须知
+
+下面每个版本列出升级到该版本前要做的事。如果跳过版本升级，从当前运行的版本读到目标版本，每一节都要看。最新的版本在最上面。
+
+### v0.1 → v0.2
+
+v0.2 改用 `UpstreamProvider` 对象配置 GitHub 与 Google 登录，不再用服务器选项，同时移除了几个服务器选项，并改变已关联账号的存储方式。通行密钥不受影响。
+
+#### 1. 移除 v0.2 没有的选项
+
+只要设置了下列任何一个选项或对应的 `ZEABUR_IDENTITY_*` 变量，服务器就不会启动，日志会写出是哪个选项。生成升级文件时，不要在 `--serve-arg` 里放这些选项；如果你自己在 Deployment 的 `args` 或 `env` 里加过，也要删掉：
+
+- `--github-client-id`、`--github-client-secret-file`、`--google-client-id`、`--google-client-secret-file`：改用 `UpstreamProvider` 对象（步骤 3）。
+- `--store`：服务器始终把状态存在 Kubernetes 对象中。
+- `--upstream-ca-file`：镜像自带的 CA 已经信任 GitHub 与 Google。如果集群要经过会用自己的 CA 重新签发 TLS 的代理才能访问它们，把这个 CA 挂载到一个目录，并在 Deployment 上同时设置 `SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt` 与 `SSL_CERT_DIR=<该目录>`。
+- `--key-rotation-period`、`--key-publish-ahead`、`--key-retain-after`、`--metadata-max-age`、`--worker-threads`、`--key-secret`：服务器始终使用原来的默认值。
+
+#### 2. 允许访问 Google 的发现地址
+
+如果你使用 Google 登录，而集群限制了出站流量，还要允许通过 HTTPS 访问 `accounts.google.com`。Zeabur Identity 现在每次登录前都会从 `https://accounts.google.com/.well-known/openid-configuration` 读取 Google 的端点。
+
+#### 3. 在新的 Deployment 之前创建登录提供方
+
+如果你使用 GitHub 或 Google 登录，请在 **检查并应用资源清单** 这一步，应用新的 CRD 之后、应用新的资源清单之前完成。没做的话，**Continue with GitHub** 和 **Continue with Google** 按钮会消失，直到补上为止。
+
+把每个客户端密钥存入 Secret `zeabur-identity-upstream`，键为 `github` 或 `google`。沿用 v0.1 的客户端密钥即可。没用到的提供方不用加：
+
+```sh
+read -rs GITHUB_SECRET     # paste the GitHub client secret, then Enter
+read -rs GOOGLE_SECRET     # paste the Google client secret, then Enter
+kubectl -n "$NS" create secret generic zeabur-identity-upstream \
+  --from-file=github=<(printf %s "$GITHUB_SECRET") \
+  --from-file=google=<(printf %s "$GOOGLE_SECRET")
+unset GITHUB_SECRET GOOGLE_SECRET
+```
+
+接着用原来传给 `--github-client-id` 和 `--google-client-id` 的客户端 ID，为每个提供方各创建一个 `UpstreamProvider`。名称要保持 `github` 和 `google`：它们是在 GitHub 和 Google 注册的回调网址的一部分，这样回调网址就不用改。
+
+```sh
+GITHUB_CLIENT_ID=Ov23li...                         # not a secret
+GOOGLE_CLIENT_ID=1234-abc.apps.googleusercontent.com
+kubectl apply -f - <<EOF
+apiVersion: identity.zeabur.com/v1alpha1
+kind: UpstreamProvider
+metadata: {name: github, namespace: $NS}
+spec: {type: GitHub, clientId: $GITHUB_CLIENT_ID, clientSecretKey: github}
+---
+apiVersion: identity.zeabur.com/v1alpha1
+kind: UpstreamProvider
+metadata: {name: google, namespace: $NS}
+spec:
+  type: OpenID
+  issuer: https://accounts.google.com
+  displayName: Google
+  clientId: $GOOGLE_CLIENT_ID
+  clientSecretKey: google
+EOF
+```
+
+#### 4. 保留 v0.1 的 CRD 以备回滚
+
+用旧版 `zeabur-identityctl` 把 v0.1 的 CRD 保存到升级记录中。回滚时会用到，见下文。
+
+```sh
+/path/to/old/zeabur-identityctl crds > upgrade-record/crds.before.json
+```
+
+#### 首次启动时会修改的数据
+
+v0.2 启动时，会把每个已关联的 GitHub 或 Google 账号，也就是 `type: GitHub` 或 `type: Google` 的 `Credential`，改为 `type: Upstream`，并加上 `provider: github` 或 `provider: google`。名称、所有者、标签和关联的账号都不变，这些账号照常登录。你自己为已关联账号创建的 `Credential`，现在要写 `type: Upstream` 和 `provider`。
+
+#### 回滚到 v0.1
+
+v0.1 读取不了 `type: Upstream` 的 `Credential`，它的 CRD 也不接受。v0.2 的 CRD 只允许从 `GitHub` 或 `Google` 改为 `Upstream`，v0.1 的 CRD 完全不允许修改，所以无法直接把类型改回去。要回到 v0.1，需要 v0.1 的 CRD，还要把每个已关联账号用旧的类型重新写入。
+
+按下方 **回滚** 的说明恢复升级前的备份，这两件事都会完成。如果要保留升级后的变更，改为在 Zeabur Identity 停止的状态下运行下列命令。通过 `github`、`google` 以外的提供方关联的账号在 v0.1 中没有对应的形式，会被删除：
+
+```sh
+kubectl -n "$NS" get credentials.identity.zeabur.com -o json | jq '.items |= map(
+    select(.spec.type == "Upstream")
+    | {apiVersion, kind,
+       metadata: (.metadata | {name, namespace, labels, ownerReferences}),
+       spec: (.spec | .type = ({github: "GitHub", google: "Google"}[.provider]) | del(.provider))}
+    | select(.spec.type != null))' > upgrade-record/credentials.v0.1.json
+kubectl -n "$NS" get credentials.identity.zeabur.com -o json \
+  | jq -r '.items[] | select(.spec.type == "Upstream") | .metadata.name' \
+  | xargs -r kubectl -n "$NS" delete credentials.identity.zeabur.com
+kubectl apply --server-side -f upgrade-record/crds.before.json
+kubectl create -f upgrade-record/credentials.v0.1.json
+```
+
+删除前先检查 `upgrade-record/credentials.v0.1.json`。之后再换回 v0.1 的镜像和资源清单，并加回步骤 1 的选项。
+
 ## 升级前
 
 <Steps>
@@ -70,7 +163,7 @@ kubectl -n "$NS" rollout history deployment/zeabur-identity > upgrade-record/rol
 
 ### 检查版本差异并试升级
 
-阅读两个版本之间的变更，包括 CRD schema、存储格式、选项与令牌声明。
+先完成上方 **各版本升级须知** 中每个经过的版本要做的事，再阅读两个版本之间的发行说明，包括 CRD schema、存储格式、选项与令牌声明。
 
 先在用备份恢复出的环境上测试完全相同的升级流程，也要使用现有通行密钥登录。
 
