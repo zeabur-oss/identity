@@ -9,8 +9,7 @@
     manage-users: 添加与管理用户
     admin-sessions: 管理员账号与会话
     offboarding: 退出登录、找回账号与移除用户
-    github-sign-in: 用 GitHub 登录
-    google-sign-in: 用 Google 登录
+    upstream-sign-in: 用外部账号登录
     provisioning: 从目录同步用户
     clients: 注册客户端
 - group: operations

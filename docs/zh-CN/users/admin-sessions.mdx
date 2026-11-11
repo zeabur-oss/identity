@@ -15,7 +15,7 @@ description: 创建和切换管理员账号、调整会话时长，并配置全�
 
 <Callout type="warn">
 
-每位管理员都应另有一个普通账号，用于日常工作。管理员账号只用于更改集群。管理员账号无法使用 GitHub 或 Google 登录，也无法关联这两种账号。登录页面会显示 **Use a passkey for this account**。
+每位管理员都应另有一个普通账号，用于日常工作。管理员账号只用于更改集群。管理员账号无法用 GitHub 等外部账号登录，也无法关联外部账号。登录页面会显示**此账号要用通行密钥登录**。
 
 </Callout>
 
@@ -66,7 +66,7 @@ kubectl -n zeabur-identity get zbuser            # the Type column shows the acc
 | 管理员，单个团队 | 5 分钟 | 1 小时 | 登录后 12 小时 |
 | 管理员，多个团队或启用 AAL3 | 5 分钟 | 15 分钟 | 登录后 12 小时 |
 
-12 小时从使用通行密钥、GitHub 或 Google 登录时开始计算，刷新令牌不会重置这个时限。
+12 小时从使用通行密钥或外部账号登录时开始计算，刷新令牌不会重置这个时限。
 
 Zeabur Identity 不保留单点登录会话，所以每次授权请求都会显示登录页面。令牌响应中的 `refresh_expires_in` 表示刷新令牌距离空闲超时还剩多少秒。
 

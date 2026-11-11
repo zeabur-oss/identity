@@ -3,7 +3,7 @@ title: 備份與還原 Zeabur Identity
 description: 備份 Zeabur Identity 的資料與金鑰，依備份類型還原服務，並演練如何復原身分、通行密鑰與存取權限。
 ---
 
-備份叢集的資料存放區、Zeabur Identity 資源、私密金鑰與相關設定。還原資料存放區可以保留所有人的身分與通行密鑰。如果從匯出檔重建資源，所有人都會取得新身分，必須重新註冊通行密鑰、連結 GitHub 或 Google 帳號。應用程式也要遷移使用者的帳號對應。
+備份叢集的資料存放區、Zeabur Identity 資源、私密金鑰與相關設定。還原資料存放區可以保留所有人的身分與通行密鑰。如果從匯出檔重建資源，所有人都會取得新身分，必須重新註冊通行密鑰、連結 GitHub、Google 等外部帳號。應用程式也要遷移使用者的帳號對應。
 
 ## 要備份什麼
 
@@ -38,7 +38,7 @@ Zeabur Identity 用 `User` 物件的 UID 識別每個人。每個權杖的 `sub`
 | 備份項目 | 用途 |
 |---|---|
 | 叢集的資料存放區備份，以及發行版開啟備份所需的伺服器權杖、加密金鑰與叢集憑證 | 只有這種備份能保留 UID 與通行密鑰。快照如果無法解密，就無法用來還原。 |
-| `users`、`credentials`、`oauthclients`、`upstreamproviders`（`*.identity.zeabur.com`） | 儲存使用者與群組、通行密鑰紀錄、已連結的 GitHub 或 Google 帳號、已註冊的用戶端，以及登入提供者。 |
+| `users`、`credentials`、`oauthclients`、`upstreamproviders`（`*.identity.zeabur.com`） | 儲存使用者與群組、通行密鑰紀錄、已連結的外部帳號、已註冊的用戶端，以及登入提供者。 |
 | Secret `zeabur-identity-signing-keys` | 儲存所有私密簽署金鑰，包含即將啟用與已退役的金鑰。其他資料無法重建這些金鑰。 |
 | Secret `zeabur-identity-internal-ca` | 儲存根 CA 與私密金鑰。cert-manager 用它簽發憑證，供 kube-apiserver 連線到內部位址時驗證。這份 Secret 要與每台控制平面機器上的驗證檔案一起儲存。cert-manager 會用它重新簽發 `zeabur-identity-internal-tls`。 |
 | Deployment、Service、ServiceAccount、Role 與 RoleBinding `zeabur-identity`，以及 ClusterRoleBinding `zeabur-identity-cluster-admins` | 儲存 Zeabur Identity 的執行方式與管理員權限。也要備份你為其他應用程式建立的 RoleBinding。 |
@@ -391,7 +391,7 @@ done
 
 舊通行密鑰無法搭配新 UID。舊工作階段依使用者名稱指向帳號，因此舊更新權杖能替目前使用該名稱的人取得權杖。
 
-使用者重新註冊時，再自行連結 GitHub 或 Google 帳號。
+使用者重新註冊時，再自行連結外部帳號。
 
 </Step>
 

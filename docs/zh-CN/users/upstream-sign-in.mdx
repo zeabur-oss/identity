@@ -1,0 +1,286 @@
+---
+title: 用外部账号登录
+description: 将 GitHub、Google 或自建 OpenID 提供方（如 Keycloak）的账号关联到用户，让用户用这些账号登录。
+---
+
+除了通行密钥，用户也可以用已有的外部账号登录 Zeabur Identity，包括 GitHub、Google，以及组织自行运行的 OpenID 提供方，如 Keycloak、Okta 或 Microsoft Entra ID。这些都是外部登录方式。添加提供方后，登录页面会在通行密钥按钮下方多一个按钮，例如**使用 GitHub 继续**。
+
+![登录页面，有通行密钥按钮和“使用 GitHub 继续”按钮](../../images/sign-in-light.avif)
+
+你决定哪些人能登录。外部账号只有关联到 Zeabur Identity 用户后才能登录。Zeabur Identity 不会在首次登录时创建用户，也不会根据电子邮箱、姓名或组织匹配账号。用户组仍由 `User` 决定。每个关联账号都用提供方的 issuer 和固定账号 ID 记录，所以登录名或电子邮箱转给其他人后，关联关系也不会转移。
+
+[管理员账号](./admin-sessions.mdx)只能用通行密钥登录，不能关联外部账号。
+
+## 开始前
+
+- 完成[在 k3s 上安装并登录](../get-started/quickstart.mdx)。
+- 确认你的 Issuer，也就是用户访问 Zeabur Identity 的网址。示例使用 `https://identity.example.com`。
+- 允许 Zeabur Identity 的 Pod 通过 HTTPS 连接到提供方：GitHub 需要连接 `github.com` 和 `api.github.com`；Google 需要连接 `accounts.google.com`、`oauth2.googleapis.com` 和 `www.googleapis.com`；其他提供方则需要连接其主机。
+- 使用 Google 时，需要真实的公网域名。Google 只接受公网域名上的重定向 URI，详见 [Google 的 URI 验证规则](https://developers.google.com/identity/protocols/oauth2/web-server#uri-validation)，所以快速入门中的 `identity.example.test` 不能使用。
+
+## 添加登录提供方
+
+每个提供方都需要一个名称，例如 `github`、`google` 或 `keycloak`。名称只能包含小写字母、数字和 `-`，最多 63 个字符。名称会出现在回调地址中，所以要先确定名称，再到提供方注册 Zeabur Identity，之后也要保留这个名称。
+
+<Steps>
+
+<Step>
+
+### 在提供方注册 Zeabur Identity
+
+在提供方创建 OAuth 或 OpenID 客户端，填入以下回调地址，也叫重定向 URI。将域名换成你的 Issuer，将 `NAME` 换成提供方名称：
+
+```text
+https://identity.example.com/upstream/NAME/callback
+```
+
+然后记下客户端 ID 和客户端密钥。
+
+<Tabs items={["OpenID provider", "GitHub", "Google"]}>
+
+<Tab value="OpenID provider">
+
+创建使用授权码流程的机密客户端。例如，在 Keycloak 的 **Clients → Create client** 中开启 **Client authentication**，并且只勾选 **Standard flow**。将回调地址设为唯一有效的重定向 URI。Zeabur Identity 会请求 `openid` 作用域，发送 PKCE challenge（S256）和 nonce，并检查签名后的 ID token。
+
+还要记下提供方的 issuer，也就是 `/.well-known/openid-configuration` 所在的基础地址。Keycloak 的 issuer 是 `https://<keycloak host>/realms/<realm>`。
+
+</Tab>
+
+<Tab value="GitHub">
+
+在 GitHub 打开 **Settings → Developer settings → OAuth Apps → New OAuth App**。也可以在组织设置中打开同一页面，避免应用依赖个人账号。
+
+| 字段 | 配置值 |
+|---|---|
+| **Application name** | 例如 `Zeabur Identity`，用户会在 GitHub 的授权页面看到这个名称 |
+| **Homepage URL** | `https://identity.example.com` |
+| **Authorization callback URL** | `https://identity.example.com/upstream/github/callback` |
+| **Enable Device Flow** | 关闭 |
+
+然后生成客户端密钥。
+
+</Tab>
+
+<Tab value="Google">
+
+在 Google Cloud Console 中，按照 Google 的 [OpenID Connect 指南](https://developers.google.com/identity/openid-connect/openid-connect)操作：
+
+1. 选择或创建项目。在 **Google Auth platform → Branding** 中填写应用名称和联系信息。
+2. 在 **Audience** 中选择 **Internal**，只允许你的 Google Workspace 组织使用；或选择 **External**，允许任何 Google 账号使用。无论选哪一种，账号都必须先关联才能登录。只请求 `openid` 的应用不受 [Google 发布规则](https://support.google.com/cloud/answer/15549945)中的测试模式限制。
+3. 在 **Data Access** 中只声明 `openid` 作用域。
+4. 在 **Clients → Create Client** 中选择 **Web application**，并在 **Authorized redirect URIs** 中添加 `https://identity.example.com/upstream/google/callback`。**Authorized JavaScript origins** 留空。
+5. 复制客户端密钥本身，不要复制 Google 提供的 JSON 文件。
+
+</Tab>
+
+</Tabs>
+
+</Step>
+
+<Step>
+
+### 存储客户端密钥
+
+Zeabur Identity 从 Secret `zeabur-identity-upstream` 读取所有提供方的客户端密钥，每个提供方各用一个键，键名使用提供方名称。以下命令可以避免密钥出现在 Shell 历史记录和进程列表中：
+
+```sh
+read -rs CLIENT_SECRET     # paste the client secret, then Enter
+printf %s "$CLIENT_SECRET" | kubectl -n zeabur-identity create secret generic zeabur-identity-upstream \
+  --from-file=NAME=/dev/stdin
+unset CLIENT_SECRET
+```
+
+如果 Secret 已存有其他提供方的键，用密钥管理工具或 `kubectl -n zeabur-identity edit secret zeabur-identity-upstream` 添加新键，并保留其他键。Secret 中的值使用 base64 编码。
+
+Zeabur Identity 每次登录都会重新读取密钥，更新后会从下一次登录开始使用，无需重启。
+
+</Step>
+
+<Step>
+
+### 创建 UpstreamProvider
+
+<Tabs items={["OpenID provider", "GitHub", "Google"]}>
+
+<Tab value="OpenID provider">
+
+```sh
+kubectl apply -f - <<EOF
+apiVersion: identity.zeabur.com/v1alpha1
+kind: UpstreamProvider
+metadata:
+  name: keycloak
+  namespace: zeabur-identity
+spec:
+  type: OpenID
+  issuer: https://sso.example.com/realms/staff
+  displayName: Company SSO
+  clientId: zeabur-identity
+  clientSecretKey: keycloak
+EOF
+```
+
+`displayName` 是按钮上显示的名称，最多 64 个字符。`issuer` 必须使用 `https`。只有提供方要求 `openid` 以外的作用域才能完成登录时，才需要添加 `scopes`。
+
+</Tab>
+
+<Tab value="GitHub">
+
+```sh
+kubectl apply -f - <<EOF
+apiVersion: identity.zeabur.com/v1alpha1
+kind: UpstreamProvider
+metadata:
+  name: github
+  namespace: zeabur-identity
+spec:
+  type: GitHub
+  clientId: Ov23li...
+  clientSecretKey: github
+EOF
+```
+
+`GitHub` 提供方没有 `issuer`、`displayName` 或 `scopes` 字段，按钮显示**使用 GitHub 继续**。
+
+</Tab>
+
+<Tab value="Google">
+
+```sh
+kubectl apply -f - <<EOF
+apiVersion: identity.zeabur.com/v1alpha1
+kind: UpstreamProvider
+metadata:
+  name: google
+  namespace: zeabur-identity
+spec:
+  type: OpenID
+  issuer: https://accounts.google.com
+  displayName: Google
+  clientId: 1234567890-example.apps.googleusercontent.com
+  clientSecretKey: google
+EOF
+```
+
+</Tab>
+
+</Tabs>
+
+下次加载登录页面时就会显示新按钮，无需重启 Zeabur Identity。用户选择 OpenID 提供方的按钮时，Zeabur Identity 会读取 issuer 的 `/.well-known/openid-configuration`，并使用其中列出的地址。
+
+</Step>
+
+<Step>
+
+### 将外部账号关联到用户
+
+根据用户当前的情况选择关联方式：
+
+- 已能登录的普通账号：用户打开账号页面，用通行密钥确认身份，再选择**关联**加提供方名称的按钮，例如**关联 GitHub**。
+- 新用户：按照[管理用户](./manage-users.mdx)中的步骤发送邀请。邀请功能需要[在 k3s 上安装并登录](../get-started/quickstart.mdx)中的 `--invitations` 选项。用户打开链接后，选择**使用 GitHub 继续**这类按钮即可，不必创建通行密钥。
+- 已有账号但无法登录的用户：用相同用户名再次发送邀请。如果账号已有通行密钥或已关联的账号，邀请需要加上 `--reset`。详见[退出登录、恢复与移除用户](./offboarding.mdx)。
+
+<Callout type="warn">
+
+任何拿到邀请链接的人都能接管这个用户账号，请只把链接交给本人。`--reset` 会先删除用户现有的通行密钥和已关联的账号。每个邀请链接只能用来添加一把通行密钥或关联一个账号，每个外部账号也只能关联到一个用户。
+
+</Callout>
+
+</Step>
+
+</Steps>
+
+## 提供方使用私有 CA 时
+
+如果提供方的证书由你自己的 CA 签发，例如公司内网中的 Keycloak，Zeabur Identity 必须先信任这个 CA 才能连接。将 CA 证书放入 ConfigMap，再配置 Pod 的证书路径，同时保留镜像自带的证书包：
+
+```sh
+kubectl -n zeabur-identity create configmap upstream-ca --from-file=ca.crt=company-ca.pem
+kubectl -n zeabur-identity patch deployment zeabur-identity --patch '
+spec:
+  template:
+    spec:
+      volumes:
+        - {name: upstream-ca, configMap: {name: upstream-ca}}
+      containers:
+        - name: zeabur-identity
+          env:
+            - {name: SSL_CERT_FILE, value: /etc/ssl/certs/ca-certificates.crt}
+            - {name: SSL_CERT_DIR, value: /etc/zeabur-identity-upstream-ca}
+          volumeMounts:
+            - {name: upstream-ca, mountPath: /etc/zeabur-identity-upstream-ca, readOnly: true}
+'
+```
+
+两个变量都要设置。如果只设置 `SSL_CERT_DIR`，Pod 就只信任你的 CA，无法再连接 GitHub 或 Google。`zeabur-identityctl manifests` 不会输出这项修改，所以重新生成 Deployment 后，需要再次应用这项修改。
+
+## 确认结果
+
+清除 kubectl 缓存的会话，让 kubelogin 再次打开浏览器，然后选择新按钮，用已关联外部账号的普通账号登录：
+
+```sh
+rm -rf ~/.kube/cache/oidc-login
+kubectl auth whoami          # the user is zeabur:<username>
+```
+
+使用通行密钥登录时，输出中的 `identity.zeabur.com/amr` 会列出 `swk` 和 `mfa`；使用外部账号登录时，内容为空。快速入门创建的 `admin` 等管理员账号不接受外部账号登录。
+
+## 修改或移除提供方
+
+- **修改配置。**编辑 `UpstreamProvider`，下一次登录就会使用新配置。保留原来的名称，因为名称是提供方已注册回调地址的一部分。
+- **更换客户端密钥。**更新 `zeabur-identity-upstream` 中对应提供方的键，下一次登录就会使用新密钥。
+- **移除提供方。**删除对象，再到提供方删除客户端：
+
+  ```sh
+  kubectl -n zeabur-identity delete upstreamprovider NAME
+  ```
+
+  已关联的账号和现有会话仍会保留。用户仍能在账号页面看到并移除已关联的账号。如果再次添加 issuer 相同的提供方，无论使用什么名称，这些账号都能再次登录。
+
+要阻止某个人用已关联的账号登录，按照[管理用户](./manage-users.mdx)中的步骤移除对应凭据。要结束已有会话，让用户退出登录；要撤销所有访问权限，停用或移除用户。详见[退出登录、恢复与移除用户](./offboarding.mdx)。
+
+## 无需用户操作，直接关联账号
+
+如果你知道账号在提供方的 ID，也可以自行创建 `Credential`。凭据名称根据 issuer 和 ID 生成，Zeabur Identity 会按这个名称查找账号。GitHub 的 issuer 是 `https://github.com`，ID 是数字账号 ID。OpenID 提供方则使用 `UpstreamProvider` 中的 issuer 和账号的 `sub`。
+
+```sh
+USER_NAME=alice                                # an existing User
+PROVIDER=github                                # the UpstreamProvider's name
+ISSUER=https://github.com
+SUBJECT=$(curl -fsS https://api.github.com/users/octocat | jq -r .id)
+USER_UID=$(kubectl -n zeabur-identity get users.identity.zeabur.com "$USER_NAME" -o jsonpath='{.metadata.uid}')
+NAME=c-$(printf 'zeabur-identity/external/v1/%s\0%s' "$ISSUER" "$SUBJECT" | sha256sum | cut -d' ' -f1)
+kubectl apply -f - <<EOF
+apiVersion: identity.zeabur.com/v1alpha1
+kind: Credential
+metadata:
+  name: $NAME
+  namespace: zeabur-identity
+  labels: {identity.zeabur.com/user: "$USER_NAME"}
+  ownerReferences:
+    - {apiVersion: identity.zeabur.com/v1alpha1, kind: User, name: $USER_NAME, uid: $USER_UID}
+spec:
+  type: Upstream
+  provider: $PROVIDER
+  user: $USER_NAME
+  external: {issuer: "$ISSUER", subject: "$SUBJECT"}
+EOF
+```
+
+<Callout type="warn">
+
+应用前先确认 `$SUBJECT`。填错 ID 会关联到其他人的账号。缺少 `ownerReferences`，或 UID 指向其他 `User`，都会导致账号无法登录。
+
+</Callout>
+
+## 遇到问题
+
+| 界面或结果 | 处理方法 |
+|---|---|
+| 登录页面没有对应提供方的按钮 | 执行 `kubectl -n zeabur-identity get upstreamproviders`。如果对象存在，执行 `kubectl -n zeabur-identity logs deploy/zeabur-identity`，查找 `upstream_provider_invalid`，其中会指出无法使用的字段。 |
+| 提供方提示重定向 URI 不匹配 | 在提供方注册的地址必须与 `<issuer>/upstream/<name>/callback` 完全相同，其中名称必须是 `UpstreamProvider` 的名称。Google 还会拒绝 `identity.example.test` 这类域名。 |
+| 选择按钮后立即显示**无法完成操作** | 如果页面加载后提供方已移除或改名，重新加载页面。如果日志显示 `provider_unavailable`，说明 Zeabur Identity 无法读取 issuer 的 `/.well-known/openid-configuration`。检查 Pod 能否通过 HTTPS 连接到 issuer；如果使用私有 CA，还要检查是否已完成前面的配置。 |
+| 提供方将用户重定向回来后显示**无法验证外部账号的响应** | 在日志中查找 `provider_unavailable`。Secret `zeabur-identity-upstream` 不存在、缺少 `clientSecretKey` 指定的键，或 Pod 无法连接到提供方的 token 地址或密钥地址。 |
+| **此账号尚未关联** | 先关联账号。Zeabur Identity 不会根据电子邮箱或姓名匹配账号。自行创建的 `Credential` 如果名称或 ID 错误，也会出现相同提示。 |
+| **此账号要用通行密钥登录** | 外部账号关联到了管理员账号，管理员账号只能用通行密钥登录。 |
+| `org_internal` 或其他 Google 访问错误 | 检查应用的 **Audience** 和账号所属组织的政策。 |

@@ -20,7 +20,7 @@ and restarting a deployment is refused with 403 for an account without that righ
 ## Why Zeabur Identity
 
 - **Passkeys, not passwords.** Touch ID, Windows Hello or a security key. Teammates can also
-  link a GitHub or Google account for everyday access.
+  link a GitHub, Google or company account for everyday access.
 - **Admin rights belong to admin accounts.** Keep a separate admin account for cluster changes.
   It signs in with a passkey only, its tokens last 5 minutes, and its sessions are shorter.
   Everyday accounts get only the rights you bind to their groups.
@@ -83,7 +83,7 @@ For development builds, see [Building from source](CONTRIBUTING.md#building-from
 
 Then:
 
-- Sign in with [GitHub](docs/users/github-sign-in.mdx) or [Google](docs/users/google-sign-in.mdx).
+- Sign in with [GitHub, Google or your own OpenID provider](docs/users/upstream-sign-in.mdx), such as Keycloak.
 - [Register clients](docs/users/clients.mdx) such as Grafana or Argo CD, with
   `zeabur-identityctl client create`.
 - [Manage users](docs/users/manage-users.mdx): groups, admin rights, lost passkeys, removing people;

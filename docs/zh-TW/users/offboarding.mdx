@@ -22,7 +22,7 @@ kubectl -n zeabur-identity delete zbgrant -l identity.zeabur.com/user=alice
 zeabur-identityctl setup-link --username alice --reset
 ```
 
-這個指令會刪除 `alice` 的所有認證資訊、工作階段及尚未接受的邀請。認證資訊包含通行密鑰，以及已連結的 GitHub 或 Google 帳號。
+這個指令會刪除 `alice` 的所有認證資訊、工作階段及尚未接受的邀請。認證資訊包含通行密鑰，以及已連結的外部帳號。
 
 指令會輸出新的單次設定連結，有效時間為 1 小時。
 
@@ -40,7 +40,7 @@ zeabur-identityctl setup-link --username alice --reset
 zeabur-identityctl invite --username alice --reset
 ```
 
-這個指令會執行相同的重設步驟，並輸出邀請。使用者也能用邀請來連結 GitHub 或 Google 帳號。
+這個指令會執行相同的重設步驟，並輸出邀請。使用者也能用邀請來連結外部帳號。
 
 ## 停用使用者
 
@@ -66,7 +66,7 @@ kubectl -n zeabur-identity get zbuser alice
 kubectl -n zeabur-identity delete zbuser alice
 ```
 
-刪除 `User` 後，使用者的通行密鑰、已連結的 GitHub 或 Google 帳號、工作階段及邀請連結都會失效。
+刪除 `User` 後，使用者的通行密鑰、已連結的外部帳號、工作階段及邀請連結都會失效。
 
 這些物件都綁定原本 `User` 的 UID。即使建立同名的 `User`，新物件也會取得新的 UID。
 

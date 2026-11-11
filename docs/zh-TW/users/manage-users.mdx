@@ -28,7 +28,7 @@ Zeabur Identity 會將使用者、通行密鑰與工作階段存成 Kubernetes �
 | 物件 | 短名稱 | 用途 | 建立者 |
 |---|---|---|---|
 | `User` | `zbuser` | 一位使用者，包含使用者名稱、顯示名稱、群組與帳號類型 | 你 |
-| `Credential` | `zbcred` | 一組通行密鑰，或一個已連結的 GitHub 或 Google 帳號 | Zeabur Identity，在使用者使用連結時建立 |
+| `Credential` | `zbcred` | 一組通行密鑰，或一個已連結的外部帳號 | Zeabur Identity，在使用者使用連結時建立 |
 | `Invitation` | `zbinvite` | 一個尚未使用的一次性連結 | `zeabur-identityctl invite`；Zeabur Identity 會在連結使用後或到期時刪除 |
 | `Grant` | `zbgrant` | 一個已登入的工作階段：應用程式使用 `g-…`，帳號頁使用 `s-…` | Zeabur Identity，在每次登入時建立 |
 
@@ -52,7 +52,7 @@ zeabur-identityctl invite --username alice --display-name "Alice Chen" --group d
 
 連結的有效期限為 7 天，不能延長。要縮短期限，可以指定 `--valid-for 24h`。
 
-`--group`、`--admin` 與 `--display-name` 只在建立新使用者時生效。邀請既有使用者時，只能新增通行密鑰或連結 GitHub、Google 帳號，不會修改群組或顯示名稱。
+`--group`、`--admin` 與 `--display-name` 只在建立新使用者時生效。邀請既有使用者時，只能新增通行密鑰或連結外部帳號，不會修改群組或顯示名稱。
 
 如果使用者已有通行密鑰或已連結的帳號，`invite` 會回報錯誤並停止。`--reset` 會先刪除這些登入認證資訊。帳號救援方式請見[登出、救援與移除使用者](./offboarding.mdx)。
 
@@ -62,7 +62,7 @@ zeabur-identityctl invite --username alice --display-name "Alice Chen" --group d
 
 ### 將連結交給使用者
 
-請用你信任的管道，將連結交給 Alice。她開啟連結後，就可以建立通行密鑰。如果你已啟用[用 GitHub 登入](./github-sign-in.mdx)或[用 Google 登入](./google-sign-in.mdx)，她也可以連結對應的帳號。
+請用你信任的管道，將連結交給 Alice。她開啟連結後，就可以建立通行密鑰。如果你已[加入外部帳號登入](./upstream-sign-in.mdx)，例如 GitHub，她也可以改為連結該帳號。
 
 <Callout type="warn">
 
@@ -162,7 +162,7 @@ kubectl auth whoami          # Groups lists zeabur:dev and zeabur:oncall
 
 - 新增、重新命名或移除通行密鑰。
 - 檢視與結束工作階段。
-- 啟用 GitHub 或 Google 登入後，一般帳號也能連結或取消連結這些帳號。
+- [加入外部帳號登入](./upstream-sign-in.mdx)後，一般帳號也能連結或取消連結外部帳號。
 
 新增通行密鑰、連結帳號或移除時，都需要先用通行密鑰確認身分。使用者無法在帳號頁移除最後一組通行密鑰，也無法取消連結最後一個可用來登入的帳號。
 
@@ -178,7 +178,7 @@ kubectl -n zeabur-identity get events --field-selector involvedObject.name=alice
 
 多數通行密鑰會隨平台帳號同步，例如 iCloud Keychain 或 Google Password Manager，因此換新手機通常不需要額外設定。要使用獨立的安全金鑰，使用者可以到帳號頁新增。
 
-一般帳號也能在帳號頁連結 GitHub 或 Google 帳號。同一個外部帳號不能同時連結到不同使用者。要改連結到其他使用者，請先在原本的帳號頁取消連結。管理員帳號不能連結外部帳號。
+一般帳號也能在帳號頁連結 GitHub 等外部帳號。同一個外部帳號不能同時連結到不同使用者。要改連結到其他使用者，請先在原本的帳號頁取消連結。管理員帳號不能連結外部帳號。
 
 請勿用 `invite` 替還能登入的使用者新增通行密鑰或連結帳號。如果連結落入他人手中，持有者就能以該使用者的身分登入。如果使用者已無法登入，請依照[登出、救援與移除使用者](./offboarding.mdx)的救援流程處理。
 
