@@ -20,7 +20,7 @@ cargo doc --workspace --open
 
 程式碼路徑以 `crates/` 為基準。單元測試格式為 `crate: module::tests::name`，整合測試格式為 `crate/tests/file.rs: name`。
 
-標記為 *(cluster)* 的測試使用 k3s `v1.36.5`，執行時加上 `--run-ignored only`。標記為 *(e2e)* 的測試位於 `zeabur-identity-e2e/tests/e2e.rs`，使用 Zeabur Identity 容器映像檔執行。
+標記為 *(cluster)* 的測試使用 k3s `v1.36.5`，執行時加上 `--run-ignored only`。標記為 *(e2e)* 的測試位於 `zeabur-identity-e2e/tests/e2e.rs`，使用 Zeabur Identity 容器映像檔執行。標記為 *(e2e, Keycloak)* 的測試另外需要 Keycloak 伺服器，用 `scripts/keycloak-e2e.sh` 執行，不在 CI 中執行。
 
 ## 各項規格摘要
 
@@ -234,6 +234,7 @@ cargo doc --workspace --open
 | Project requirement | 新增、修改或刪除提供者，以及更換用戶端密鑰後，下次請求就會套用，不需要重新啟動；未變更的提供者會保留快取；如果進行中的請求所用的提供者遭到刪除，或改用其他 Issuer，請求會在送出授權碼前結束 | `zeabur-identity-k8s/src/upstream.rs`; `zeabur-identity/src/providers.rs`; `upstream/provider.rs` `Providers`, `ClientSecret` | `provider_changes_and_secret_rotation_are_seen_without_a_restart` *(cluster)*; `an_added_provider_starts_at_the_next_request`, `a_provider_deleted_or_changed_during_a_sign_in_ends_it_before_the_code_is_sent`, `the_client_secret_is_read_at_each_exchange`; `zeabur-identity-signin/tests/pages.rs: provider_buttons_follow_the_registry`; `zeabur-identity: providers::tests::an_unchanged_provider_is_kept_and_a_changed_or_deleted_one_is_not` | Met |
 | Project requirement | 刪除提供者不會刪除已連結的帳號；帳號頁面仍會列出這些帳號，也能解除連結；使用相同 Issuer 的提供者仍可讓這些帳號登入 | `upstream.rs`, `account.rs` `shown_provider` | `a_deleted_provider_keeps_its_linked_accounts` | Met |
 | Project requirement | 引入 `UpstreamProvider` 前已連結的帳號會改成 `type: Upstream`，並設定 `provider: github` 或 `google`，保留名稱、UID、擁有者與標籤；准入驗證只允許這項變更 | `zeabur-identity-k8s/src/migrate.rs`; `zeabur-identity-api/src/credential.rs` `IMMUTABLE_RULE` | `linked_accounts_migrate_with_their_names_owners_and_labels` *(cluster)*; `zeabur-identity-k8s: migrate::tests::*` | Met |
+| OIDC Core §3.1; OIDC Discovery §4 | 與實際的 OpenID 提供者 Keycloak 互通。Keycloak 使用私人 CA，Pod 透過 `SSL_CERT_FILE` 與 `SSL_CERT_DIR` 信任它：未連結的帳號無法登入；從帳號頁面連結的兩個帳號都以所屬使用者登入；解除連結其中一個後，該帳號再次無法登入，另一個仍可登入 | `scripts/keycloak-e2e.sh` | `keycloak_links_signs_in_and_unlinks` *(e2e, Keycloak)* | Met |
 | Project requirement | 使用已移除的上游選項時，伺服器會停止啟動，並在訊息中指出該選項及替代方式 | `zeabur-identity/src/cli.rs` `reject_removed` | `zeabur-identity: cli::tests::a_removed_upstream_flag_names_itself_and_its_replacement` | Met |
 | Kubernetes Object Names and IDs | An invitation or setup link enrolls a passkey or links an account only for the `User` whose UID its owner reference names | `lib.rs` `valid_setup_token`; `zeabur-identity-k8s/src/setup.rs` `load_setup`, `load_invitation` | `signin.rs: a_link_left_from_a_removed_user_does_not_enrol_a_new_user_of_that_name`; `zeabur-identity-k8s/tests/account.rs: an_invitation_enrols_only_the_user_that_owns_it` | Met |
 

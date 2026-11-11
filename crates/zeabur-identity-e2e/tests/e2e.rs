@@ -14,7 +14,8 @@
 //! - `ZEABUR_IDENTITY_E2E_AUTHN_DIR`: the host directory mounted at kube-apiserver's configuration
 //!   path.
 //!
-//! Run: `cargo nextest run --run-ignored only -E 'binary(e2e)'`
+//! Run: `cargo nextest run --run-ignored only -E 'binary(e2e) and not test(keycloak)'`. The
+//! Keycloak scenario needs Keycloak too: `scripts/keycloak-e2e.sh` runs it.
 
 #[cfg(test)]
 mod tests {
@@ -57,6 +58,8 @@ mod tests {
     use zeabur_identity_k8s::{deployment, internal_tls, rbac};
     use zeabur_identity_oauth::endpoints::FLOW_COOKIE;
     use zeabur_identity_signin::CEREMONY_COOKIE;
+    use zeabur_identity_signin::account::SESSION_COOKIE;
+    use zeabur_identity_signin::upstream::UPSTREAM_COOKIE;
     use zeabur_identity_test_support::{Device, device};
 
     const ISSUER: &str = "https://identity.e2e.invalid";
@@ -357,6 +360,108 @@ mod tests {
             .unwrap();
     }
 
+    /// Installs the CRDs and everything `zeabur-identityctl manifests` prints into `namespace`,
+    /// with `image`, and waits until Zeabur Identity is ready.
+    async fn install(admin: &Client, namespace: &str, issuer: &BaseUrl, image: &str) {
+        for crd in definitions() {
+            apply(admin, serde_json::to_value(crd).unwrap()).await;
+        }
+        for object in deployment::manifests(
+            namespace,
+            issuer,
+            &deployment::Options {
+                image: image.to_owned(),
+                ..deployment::Options::default()
+            },
+        )
+        .unwrap()
+        {
+            apply(admin, object).await;
+        }
+        let deployments: Api<Deployment> = Api::namespaced(admin.clone(), namespace);
+        wait_for(
+            "Zeabur Identity to become ready",
+            Duration::from_secs(180),
+            || async {
+                deployments
+                    .get(rbac::NAME)
+                    .await
+                    .ok()
+                    .and_then(|d| d.status)
+                    .and_then(|s| s.ready_replicas)
+                    == Some(1)
+            },
+        )
+        .await;
+    }
+
+    /// Reaches the public listener through a `NodePort` on the node's address. Returns the
+    /// address and the node's name.
+    async fn public_address(admin: &Client, namespace: &str) -> (String, String) {
+        let services: Api<Service> = Api::namespaced(admin.clone(), namespace);
+        let node_port = services
+            .create(
+                &PostParams::default(),
+                &Service {
+                    metadata: ObjectMeta {
+                        name: Some("zeabur-identity-e2e-nodeport".into()),
+                        ..ObjectMeta::default()
+                    },
+                    spec: Some(ServiceSpec {
+                        type_: Some("NodePort".into()),
+                        selector: Some(
+                            [("app.kubernetes.io/name".into(), rbac::NAME.into())].into(),
+                        ),
+                        ports: Some(vec![ServicePort {
+                            port: 80,
+                            target_port: Some(
+                                k8s_openapi::apimachinery::pkg::util::intstr::IntOrString::Int(
+                                    deployment::HTTP_PORT,
+                                ),
+                            ),
+                            ..ServicePort::default()
+                        }]),
+                        ..ServiceSpec::default()
+                    }),
+                    ..Service::default()
+                },
+            )
+            .await
+            .unwrap()
+            .spec
+            .unwrap()
+            .ports
+            .unwrap()[0]
+            .node_port
+            .unwrap();
+        let node = Api::<Node>::all(admin.clone())
+            .list(&ListParams::default())
+            .await
+            .unwrap()
+            .items
+            .remove(0);
+        let node_name = node.name_any();
+        let node_ip = node
+            .status
+            .and_then(|s| s.addresses)
+            .unwrap()
+            .into_iter()
+            .find(|a| a.type_ == "InternalIP")
+            .unwrap()
+            .address;
+        let address = format!("{node_ip}:{node_port}");
+        wait_for(
+            "the NodePort to accept connections",
+            Duration::from_secs(60),
+            || {
+                let address = address.clone();
+                async move { TcpStream::connect(&address).await.is_ok() }
+            },
+        )
+        .await;
+        (address, node_name)
+    }
+
     /// Signs in with `device` through Zeabur Identity's public listener, as kubectl's OIDC plugin
     /// would (authorization request, passkey, code, token), and returns the token response.
     async fn sign_in(address: &str, device: &mut Device, scope: &str) -> Value {
@@ -506,37 +611,7 @@ mod tests {
         let issuer = BaseUrl::parse("issuer", ISSUER).unwrap();
         let namespace = format!("zeabur-identity-e2e-{}", std::process::id());
 
-        // Install: CRDs, then everything `zeabur-identityctl manifests` prints.
-        for crd in definitions() {
-            apply(&admin, serde_json::to_value(crd).unwrap()).await;
-        }
-        for object in deployment::manifests(
-            &namespace,
-            &issuer,
-            &deployment::Options {
-                image: image.clone(),
-                ..deployment::Options::default()
-            },
-        )
-        .unwrap()
-        {
-            apply(&admin, object).await;
-        }
-        let deployments: Api<Deployment> = Api::namespaced(admin.clone(), &namespace);
-        wait_for(
-            "Zeabur Identity to become ready",
-            Duration::from_secs(180),
-            || async {
-                deployments
-                    .get(rbac::NAME)
-                    .await
-                    .ok()
-                    .and_then(|d| d.status)
-                    .and_then(|s| s.ready_replicas)
-                    == Some(1)
-            },
-        )
-        .await;
+        install(&admin, &namespace, &issuer, &image).await;
 
         // kube-apiserver side, exactly as `zeabur-identityctl kube-config --distro k3s` does it.
         let request = kube_config::Request {
@@ -585,68 +660,7 @@ mod tests {
         .unwrap();
         let token = link.url.split_once("#token=").unwrap().1.to_owned();
 
-        // Reach the public listener through a NodePort on the node's address.
-        let services: Api<Service> = Api::namespaced(admin.clone(), &namespace);
-        let node_port = services
-            .create(
-                &PostParams::default(),
-                &Service {
-                    metadata: ObjectMeta {
-                        name: Some("zeabur-identity-e2e-nodeport".into()),
-                        ..ObjectMeta::default()
-                    },
-                    spec: Some(ServiceSpec {
-                        type_: Some("NodePort".into()),
-                        selector: Some(
-                            [("app.kubernetes.io/name".into(), rbac::NAME.into())].into(),
-                        ),
-                        ports: Some(vec![ServicePort {
-                            port: 80,
-                            target_port: Some(
-                                k8s_openapi::apimachinery::pkg::util::intstr::IntOrString::Int(
-                                    deployment::HTTP_PORT,
-                                ),
-                            ),
-                            ..ServicePort::default()
-                        }]),
-                        ..ServiceSpec::default()
-                    }),
-                    ..Service::default()
-                },
-            )
-            .await
-            .unwrap()
-            .spec
-            .unwrap()
-            .ports
-            .unwrap()[0]
-            .node_port
-            .unwrap();
-        let node = Api::<Node>::all(admin.clone())
-            .list(&ListParams::default())
-            .await
-            .unwrap()
-            .items
-            .remove(0);
-        let node_name = node.name_any();
-        let node_ip = node
-            .status
-            .and_then(|s| s.addresses)
-            .unwrap()
-            .into_iter()
-            .find(|a| a.type_ == "InternalIP")
-            .unwrap()
-            .address;
-        let address = format!("{node_ip}:{node_port}");
-        wait_for(
-            "the NodePort to accept connections",
-            Duration::from_secs(60),
-            || {
-                let address = address.clone();
-                async move { TcpStream::connect(&address).await.is_ok() }
-            },
-        )
-        .await;
+        let (address, node_name) = public_address(&admin, &namespace).await;
         let origin = Url::parse(ISSUER).unwrap();
 
         // Enrol a passkey from the link.
@@ -825,6 +839,7 @@ mod tests {
         // cert-manager renews the serving certificate. Zeabur Identity serves it without a
         // restart, and kube-apiserver's configuration stays the same.
         let secrets: Api<Secret> = Api::namespaced(admin.clone(), &namespace);
+        let services: Api<Service> = Api::namespaced(admin.clone(), &namespace);
         let cluster_ip: IpAddr = services
             .get(rbac::NAME)
             .await
@@ -962,6 +977,499 @@ mod tests {
         for file in [as_user, as_regular, as_admin, as_id_token, as_rotated] {
             drop(std::fs::remove_file(file));
         }
+        Api::<Namespace>::all(admin)
+            .delete(&namespace, &DeleteParams::background())
+            .await
+            .unwrap();
+    }
+
+    /// Keycloak as the browser and the test reach it: TLS to `address`, trusting only the
+    /// scenario's CA, for URLs on the issuer's host.
+    struct Keycloak {
+        issuer: String,
+        address: String,
+        tls: TlsConnector,
+    }
+
+    /// The realm's client secret and test users (`keycloak/realm.json`).
+    const KEYCLOAK_SECRET: &str = "e2e-only-client-secret";
+    const KC_ALICE: (&str, &str, &str) = (
+        "kc-alice",
+        "alice-e2e-password",
+        "6f1c1d2e-0000-4000-8000-00000000a11c",
+    );
+    const KC_BOB: (&str, &str, &str) = (
+        "kc-bob",
+        "bob-e2e-password",
+        "6f1c1d2e-0000-4000-8000-000000000b0b",
+    );
+
+    /// Every cookie a reply sets, as a `Cookie` header value.
+    fn set_cookies(reply: &Reply) -> Vec<String> {
+        reply
+            .headers
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .filter_map(|v| Some(v.to_str().ok()?.split(';').next()?.to_owned()))
+            .collect()
+    }
+
+    impl Keycloak {
+        fn from_env() -> Self {
+            let pem = std::fs::read(env("ZEABUR_IDENTITY_E2E_KEYCLOAK_CA")).unwrap();
+            let mut roots = rustls::RootCertStore::empty();
+            for cert in CertificateDer::pem_slice_iter(&pem) {
+                roots.add(cert.unwrap()).unwrap();
+            }
+            let config = rustls::ClientConfig::builder()
+                .with_root_certificates(roots)
+                .with_no_client_auth();
+            Self {
+                issuer: env("ZEABUR_IDENTITY_E2E_KEYCLOAK_ISSUER"),
+                address: env("ZEABUR_IDENTITY_E2E_KEYCLOAK_ADDRESS"),
+                tls: TlsConnector::from(Arc::new(config)),
+            }
+        }
+
+        /// One HTTP/1.1 request over TLS to `url`.
+        async fn request(
+            &self,
+            method: Method,
+            url: &Url,
+            cookies: &[String],
+            form: Option<String>,
+        ) -> Reply {
+            let host = url.host_str().unwrap().to_owned();
+            let stream = TcpStream::connect(&self.address).await.unwrap();
+            let stream = self
+                .tls
+                .connect(ServerName::try_from(host.clone()).unwrap(), stream)
+                .await
+                .unwrap();
+            let (mut sender, connection) =
+                hyper::client::conn::http1::handshake(TokioIo::new(stream))
+                    .await
+                    .unwrap();
+            tokio::spawn(connection);
+            let path = url[url::Position::BeforePath..url::Position::AfterQuery].to_owned();
+            let mut request = Request::builder().method(method).uri(path).header(
+                header::HOST,
+                format!("{host}:{}", url.port_or_known_default().unwrap()),
+            );
+            if !cookies.is_empty() {
+                request = request.header(header::COOKIE, cookies.join("; "));
+            }
+            let payload = form.unwrap_or_default();
+            if !payload.is_empty() {
+                request = request.header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
+            }
+            let response = sender
+                .send_request(request.body(Full::new(Bytes::from(payload))).unwrap())
+                .await
+                .unwrap();
+            let (parts, body) = response.into_parts();
+            Reply {
+                status: parts.status,
+                headers: parts.headers,
+                body: body.collect().await.unwrap().to_bytes(),
+            }
+        }
+
+        /// Plays the browser at Keycloak: opens `authorize`, submits the login form as `user`,
+        /// and returns where Keycloak sends the browser back to.
+        async fn log_in(&self, authorize: &str, (user, password, _): (&str, &str, &str)) -> Url {
+            let authorize = Url::parse(authorize).unwrap();
+            assert!(authorize.as_str().starts_with(&self.issuer), "{authorize}");
+            let page = self.request(Method::GET, &authorize, &[], None).await;
+            assert_eq!(page.status, StatusCode::OK, "{:?}", page.body);
+            let html = String::from_utf8_lossy(&page.body).into_owned();
+            let form = html
+                .get(html.find("id=\"kc-form-login\"").unwrap()..)
+                .unwrap();
+            let action = form.get(form.find("action=\"").unwrap() + 8..).unwrap();
+            let action = action
+                .get(..action.find('"').unwrap())
+                .unwrap()
+                .replace("&amp;", "&");
+            let body = form_urlencoded::Serializer::new(String::new())
+                .extend_pairs([
+                    ("username", user),
+                    ("password", password),
+                    ("credentialId", ""),
+                ])
+                .finish();
+            let reply = self
+                .request(
+                    Method::POST,
+                    &Url::parse(&action).unwrap(),
+                    &set_cookies(&page),
+                    Some(body),
+                )
+                .await;
+            assert_eq!(reply.status, StatusCode::FOUND, "{:?}", reply.body);
+            let location = reply.headers[header::LOCATION].to_str().unwrap();
+            Url::parse(location).unwrap()
+        }
+    }
+
+    /// Follows Keycloak's redirect back to Zeabur Identity's callback with `cookies`.
+    async fn callback(address: &str, back: &Url, cookies: &str) -> Reply {
+        assert!(
+            back.as_str()
+                .starts_with(&format!("{ISSUER}/upstream/keycloak/callback?")),
+            "{back}"
+        );
+        // RFC 9207: Keycloak names itself in the response, and Zeabur Identity checks it.
+        assert!(back.query_pairs().any(|(k, _)| k == "iss"), "{back}");
+        let path = format!("{}?{}", back.path(), back.query().unwrap());
+        http(address, Method::GET, &path, &[("cookie", cookies)], None).await
+    }
+
+    /// The account session cookie and CSRF token after signing in to the account page with
+    /// `device`.
+    async fn account_session(address: &str, device: &mut Device) -> (String, String) {
+        let origin = Url::parse(ISSUER).unwrap();
+        let reply = post_json(address, "/account/session/options", &json!({}), "").await;
+        assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+        let ceremony = reply.cookie(CEREMONY_COOKIE);
+        let options: CredentialRequestOptions = serde_json::from_value(reply.json()).unwrap();
+        let assertion = device
+            .authenticate(&origin, options, DefaultClientData)
+            .await
+            .unwrap();
+        let reply = post_json(
+            address,
+            "/account/session",
+            &json!({ "credential": assertion }),
+            &format!("{CEREMONY_COOKIE}={ceremony}"),
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+        let session = format!("{SESSION_COOKIE}={}", reply.cookie(SESSION_COOKIE));
+        let page = http(
+            address,
+            Method::GET,
+            "/account",
+            &[("cookie", &session)],
+            None,
+        )
+        .await;
+        let html = String::from_utf8_lossy(&page.body).into_owned();
+        let csrf = html.get(html.find("data-csrf=\"").unwrap() + 11..).unwrap();
+        let csrf = csrf.get(..csrf.find('"').unwrap()).unwrap().to_owned();
+        (session, csrf)
+    }
+
+    /// Links the Keycloak user `kc` from the account page.
+    async fn link_from_account(
+        address: &str,
+        keycloak: &Keycloak,
+        (session, csrf): (&str, &str),
+        kc: (&str, &str, &str),
+    ) {
+        let started = post_json(
+            address,
+            "/account/links/start",
+            &json!({ "csrf": csrf, "provider": "keycloak" }),
+            session,
+        )
+        .await;
+        assert_eq!(started.status, StatusCode::OK, "{:?}", started.body);
+        let upstream = started.cookie(UPSTREAM_COOKIE);
+        let back = keycloak
+            .log_in(started.json()["redirect_to"].as_str().unwrap(), kc)
+            .await;
+        let reply = callback(
+            address,
+            &back,
+            &format!("{session}; {UPSTREAM_COOKIE}={upstream}"),
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::SEE_OTHER, "{:?}", reply.body);
+        assert_eq!(
+            reply.headers[header::LOCATION],
+            format!("{ISSUER}/account#notice=linked")
+        );
+    }
+
+    /// Signs in as kubectl would, choosing Keycloak and logging in there as `kc`. Returns the
+    /// callback reply.
+    async fn keycloak_sign_in(address: &str, keycloak: &Keycloak, kc: (&str, &str, &str)) -> Reply {
+        let authorize = format!(
+            "/authorize?client_id=kubectl&redirect_uri=http%3A%2F%2F127.0.0.1%3A8000%2F&response_type=code&scope=openid&code_challenge={CHALLENGE}&code_challenge_method=S256&state=e2e"
+        );
+        let reply = http(address, Method::GET, &authorize, &[], None).await;
+        assert_eq!(reply.status, StatusCode::SEE_OTHER);
+        let flow = format!("{FLOW_COOKIE}={}", reply.cookie(FLOW_COOKIE));
+        let started = post_json(address, "/upstream/keycloak/start", &json!({}), &flow).await;
+        assert_eq!(started.status, StatusCode::OK, "{:?}", started.body);
+        let upstream = started.cookie(UPSTREAM_COOKIE);
+        let back = keycloak
+            .log_in(started.json()["redirect_to"].as_str().unwrap(), kc)
+            .await;
+        callback(
+            address,
+            &back,
+            &format!("{flow}; {UPSTREAM_COOKIE}={upstream}"),
+        )
+        .await
+    }
+
+    /// The `sub` that `/userinfo` returns for the code in a successful callback.
+    async fn signed_in_subject(address: &str, reply: &Reply) -> String {
+        assert_eq!(reply.status, StatusCode::SEE_OTHER, "{:?}", reply.body);
+        let location = reply.headers[header::LOCATION].to_str().unwrap();
+        assert!(location.starts_with(REDIRECT), "{location}");
+        let code = form_urlencoded::parse(location.split_once('?').unwrap().1.as_bytes())
+            .find(|(k, _)| k == "code")
+            .unwrap()
+            .1
+            .into_owned();
+        let tokens = post_form(
+            address,
+            "/token",
+            &[
+                ("grant_type", "authorization_code"),
+                ("code", code.as_str()),
+                ("code_verifier", VERIFIER),
+                ("client_id", "kubectl"),
+                ("redirect_uri", REDIRECT),
+            ],
+        )
+        .await;
+        assert_eq!(tokens.status, StatusCode::OK, "{:?}", tokens.body);
+        let authorization = format!("Bearer {}", tokens.json()["access_token"].as_str().unwrap());
+        let info = http(
+            address,
+            Method::GET,
+            "/userinfo",
+            &[("authorization", &authorization)],
+            None,
+        )
+        .await;
+        assert_eq!(info.status, StatusCode::OK);
+        info.json()["sub"].as_str().unwrap().to_owned()
+    }
+
+    /// The checked-in OpenID scenario against Keycloak, which `scripts/keycloak-e2e.sh` serves
+    /// with a CA of its own. Zeabur Identity is told to trust that CA as the "Add an upstream
+    /// sign-in" guide says. Then a regular user links one Keycloak account from the account page
+    /// and signs in with it as kubectl would, links a second, unlinks it, and that second account
+    /// can no longer sign in while the first still can.
+    #[tokio::test]
+    #[ignore = "needs a prepared k3s cluster, the image and Keycloak (scripts/keycloak-e2e.sh)"]
+    #[expect(clippy::too_many_lines, reason = "one scenario, read top to bottom")]
+    async fn keycloak_links_signs_in_and_unlinks() {
+        let image = env("ZEABUR_IDENTITY_E2E_IMAGE");
+        let keycloak = Keycloak::from_env();
+        let ca = std::fs::read_to_string(env("ZEABUR_IDENTITY_E2E_KEYCLOAK_CA")).unwrap();
+        let admin = Client::try_default().await.unwrap();
+        let issuer = BaseUrl::parse("issuer", ISSUER).unwrap();
+        let namespace = format!("zeabur-identity-keycloak-{}", std::process::id());
+        install(&admin, &namespace, &issuer, &image).await;
+
+        // Trust the provider's CA: a ConfigMap, mounted, and the image's bundle kept.
+        apply(
+            &admin,
+            json!({
+                "apiVersion": "v1", "kind": "ConfigMap",
+                "metadata": {"name": "upstream-ca", "namespace": namespace},
+                "data": {"ca.crt": ca},
+            }),
+        )
+        .await;
+        let deployments: Api<Deployment> = Api::namespaced(admin.clone(), &namespace);
+        deployments
+            .patch(
+                rbac::NAME,
+                &PatchParams::default(),
+                &Patch::Strategic(json!({"spec": {"template": {"spec": {
+                    "volumes": [{"name": "upstream-ca", "configMap": {"name": "upstream-ca"}}],
+                    "containers": [{
+                        "name": rbac::NAME,
+                        "env": [
+                            {"name": "SSL_CERT_FILE", "value": "/etc/ssl/certs/ca-certificates.crt"},
+                            {"name": "SSL_CERT_DIR", "value": "/etc/zeabur-identity-upstream-ca"},
+                        ],
+                        "volumeMounts": [{"name": "upstream-ca", "mountPath": "/etc/zeabur-identity-upstream-ca", "readOnly": true}],
+                    }],
+                }}}})),
+            )
+            .await
+            .unwrap();
+        wait_for(
+            "the Deployment to roll out with the CA",
+            Duration::from_secs(180),
+            || async {
+                let deployment = deployments.get(rbac::NAME).await.unwrap();
+                let generation = deployment.metadata.generation;
+                let status = deployment.status.unwrap_or_default();
+                status.observed_generation == generation
+                    && status.updated_replicas == Some(1)
+                    && status.ready_replicas == Some(1)
+                    && status.replicas == Some(1)
+            },
+        )
+        .await;
+
+        // The provider: its client secret, then the object.
+        apply(
+            &admin,
+            json!({
+                "apiVersion": "v1", "kind": "Secret",
+                "metadata": {"name": "zeabur-identity-upstream", "namespace": namespace},
+                "stringData": {"keycloak": KEYCLOAK_SECRET},
+            }),
+        )
+        .await;
+        apply(
+            &admin,
+            json!({
+                "apiVersion": "identity.zeabur.com/v1alpha1", "kind": "UpstreamProvider",
+                "metadata": {"name": "keycloak", "namespace": namespace},
+                "spec": {
+                    "type": "OpenID", "issuer": keycloak.issuer, "displayName": "Keycloak",
+                    "clientId": "zeabur-identity", "clientSecretKey": "keycloak",
+                },
+            }),
+        )
+        .await;
+        let clients: Api<OAuthClient> = Api::namespaced(admin.clone(), &namespace);
+        clients
+            .create(
+                &PostParams::default(),
+                &OAuthClient::new(
+                    "kubectl",
+                    OAuthClientSpec {
+                        display_name: None,
+                        kind: ClientType::Public,
+                        redirect_uris: vec![REDIRECT.into()],
+                        audiences: vec!["kubernetes".into()],
+                        secret_hash: None,
+                        id_token_signing_alg: None,
+                        home_url: None,
+                    },
+                ),
+            )
+            .await
+            .unwrap();
+        let (address, _) = public_address(&admin, &namespace).await;
+        wait_for(
+            "the sign-in page to offer Keycloak",
+            Duration::from_secs(60),
+            || {
+                let address = address.clone();
+                async move {
+                    let page = http(&address, Method::GET, "/setup", &[], None).await;
+                    String::from_utf8_lossy(&page.body).contains("data-provider=\"keycloak\"")
+                }
+            },
+        )
+        .await;
+
+        // alice: a passkey from a setup link, then a regular account.
+        let link = issue_setup_link(
+            admin.clone(),
+            &namespace,
+            &issuer,
+            "alice",
+            Duration::from_mins(10),
+            false,
+            SystemClock.now(),
+        )
+        .await
+        .unwrap();
+        let token = link.url.split_once("#token=").unwrap().1.to_owned();
+        let mut device = device();
+        let origin = Url::parse(ISSUER).unwrap();
+        let reply = post_json(&address, "/setup/options", &json!({ "token": token }), "").await;
+        assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+        let options: CredentialCreationOptions = serde_json::from_value(reply.json()).unwrap();
+        let credential = device
+            .register(&origin, options, DefaultClientData)
+            .await
+            .unwrap();
+        let ceremony = reply.cookie(CEREMONY_COOKIE);
+        let reply = post_json(
+            &address,
+            "/setup",
+            &json!({ "token": token, "credential": credential, "label": "e2e" }),
+            &format!("{CEREMONY_COOKIE}={ceremony}"),
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.body);
+        let users: Api<User> = Api::namespaced(admin.clone(), &namespace);
+        users
+            .patch(
+                "alice",
+                &PatchParams::default(),
+                &Patch::Merge(json!({"spec": {"accountType": "Regular"}})),
+            )
+            .await
+            .unwrap();
+        let alice = users.get("alice").await.unwrap().uid().unwrap();
+
+        // Before any link, Keycloak's kc-alice is nobody here.
+        let reply = keycloak_sign_in(&address, &keycloak, KC_ALICE).await;
+        assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{:?}", reply.body);
+        assert!(String::from_utf8_lossy(&reply.body).contains("account_unlinked (keycloak)"));
+
+        // Link kc-alice from the account page; it signs in as alice.
+        let (session, csrf) = account_session(&address, &mut device).await;
+        link_from_account(&address, &keycloak, (&session, &csrf), KC_ALICE).await;
+        let reply = keycloak_sign_in(&address, &keycloak, KC_ALICE).await;
+        assert_eq!(signed_in_subject(&address, &reply).await, alice);
+
+        // A second Keycloak account, linked to alice too, signs in as alice.
+        link_from_account(&address, &keycloak, (&session, &csrf), KC_BOB).await;
+        let reply = keycloak_sign_in(&address, &keycloak, KC_BOB).await;
+        assert_eq!(signed_in_subject(&address, &reply).await, alice);
+
+        // Unlink kc-bob: alice keeps her passkey and kc-alice.
+        let credentials: Api<Credential> = Api::namespaced(admin.clone(), &namespace);
+        let mine = credentials
+            .list(&ListParams::default().labels(&format!("{USER_LABEL}=alice")))
+            .await
+            .unwrap()
+            .items;
+        let subject_of = |c: &Credential| {
+            c.spec
+                .external
+                .as_ref()
+                .map(|e| e.subject.as_str().to_owned())
+        };
+        let bob = mine
+            .iter()
+            .find(|c| subject_of(c).as_deref() == Some(KC_BOB.2))
+            .unwrap()
+            .name_any();
+        let reply = post_json(
+            &address,
+            "/account/links/remove",
+            &json!({ "csrf": csrf, "name": bob }),
+            &session,
+        )
+        .await;
+        assert!(reply.status.is_success(), "{:?}", reply.body);
+        let left = credentials
+            .list(&ListParams::default().labels(&format!("{USER_LABEL}=alice")))
+            .await
+            .unwrap()
+            .items;
+        assert!(left.iter().all(|c| c.name_any() != bob));
+        assert!(left.iter().any(|c| c.spec.passkey.is_some()));
+        assert!(
+            left.iter()
+                .any(|c| subject_of(c).as_deref() == Some(KC_ALICE.2))
+        );
+
+        // kc-bob is nobody here again; kc-alice still signs in as alice.
+        let reply = keycloak_sign_in(&address, &keycloak, KC_BOB).await;
+        assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{:?}", reply.body);
+        assert!(String::from_utf8_lossy(&reply.body).contains("account_unlinked (keycloak)"));
+        let reply = keycloak_sign_in(&address, &keycloak, KC_ALICE).await;
+        assert_eq!(signed_in_subject(&address, &reply).await, alice);
+
         Api::<Namespace>::all(admin)
             .delete(&namespace, &DeleteParams::background())
             .await

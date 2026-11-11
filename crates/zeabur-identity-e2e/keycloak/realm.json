@@ -1,0 +1,45 @@
+{
+  "realm": "zeabur",
+  "enabled": true,
+  "sslRequired": "all",
+  "clients": [
+    {
+      "clientId": "zeabur-identity",
+      "name": "Zeabur Identity",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "e2e-only-client-secret",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": ["https://identity.e2e.invalid/upstream/keycloak/callback"],
+      "webOrigins": [],
+      "attributes": { "pkce.code.challenge.method": "S256" }
+    }
+  ],
+  "users": [
+    {
+      "id": "6f1c1d2e-0000-4000-8000-00000000a11c",
+      "username": "kc-alice",
+      "email": "alice@example.test",
+      "emailVerified": true,
+      "firstName": "Alice",
+      "lastName": "Example",
+      "enabled": true,
+      "credentials": [{ "type": "password", "value": "alice-e2e-password", "temporary": false }]
+    },
+    {
+      "id": "6f1c1d2e-0000-4000-8000-000000000b0b",
+      "username": "kc-bob",
+      "email": "bob@example.test",
+      "emailVerified": true,
+      "firstName": "Bob",
+      "lastName": "Example",
+      "enabled": true,
+      "credentials": [{ "type": "password", "value": "bob-e2e-password", "temporary": false }]
+    }
+  ]
+}

@@ -24,9 +24,10 @@ cargo nextest run --locked --run-ignored only -E 'binary(kubernetes)'          #
 ./scripts/build-image.sh zeabur-identity:e2e && k3d image import zeabur-identity:e2e -c zeabur-identity
 ZEABUR_IDENTITY_E2E_IMAGE=zeabur-identity:e2e ZEABUR_IDENTITY_E2E_AUTHN_DIR=$HOME/zeabur-identity-k3d/authn \
 ZEABUR_IDENTITY_E2E_MEASUREMENTS=/tmp/m.json \
-  cargo nextest run --locked --run-ignored only -E 'binary(e2e)'
+  cargo nextest run --locked --run-ignored only -E 'binary(e2e) and not test(keycloak)'
 ```
 The e2e test takes 1–3 minutes, mostly waiting for kube-apiserver to reload the config.
+After a change to upstream sign-in, also run `./scripts/keycloak-e2e.sh` (its own cluster, Keycloak in Docker).
 
 ## What to check when something fails
 - **Tokens never accepted** (whoami times out): read the apiserver log —
