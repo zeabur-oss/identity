@@ -5,7 +5,7 @@ description: 将 GitHub、Google 或自建 OpenID 提供方（如 Keycloak）的
 
 除了通行密钥，用户也可以用已有的外部账号登录 Zeabur Identity，包括 GitHub、Google，以及组织自行运行的 OpenID 提供方，如 Keycloak、Okta 或 Microsoft Entra ID。这些都是外部登录方式。添加提供方后，登录页面会在通行密钥按钮下方多一个按钮，例如**使用 GitHub 继续**。
 
-![登录页面，有通行密钥按钮和“使用 GitHub 继续”按钮](../images/sign-in-light.avif)
+![登录页面，有通行密钥按钮和“使用 GitHub 继续”按钮](../../images/sign-in-light.avif)
 
 你决定哪些人能登录。外部账号只有关联到 Zeabur Identity 用户后才能登录。Zeabur Identity 不会在首次登录时创建用户，也不会根据电子邮箱、姓名或组织匹配账号。用户组仍由 `User` 决定。每个关联账号都用提供方的 issuer 和固定账号 ID 记录，所以登录名或电子邮箱转给其他人后，关联关系也不会转移。
 
