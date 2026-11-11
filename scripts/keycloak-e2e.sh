@@ -9,7 +9,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-keycloak_image="${KEYCLOAK_IMAGE:-quay.io/keycloak/keycloak:26.2.5}"
+keycloak_image="${KEYCLOAK_IMAGE:-quay.io/keycloak/keycloak:26.8.1}"
 cluster=zeabur-identity-keycloak
 container=zeabur-identity-keycloak
 host=host.k3d.internal

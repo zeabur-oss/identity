@@ -749,22 +749,22 @@ reason = "WebAuthn relying party"
 approved = "2026-10-28"
 
 [[crate]]
-name = "block-padding"
+name = "chacha20"
 kind = "unsafe"
-reason = "WebAuthn relying party"
-approved = "2026-10-28"
-
-[[crate]]
-name = "cipher"
-kind = "unsafe"
-reason = "WebAuthn relying party"
-approved = "2026-10-28"
+reason = "WebAuthn relying party: SIMD backends of the ChaCha20 generator behind rand 0.10"
+approved = "pending"
 
 [[crate]]
 name = "cmov"
 kind = "unsafe"
 reason = "WebAuthn relying party"
 approved = "2026-10-29"
+
+[[crate]]
+name = "const-oid"
+kind = "unsafe"
+reason = "WebAuthn relying party: one `unsafe` in OID parsing (RustCrypto, used by crypto-glue)"
+approved = "pending"
 
 [[crate]]
 name = "cpufeatures"
@@ -791,10 +791,22 @@ reason = "WebAuthn relying party"
 approved = "2026-10-28"
 
 [[crate]]
+name = "der"
+kind = "unsafe"
+reason = "WebAuthn relying party: DER encoding of attestation certificates and keys (RustCrypto)"
+approved = "pending"
+
+[[crate]]
 name = "deranged"
 kind = "unsafe"
 reason = "WebAuthn relying party"
 approved = "2026-10-28"
+
+[[crate]]
+name = "elliptic-curve"
+kind = "unsafe"
+reason = "WebAuthn relying party: verifying ECDSA passkey signatures with public keys (RustCrypto)"
+approved = "pending"
 
 [[crate]]
 name = "flagset"
@@ -857,12 +869,6 @@ reason = "WebAuthn relying party"
 approved = "2026-10-28"
 
 [[crate]]
-name = "libm"
-kind = "unsafe"
-reason = "WebAuthn relying party"
-approved = "2026-10-28"
-
-[[crate]]
 name = "litemap"
 kind = "unsafe"
 reason = "WebAuthn relying party"
@@ -870,12 +876,6 @@ approved = "2026-10-28"
 
 [[crate]]
 name = "num-bigint"
-kind = "unsafe"
-reason = "WebAuthn relying party"
-approved = "2026-10-28"
-
-[[crate]]
-name = "num-bigint-dig"
 kind = "unsafe"
 reason = "WebAuthn relying party"
 approved = "2026-10-28"
@@ -917,16 +917,16 @@ reason = "WebAuthn relying party"
 approved = "2026-10-28"
 
 [[crate]]
-name = "rand_chacha"
+name = "rand_core"
 kind = "unsafe"
 reason = "WebAuthn relying party"
 approved = "2026-10-28"
 
 [[crate]]
-name = "rand_core"
+name = "scrypt"
 kind = "unsafe"
-reason = "WebAuthn relying party"
-approved = "2026-10-28"
+reason = "WebAuthn relying party: reached through pkcs8's encrypted-key support; passkey verification does not call it"
+approved = "pending"
 
 [[crate]]
 name = "serde_with"
@@ -942,12 +942,6 @@ approved = "2026-10-28"
 
 [[crate]]
 name = "sha2"
-kind = "unsafe"
-reason = "WebAuthn relying party"
-approved = "2026-10-28"
-
-[[crate]]
-name = "spin"
 kind = "unsafe"
 reason = "WebAuthn relying party"
 approved = "2026-10-28"
@@ -971,12 +965,6 @@ reason = "WebAuthn relying party"
 approved = "2026-10-28"
 
 [[crate]]
-name = "universal-hash"
-kind = "unsafe"
-reason = "WebAuthn relying party"
-approved = "2026-10-28"
-
-[[crate]]
 name = "url"
 kind = "unsafe"
 reason = "WebAuthn relying party"
@@ -987,6 +975,12 @@ name = "utf8_iter"
 kind = "unsafe"
 reason = "WebAuthn relying party"
 approved = "2026-10-28"
+
+[[crate]]
+name = "utf_types"
+kind = "unsafe"
+reason = "URL and IDNA parsing: UTF-8 iteration under utf8_iter 1.1"
+approved = "pending"
 
 [[crate]]
 name = "uuid"

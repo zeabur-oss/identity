@@ -9,7 +9,7 @@
 
 use thiserror::Error;
 use webauthn_rs::prelude::{
-    DiscoverableAuthentication, DiscoverableKey, Passkey, PasskeyRegistration, PublicKeyCredential,
+    DiscoverableAuthentication, Passkey, PasskeyRegistration, PublicKeyCredential,
     RegisterPublicKeyCredential, RequestChallengeResponse, Url, Uuid, Webauthn, WebauthnBuilder,
     WebauthnError,
 };
@@ -158,7 +158,7 @@ impl Passkeys {
     ) -> Result<(), PasskeyError> {
         let result = self
             .webauthn
-            .finish_discoverable_authentication(response, state, &[DiscoverableKey::from(passkey)])
+            .finish_discoverable_authentication_v2(response, state, passkey)
             .map_err(|e| {
                 if matches!(e, WebauthnError::UserNotVerified) {
                     PasskeyError::NotUserVerified

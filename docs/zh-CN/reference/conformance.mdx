@@ -20,7 +20,7 @@ cargo doc --workspace --open
 
 代码路径以 `crates/` 为基准。单元测试格式为 `crate: module::tests::name`，集成测试格式为 `crate/tests/file.rs: name`。
 
-标记为 *(cluster)* 的测试使用 k3s `v1.36.5`，运行时使用 `--run-ignored only`。标记为 *(e2e)* 的测试位于 `zeabur-identity-e2e/tests/e2e.rs`，使用 Zeabur Identity 容器镜像运行。标记为 *(e2e, Keycloak)* 的测试还需要 Keycloak 服务器，使用 `scripts/keycloak-e2e.sh` 运行，不在 CI 中运行。
+标记为 *(cluster)* 的测试使用 k3s `v1.37.2`，运行时使用 `--run-ignored only`。标记为 *(e2e)* 的测试位于 `zeabur-identity-e2e/tests/e2e.rs`，使用 Zeabur Identity 容器镜像运行。标记为 *(e2e, Keycloak)* 的测试还需要 Keycloak 服务器，使用 `scripts/keycloak-e2e.sh` 运行，不在 CI 中运行。
 
 ## 各项规范摘要
 
