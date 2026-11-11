@@ -150,7 +150,7 @@
       <p class="text-[0.8125rem] leading-5 text-pretty text-secondary">{{ m.admin_passkey_only }}</p>
       {%- else %}
       {%- for p in view.providers %}
-      <button type="button" data-link="{{ p.id }}" class="{{ ds::button("secondary", "lg") }} w-full">{{ icons::icon(p.icon) }}{{ m.link_with.replace("%provider%", p.label) }}</button>
+      <button type="button" data-link="{{ p.id }}" class="{{ ds::button("secondary", "lg") }} w-full">{{ icons::icon(p.icon) }}<span class="truncate">{{ m.link_with.replace("%provider%", p.label) }}</span></button>
       {%- endfor %}
       {%- endif %}
     </div>

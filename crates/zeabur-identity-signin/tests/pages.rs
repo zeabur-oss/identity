@@ -35,36 +35,85 @@ mod tests {
         app_with(Arc::default()).await
     }
 
-    /// A provider for each ID: `github` is GitHub, any other an OpenID provider named after it.
+    /// A provider for each ID: `github` is GitHub, `google` Google, any other an OpenID provider
+    /// named after its ID.
     fn registry(ids: &[&str]) -> Arc<Providers> {
         let mut list = Vec::new();
         for id in ids {
-            let secret = ClientSecret::Fixed("secret".into());
             let provider = if *id == "github" {
                 Provider::github(
                     ProviderId::new(*id).unwrap(),
                     "client".into(),
-                    secret,
+                    ClientSecret::Fixed("secret".into()),
                     GitHubEndpoints::github_com(),
                 )
                 .unwrap()
+            } else if *id == "google" {
+                openid(id, "Google", GOOGLE_ISSUER)
             } else {
-                let (label, issuer) = match *id {
-                    "google" => ("Google", GOOGLE_ISSUER.to_owned()),
-                    other => (other, format!("https://{other}.example")),
-                };
-                Provider::openid(
-                    ProviderId::new(*id).unwrap(),
-                    label.into(),
-                    Issuer::new(issuer).unwrap(),
-                    Vec::new(),
-                    "client".into(),
-                    secret,
-                )
+                openid(id, id, &format!("https://{id}.example"))
             };
             list.push(Arc::new(provider));
         }
         Arc::new(Providers::new(list))
+    }
+
+    fn openid(id: &str, label: &str, issuer: &str) -> Provider {
+        Provider::openid(
+            ProviderId::new(id).unwrap(),
+            label.into(),
+            Issuer::new(issuer.to_owned()).unwrap(),
+            Vec::new(),
+            "client".into(),
+            ClientSecret::Fixed("secret".into()),
+        )
+    }
+
+    /// The upstream buttons of `html` in page order: the provider ID each starts (the script
+    /// posts to `/upstream/{id}/start`) and its text, with markup removed and entities decoded.
+    fn provider_buttons(html: &str) -> Vec<(String, String)> {
+        let mut buttons = Vec::new();
+        let mut rest = html;
+        while let Some(at) = rest.find("data-provider=\"") {
+            rest = rest.get(at + "data-provider=\"".len()..).unwrap();
+            let id = rest.get(..rest.find('"').unwrap()).unwrap().to_owned();
+            let inner = rest.get(rest.find('>').unwrap() + 1..rest.find("</button>").unwrap());
+            let mut text = String::new();
+            let mut in_tag = false;
+            for c in inner.unwrap().chars() {
+                match c {
+                    '<' => in_tag = true,
+                    '>' => in_tag = false,
+                    c if !in_tag => text.push(c),
+                    _ => {}
+                }
+            }
+            let text = text
+                .replace("&#38;", "&")
+                .replace("&#60;", "<")
+                .replace("&#62;", ">")
+                .replace("&#34;", "\"")
+                .replace("&#39;", "'");
+            buttons.push((id, text));
+        }
+        buttons
+    }
+
+    /// Asserts that the page offers exactly `expected` (ID and display name), in order, and only
+    /// after the passkey action `passkey`.
+    fn assert_offers(page: &Page, passkey: &str, expected: &[(&str, &str)]) {
+        let want: Vec<(String, String)> = expected
+            .iter()
+            .map(|(id, label)| ((*id).to_owned(), format!("Continue with {label}")))
+            .collect();
+        assert_eq!(provider_buttons(&page.body), want);
+        let passkey_at = page
+            .body
+            .find(passkey)
+            .unwrap_or_else(|| panic!("no {passkey}"));
+        if let Some(first) = page.body.find("data-provider=") {
+            assert!(passkey_at < first, "a provider comes before the passkey");
+        }
     }
 
     async fn app_with(providers: Arc<Providers>) -> Router {
@@ -622,24 +671,130 @@ mod tests {
         assert!(page.body.contains("data-provider"));
     }
 
-    /// The pages show the providers at the time of each request: added, renamed and deleted
-    /// providers show at the next request, without a new router.
+    /// The login and setup pages offer exactly the configured providers, by display name, in
+    /// the registry's order and after the passkey, for no provider, one, and several of any kind.
+    #[tokio::test]
+    async fn each_page_offers_exactly_the_configured_providers_after_the_passkey() {
+        let sets: [&[(&str, &str, &str)]; 3] = [
+            &[],
+            &[("acme-sso", "Acme SSO", "https://sso.acme.example")],
+            &[
+                (
+                    "okta-eu",
+                    "Okta (EU) & <partners>",
+                    "https://acme.okta.example",
+                ),
+                ("github", "GitHub", ""),
+                ("google", "Google", GOOGLE_ISSUER),
+                ("k", "Keycloak", "https://sso.example/realms/dev"),
+            ],
+        ];
+        for set in sets {
+            let mut list = Vec::new();
+            for (id, label, issuer) in set {
+                list.push(if *id == "github" {
+                    Arc::clone(&registry(&["github"]).current()[0])
+                } else {
+                    Arc::new(openid(id, label, issuer))
+                });
+            }
+            let app = app_with(Arc::new(Providers::new(list))).await;
+            let expected: Vec<(&str, &str)> =
+                set.iter().map(|(id, label, _)| (*id, *label)).collect();
+
+            let cookie = pending_request(&app).await;
+            let login = get(&app, "/login", &[("cookie", &cookie)]).await;
+            assert_hardened(&login);
+            assert_offers(&login, "id=\"sign-in\"", &expected);
+
+            let setup = get(&app, "/setup", &[]).await;
+            assert_hardened(&setup);
+            assert_offers(&setup, "id=\"setup\"", &expected);
+        }
+    }
+
+    /// `prompt=login` and `max_age=0` ask for a fresh sign-in; every provider stays on offer.
+    #[tokio::test]
+    async fn a_fresh_sign_in_request_still_offers_every_provider() {
+        let app = app_with(registry(&["github", "google", "keycloak"])).await;
+        let expected = [
+            ("github", "GitHub"),
+            ("google", "Google"),
+            ("keycloak", "keycloak"),
+        ];
+        for extra in [
+            "&prompt=login",
+            "&max_age=0",
+            "&prompt=login%20consent&max_age=0",
+        ] {
+            let reply = get(
+                &app,
+                &format!(
+                    "/authorize?response_type=code&client_id=dashboard&redirect_uri=https%3A%2F%2Fdashboard.example.com%2Fcb\
+                     &scope=openid&code_challenge={CHALLENGE}&code_challenge_method=S256{extra}"
+                ),
+                &[],
+            )
+            .await;
+            assert_eq!(reply.status, StatusCode::SEE_OTHER, "{extra}");
+            let cookie = reply.headers[header::SET_COOKIE]
+                .to_str()
+                .unwrap()
+                .split(';')
+                .next()
+                .unwrap()
+                .to_owned();
+            let page = get(&app, "/login", &[("cookie", &cookie)]).await;
+            assert!(page.body.contains("Cluster Dashboard"), "{extra}");
+            assert_offers(&page, "id=\"sign-in\"", &expected);
+        }
+    }
+
+    /// The pages show the providers at the time of each request: an added, renamed or deleted
+    /// provider shows on the next login and setup page, with the same router.
     #[tokio::test]
     async fn provider_buttons_follow_the_registry() {
         let providers = registry(&["github"]);
         let app = app_with(Arc::clone(&providers)).await;
-        let page = get(&app, "/setup", &[]).await;
-        assert!(page.body.contains(r#"data-provider="github""#));
-        assert!(!page.body.contains("Keycloak"));
+        let cookie = pending_request(&app).await;
+        let pages = [("/login", "id=\"sign-in\""), ("/setup", "id=\"setup\"")];
+        let check = async |expected: &[(&str, &str)]| {
+            for (path, passkey) in pages {
+                let page = get(&app, path, &[("cookie", &cookie)]).await;
+                assert_offers(&page, passkey, expected);
+            }
+        };
+        check(&[("github", "GitHub")]).await;
 
-        providers.replace(registry(&["github", "keycloak"]).current().to_vec());
-        let page = get(&app, "/setup", &[]).await;
-        assert!(page.body.contains(r#"data-provider="github""#));
-        assert!(page.body.contains(r#"data-provider="keycloak""#));
-        assert!(page.body.contains("Continue with keycloak"));
+        let github = providers.get("github").unwrap();
+        providers.replace(vec![
+            Arc::clone(&github),
+            Arc::new(openid(
+                "keycloak",
+                "Keycloak",
+                "https://sso.example/realms/dev",
+            )),
+        ]);
+        check(&[("github", "GitHub"), ("keycloak", "Keycloak")]).await;
+
+        providers.replace(vec![
+            Arc::clone(&github),
+            Arc::new(openid(
+                "keycloak",
+                "Company SSO",
+                "https://sso.example/realms/prod",
+            )),
+        ]);
+        check(&[("github", "GitHub"), ("keycloak", "Company SSO")]).await;
+
+        providers.replace(vec![Arc::new(openid(
+            "keycloak",
+            "Company SSO",
+            "https://sso.example/realms/prod",
+        ))]);
+        check(&[("keycloak", "Company SSO")]).await;
 
         providers.replace(Vec::new());
-        let page = get(&app, "/setup", &[]).await;
-        assert!(!page.body.contains("data-provider"));
+        check(&[]).await;
     }
 }

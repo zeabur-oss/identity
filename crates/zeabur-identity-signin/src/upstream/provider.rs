@@ -386,7 +386,7 @@ impl Provider {
         let icon = match &self.protocol {
             Protocol::GitHub(_) => "GithubLogo",
             Protocol::OpenId { .. } if self.issuer.as_str() == GOOGLE_ISSUER => "GoogleLogo",
-            Protocol::OpenId { .. } => "Key",
+            Protocol::OpenId { .. } => "SignIn",
         };
         Descriptor {
             id: self.id.clone(),

@@ -7,7 +7,7 @@
   {{ ui::field_separator(m.upstream_or) }}
   <div class="flex flex-col gap-3">
     {%- for p in providers %}
-    <button type="button" data-provider="{{ p.id }}" class="{{ ds::button("secondary", "lg") }} w-full">{{ icons::icon(p.icon) }}{{ m.continue_with.replace("%provider%", p.label) }}</button>
+    <button type="button" data-provider="{{ p.id }}" class="{{ ds::button("secondary", "lg") }} w-full">{{ icons::icon(p.icon) }}<span class="truncate">{{ m.continue_with.replace("%provider%", p.label) }}</span></button>
     {%- endfor %}
   </div>
 </div>

@@ -1421,6 +1421,7 @@ mod tests {
         for rest in page.split(r#"data-link=""#).skip(1) {
             let (id, rest) = rest.split_once('"').unwrap();
             let (inside, _) = rest.split_once("</button>").unwrap();
+            let inside = inside.strip_suffix("</span>").unwrap_or(inside);
             let text = inside.rsplit_once('>').unwrap().1;
             buttons.push((id.to_owned(), text.to_owned()));
         }
@@ -2156,7 +2157,8 @@ mod tests {
         );
         let session = account_session(&h, "alice", 0).await;
         let page = account_page(&h, &session).await;
-        assert!(page.contains("accounts.google.com"));
+        // With no provider left, the row names Google by its issuer.
+        assert!(page.contains(">Google</p>"));
 
         registry(&h).replace(vec![Arc::new(openid_provider(
             "workspace",

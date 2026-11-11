@@ -53,7 +53,7 @@ use zeabur_identity_ui::pages::{
 use crate::device::Requester;
 use crate::passkeys::{authenticator, backup_flags};
 use crate::problem::Problem;
-use crate::upstream::provider::{Descriptor, GITHUB_ISSUER};
+use crate::upstream::provider::{Descriptor, GITHUB_ISSUER, GOOGLE_ISSUER};
 use crate::{
     Accepted, BAD_REQUEST, CEREMONY_COOKIE, CEREMONY_EXPIRED, CEREMONY_LIFETIME, Ceremony,
     PASSKEY_AMR, PASSKEY_FAILED, Refused, SignIn, Verified, accepted, check_account, check_request,
@@ -531,8 +531,8 @@ where
 }
 
 /// How a linked account's provider is shown: the provider it was linked through. If that
-/// provider is gone, a provider with the same issuer, which signs the account in, or else the
-/// issuer's host. The user can unlink the account either way.
+/// provider is gone, a provider with the same issuer, which signs the account in, or else GitHub,
+/// Google or the issuer's host. The user can unlink the account either way.
 fn shown_provider(account: &LinkedSummary, providers: &[Descriptor]) -> (String, &'static str) {
     let current = account
         .provider
@@ -542,7 +542,8 @@ fn shown_provider(account: &LinkedSummary, providers: &[Descriptor]) -> (String,
     match current {
         Some(descriptor) => (descriptor.label.clone(), descriptor.icon),
         None if account.issuer.as_str() == GITHUB_ISSUER => ("GitHub".to_owned(), "GithubLogo"),
-        None => (issuer_label(account.issuer.as_str()), "Key"),
+        None if account.issuer.as_str() == GOOGLE_ISSUER => ("Google".to_owned(), "GoogleLogo"),
+        None => (issuer_label(account.issuer.as_str()), "SignIn"),
     }
 }
 
