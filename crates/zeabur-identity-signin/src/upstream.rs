@@ -14,9 +14,9 @@
 //! Linking from the account page gives control of the account to whoever controls the upstream
 //! account, so it has the same gate as adding a passkey:
 //!
-//! 1. The start needs the account session, its CSRF token and a user-verified passkey confirmation
-//!    from the last [`REAUTH_WINDOW`](crate::account::REAUTH_WINDOW). Under the `admin-aal3`
-//!    setting, only a device-bound passkey confirms an admin account.
+//! 1. The start needs the account session, and a user-verified passkey confirmation from the last
+//!    [`REAUTH_WINDOW`](crate::account::REAUTH_WINDOW). Under the `admin-aal3` setting, only a
+//!    device-bound passkey confirms an admin account.
 //! 2. The pending request names the session, the user and the user's UID. The callback finishes
 //!    only if the browser still sends that session. RFC 6749 §10.12 asks for this binding of
 //!    `state` to "the user-agent's authenticated state". A provider answer thus cannot link an
@@ -320,7 +320,6 @@ where
 
 #[derive(Debug, Deserialize)]
 struct AccountStartRequest {
-    csrf: String,
     provider: String,
 }
 
@@ -348,7 +347,7 @@ where
     };
     let result: Result<Response, Problem> = async {
         let request: AccountStartRequest = parse(&body)?;
-        let account = signed_in(sign_in, &headers, &request.csrf, now).await?;
+        let account = signed_in(sign_in, &headers, now).await?;
         audit.session = Some(account.token.name().to_owned());
         user = Some(account.user.clone());
         let provider = service

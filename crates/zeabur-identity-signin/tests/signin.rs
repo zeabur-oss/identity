@@ -1239,10 +1239,12 @@ mod tests {
 
         use super::*;
 
-        /// A signed-in browser: the session cookie and the page's CSRF token.
+        /// Only the signed-out page has the sign-in button.
+        const SIGNED_OUT_MARK: &str = "id=\"account-sign-in\"";
+
+        /// A signed-in browser: the session cookie.
         struct Session {
             cookie: String,
-            csrf: String,
         }
 
         impl Session {
@@ -1294,16 +1296,6 @@ mod tests {
             html
         }
 
-        fn csrf_of(html: &str) -> String {
-            html.split_once("data-csrf=\"")
-                .unwrap()
-                .1
-                .split('"')
-                .next()
-                .unwrap()
-                .to_owned()
-        }
-
         async fn assertion(device: &mut Device, reply: &Reply) -> (Value, String) {
             assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
             let options: CredentialRequestOptions =
@@ -1345,15 +1337,14 @@ mod tests {
                 .unwrap();
             assert!(set_cookie.contains("HttpOnly") && set_cookie.contains("SameSite=Lax"));
             let cookie = reply.cookie(SESSION_COOKIE).unwrap();
-            let csrf = csrf_of(&page(h, Some(&cookie)).await);
-            Session { cookie, csrf }
+            Session { cookie }
         }
 
         async fn reauth(h: &Harness, session: &Session, device: &mut Device) -> Reply {
             let reply = post(
                 &h.app,
                 "/account/reauth/options",
-                json!({ "csrf": session.csrf }),
+                json!({}),
                 &session.cookies(),
             )
             .await;
@@ -1361,7 +1352,7 @@ mod tests {
             post(
                 &h.app,
                 "/account/reauth",
-                json!({ "csrf": session.csrf, "credential": credential }),
+                json!({ "credential": credential }),
                 &[
                     (SESSION_COOKIE, &session.cookie),
                     (CEREMONY_COOKIE, &ceremony),
@@ -1374,7 +1365,7 @@ mod tests {
             let reply = post(
                 &h.app,
                 "/account/passkeys/options",
-                json!({ "csrf": session.csrf }),
+                json!({}),
                 &session.cookies(),
             )
             .await;
@@ -1400,7 +1391,7 @@ mod tests {
             post(
                 &h.app,
                 "/account/passkeys",
-                json!({ "csrf": session.csrf, "credential": credential }),
+                json!({ "credential": credential }),
                 &[
                     (SESSION_COOKIE, &session.cookie),
                     (CEREMONY_COOKIE, &ceremony),
@@ -1413,7 +1404,7 @@ mod tests {
             post(
                 &h.app,
                 "/account/passkeys/remove",
-                json!({ "csrf": session.csrf, "name": name }),
+                json!({ "name": name }),
                 &session.cookies(),
             )
             .await
@@ -1459,7 +1450,7 @@ mod tests {
             assert!(html.contains("Ask an administrator for a setup link"));
 
             let signed_out = page(&h, None).await;
-            assert!(!signed_out.contains("data-csrf"));
+            assert!(signed_out.contains(SIGNED_OUT_MARK));
             assert!(!signed_out.contains(&admin));
         }
 
@@ -1490,7 +1481,7 @@ mod tests {
             let reply = post(
                 &h.app,
                 "/account/passkeys/rename",
-                json!({ "csrf": dana.csrf, "name": admin_passkey, "label": "Mine" }),
+                json!({ "name": admin_passkey, "label": "Mine" }),
                 &dana.cookies(),
             )
             .await;
@@ -1500,13 +1491,17 @@ mod tests {
             let reply = post(
                 &h.app,
                 "/account/sessions/revoke",
-                json!({ "csrf": dana.csrf, "name": admin_session }),
+                json!({ "name": admin_session }),
                 &dana.cookies(),
             )
             .await;
             assert_eq!(reply.status, StatusCode::NOT_FOUND);
             assert_eq!(passkeys(&h, "admin").await, [admin_passkey]);
-            assert!(page(&h, Some(&admin.cookie)).await.contains("data-csrf"));
+            assert!(
+                !page(&h, Some(&admin.cookie))
+                    .await
+                    .contains(SIGNED_OUT_MARK)
+            );
 
             // Re-authenticating with someone else's passkey does not count.
             let reply = reauth(&h, &admin, &mut dana_device).await;
@@ -1517,7 +1512,11 @@ mod tests {
             let mut recreated = user(&h, "admin").await;
             recreated.subject = "0f0e0d0c-0b0a-4908-8706-050403020100".into();
             h.service.oauth.directory.put_user(recreated);
-            assert!(!page(&h, Some(&admin.cookie)).await.contains("data-csrf"));
+            assert!(
+                page(&h, Some(&admin.cookie))
+                    .await
+                    .contains(SIGNED_OUT_MARK)
+            );
         }
 
         #[tokio::test]
@@ -1555,7 +1554,7 @@ mod tests {
             let reply = post(
                 &h.app,
                 "/account/passkeys/options",
-                json!({ "csrf": session.csrf }),
+                json!({}),
                 &session.cookies(),
             )
             .await;
@@ -1572,39 +1571,89 @@ mod tests {
             assert_eq!(reply.kind(), "urn:zeabur-identity:problem:reauth-required");
         }
 
+        /// A rename with the given browser headers and content type; the label shows whether it
+        /// took effect.
+        async fn rename_with(
+            h: &Harness,
+            session: &Session,
+            name: &str,
+            headers: &[(&str, &str)],
+            content_type: &str,
+        ) -> StatusCode {
+            let mut request = Request::builder()
+                .method(Method::POST)
+                .uri("/account/passkeys/rename")
+                .header(header::CONTENT_TYPE, content_type)
+                .header(
+                    header::COOKIE,
+                    format!("{SESSION_COOKIE}={}", session.cookie),
+                );
+            for (key, value) in headers {
+                request = request.header(*key, *value);
+            }
+            let body = json!({ "name": name, "label": "Phone" }).to_string();
+            let response = h
+                .app
+                .clone()
+                .oneshot(request.body(Body::from(body)).unwrap())
+                .await
+                .unwrap();
+            response.status()
+        }
+
         #[tokio::test]
-        async fn rename_needs_the_csrf_token_and_same_origin() {
+        async fn changes_need_a_same_origin_json_request() {
             let (h, _first, session) = signed_in().await;
             let [name] = <[String; 1]>::try_from(passkeys(&h, "admin").await).unwrap();
-            for csrf in ["", "0000", &"0".repeat(64)] {
-                let reply = post(
-                    &h.app,
-                    "/account/passkeys/rename",
-                    json!({ "csrf": csrf, "name": name, "label": "Phone" }),
-                    &session.cookies(),
-                )
-                .await;
-                assert_eq!(reply.status, StatusCode::FORBIDDEN);
-                assert_eq!(reply.kind(), "urn:zeabur-identity:problem:csrf");
+            let json = "application/json";
+            let refused = [
+                (
+                    vec![("sec-fetch-site", "cross-site")],
+                    json,
+                    StatusCode::FORBIDDEN,
+                ),
+                (
+                    vec![("sec-fetch-site", "same-site")],
+                    json,
+                    StatusCode::FORBIDDEN,
+                ),
+                (
+                    vec![("origin", "https://evil.example")],
+                    json,
+                    StatusCode::FORBIDDEN,
+                ),
+                (vec![], json, StatusCode::FORBIDDEN),
+                (
+                    vec![("sec-fetch-site", "same-origin")],
+                    "text/plain",
+                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                ),
+            ];
+            for (headers, content_type, expected) in refused {
+                let status = rename_with(&h, &session, &name, &headers, content_type).await;
+                assert_eq!(status, expected, "{headers:?} {content_type}");
             }
-            let reply = call(
-                &h.app,
-                Method::POST,
-                "/account/passkeys/rename",
-                Some(json!({ "csrf": session.csrf, "name": name, "label": "Phone" })),
-                &session.cookies(),
-                Some("https://evil.example"),
+            assert!(!page(&h, Some(&session.cookie)).await.contains("Phone"));
+
+            let status = rename_with(
+                &h,
+                &session,
+                &name,
+                &[("sec-fetch-site", "same-origin")],
+                json,
             )
             .await;
-            assert_eq!(reply.status, StatusCode::FORBIDDEN);
-            assert!(!page(&h, Some(&session.cookie)).await.contains("Phone"));
+            assert_eq!(status, StatusCode::OK);
+            assert!(page(&h, Some(&session.cookie)).await.contains("Phone"));
+            let status = rename_with(&h, &session, &name, &[("origin", ISSUER)], json).await;
+            assert_eq!(status, StatusCode::OK);
 
             // Rename needs no recent passkey confirmation.
             advance(&h, REAUTH_WINDOW);
             let reply = post(
                 &h.app,
                 "/account/passkeys/rename",
-                json!({ "csrf": session.csrf, "name": name, "label": "  Phone  " }),
+                json!({ "name": name, "label": "  Phone  " }),
                 &session.cookies(),
             )
             .await;
@@ -1709,7 +1758,11 @@ mod tests {
                 .map(|g| g.spec.name)
                 .collect();
             assert_eq!(left, [by_second.cookie.split_once('.').unwrap().0]);
-            assert!(!page(&h, Some(&by_first.cookie)).await.contains("data-csrf"));
+            assert!(
+                page(&h, Some(&by_first.cookie))
+                    .await
+                    .contains(SIGNED_OUT_MARK)
+            );
             let request = Request::post("/token")
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
                 .body(Body::from(format!(
@@ -1751,12 +1804,16 @@ mod tests {
             let reply = post(
                 &h.app,
                 "/account/sessions/revoke",
-                json!({ "csrf": this.csrf, "name": other.cookie.split_once('.').unwrap().0 }),
+                json!({ "name": other.cookie.split_once('.').unwrap().0 }),
                 &this.cookies(),
             )
             .await;
             assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
-            assert!(!page(&h, Some(&other.cookie)).await.contains("data-csrf"));
+            assert!(
+                page(&h, Some(&other.cookie))
+                    .await
+                    .contains(SIGNED_OUT_MARK)
+            );
             assert_eq!(
                 h.service.credentials.events().last().unwrap().reason,
                 "SessionRevoked"
@@ -1765,7 +1822,7 @@ mod tests {
             let reply = post(
                 &h.app,
                 "/account/sessions/revoke-others",
-                json!({ "csrf": this.csrf }),
+                json!({}),
                 &this.cookies(),
             )
             .await;
@@ -1781,15 +1838,9 @@ mod tests {
                 .map(|g| g.spec.name)
                 .collect();
             assert_eq!(left, [this.cookie.split_once('.').unwrap().0]);
-            assert!(page(&h, Some(&this.cookie)).await.contains("data-csrf"));
+            assert!(!page(&h, Some(&this.cookie)).await.contains(SIGNED_OUT_MARK));
 
-            let reply = post(
-                &h.app,
-                "/account/sign-out",
-                json!({ "csrf": this.csrf }),
-                &this.cookies(),
-            )
-            .await;
+            let reply = post(&h.app, "/account/sign-out", json!({}), &this.cookies()).await;
             assert_eq!(reply.status, StatusCode::OK);
             let left = h.service.oauth.grants.list(&admin).await.unwrap();
             assert_eq!(left.len(), 0);
@@ -1799,11 +1850,15 @@ mod tests {
         async fn sessions_end_after_an_hour_and_with_the_user() {
             let (h, _first, session) = signed_in().await;
             advance(&h, SESSION_LIFETIME);
-            assert!(!page(&h, Some(&session.cookie)).await.contains("data-csrf"));
+            assert!(
+                page(&h, Some(&session.cookie))
+                    .await
+                    .contains(SIGNED_OUT_MARK)
+            );
             let reply = post(
                 &h.app,
                 "/account/sessions/revoke-others",
-                json!({ "csrf": session.csrf }),
+                json!({}),
                 &session.cookies(),
             )
             .await;
@@ -1814,7 +1869,11 @@ mod tests {
             let mut admin = user(&h, "admin").await;
             admin.disabled = true;
             h.service.oauth.directory.put_user(admin);
-            assert!(!page(&h, Some(&session.cookie)).await.contains("data-csrf"));
+            assert!(
+                page(&h, Some(&session.cookie))
+                    .await
+                    .contains(SIGNED_OUT_MARK)
+            );
         }
 
         #[tokio::test]

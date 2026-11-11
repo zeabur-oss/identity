@@ -9,7 +9,7 @@
 //!
 //! Every change is one write to the user's own objects, which the stores find by the session's
 //! user and UID, never by a name from the request. Changes need the session cookie, the
-//! same-origin checks of the other JSON endpoints and a per-session CSRF token. Adding or
+//! same-origin and JSON checks of the other endpoints (`check_request`). Adding or
 //! removing a passkey also needs a user-verified passkey assertion from the last
 //! [`REAUTH_WINDOW`], made with one of the user's own passkeys and recorded on the session.
 //! Removing a passkey revokes every session and grant that signed in or re-authenticated with
@@ -62,7 +62,8 @@ use crate::{
 };
 
 /// Cookie holding the account session, `<grant name>.<secret>` (`SameSite=Lax`, so a link to
-/// `/account` from another site still shows the signed-in page; changes need the CSRF token).
+/// `/account` from another site still shows the signed-in page; changes are refused unless
+/// same-origin).
 pub const SESSION_COOKIE: &str = "__Host-zeabur-identity-session";
 /// `spec.client` of account sessions. Not a valid object name, so no `OAuthClient` has it.
 pub const ACCOUNT_CLIENT: &str = "zeabur_identity";
@@ -74,17 +75,11 @@ pub const REAUTH_WINDOW: Duration = Duration::from_mins(5);
 const SIGN_IN_PURPOSE: &str = "zeabur-identity/account-sign-in/v1";
 const REAUTH_PURPOSE: &str = "zeabur-identity/reauth/v1";
 const REGISTRATION_PURPOSE: &str = "zeabur-identity/account-registration/v1";
-const CSRF_PURPOSE: &[u8] = b"zeabur-identity/csrf/v1/";
 
 const SIGNED_OUT: Problem = Problem::new(
     StatusCode::UNAUTHORIZED,
     "signed-out",
     "Your session ended. Sign in again.",
-);
-const CSRF: Problem = Problem::new(
-    StatusCode::FORBIDDEN,
-    "csrf",
-    "Reload the page and try again.",
 );
 const REAUTH_REQUIRED: Problem = Problem::new(
     StatusCode::FORBIDDEN,
@@ -215,15 +210,6 @@ impl SessionToken {
     pub fn hash(&self) -> String {
         token_hash(self.secret.as_bytes())
     }
-
-    /// The CSRF token for this session: derived from the secret, so it needs no storage and
-    /// is useless without the cookie.
-    #[must_use]
-    pub fn csrf(&self) -> String {
-        let mut input = CSRF_PURPOSE.to_vec();
-        input.extend_from_slice(self.secret.as_bytes());
-        hex(&sha256(&input))
-    }
 }
 
 /// A signed-in request.
@@ -287,11 +273,10 @@ where
     }))
 }
 
-/// A change request: same origin, JSON, a valid session and its CSRF token.
+/// A change request: same origin, JSON and a valid session.
 pub(crate) async fn signed_in<D, G, C, K, S>(
     service: &SignIn<D, G, C, K, S>,
     headers: &HeaderMap,
-    csrf: &str,
     now: UnixTime,
 ) -> Result<Account, Problem>
 where
@@ -302,12 +287,7 @@ where
     S: SetupStore,
 {
     check_request(headers, service.oauth.issuer.as_str())?;
-    let account = current(service, headers, now).await?.ok_or(SIGNED_OUT)?;
-    if ct_eq(csrf.as_bytes(), account.token.csrf().as_bytes()) {
-        Ok(account)
-    } else {
-        Err(CSRF)
-    }
+    current(service, headers, now).await?.ok_or(SIGNED_OUT)
 }
 
 /// Whether the session's latest authentication verified the user within [`REAUTH_WINDOW`].
@@ -465,20 +445,12 @@ fn done(signed_out: bool, accepted: Option<Accepted>) -> Response {
 }
 
 #[derive(Deserialize)]
-struct CsrfRequest {
-    csrf: String,
-}
-
-#[derive(Deserialize)]
 struct AssertionRequest {
-    #[serde(default)]
-    csrf: String,
     credential: PublicKeyCredential,
 }
 
 #[derive(Deserialize)]
 struct AddRequest {
-    csrf: String,
     credential: RegisterPublicKeyCredential,
     #[serde(default)]
     label: Option<String>,
@@ -486,13 +458,11 @@ struct AddRequest {
 
 #[derive(Deserialize)]
 struct NameRequest {
-    csrf: String,
     name: String,
 }
 
 #[derive(Deserialize)]
 struct RenameRequest {
-    csrf: String,
     name: String,
     label: String,
 }
@@ -667,12 +637,10 @@ where
             let linked_rows = linked_rows(&linked, &shown);
             let providers: Vec<ProviderButton<'_>> =
                 descriptors.iter().map(Descriptor::button).collect();
-            let csrf = account.token.csrf();
             account_page(
                 lang,
                 Some(AccountView {
                     username: &account.user.username,
-                    csrf: &csrf,
                     passkeys: &rows,
                     linked: &linked_rows,
                     providers: &providers,
@@ -859,7 +827,6 @@ async fn sign_out<D, G, C, K, S>(
     State(service): State<Shared<D, G, C, K, S>>,
     requester: Requester,
     headers: HeaderMap,
-    body: Bytes,
 ) -> Response
 where
     D: Directory,
@@ -875,8 +842,7 @@ where
         ..Audit::default()
     };
     let result: Result<Response, Problem> = async {
-        let request: CsrfRequest = parse(&body)?;
-        let account = signed_in(&service, &headers, &request.csrf, now).await?;
+        let account = signed_in(&service, &headers, now).await?;
         audit.session = Some(account.token.name.clone());
         service
             .oauth
@@ -895,7 +861,6 @@ where
 async fn reauth_options<D, G, C, K, S>(
     State(service): State<Shared<D, G, C, K, S>>,
     headers: HeaderMap,
-    body: Bytes,
 ) -> Response
 where
     D: Directory,
@@ -906,8 +871,7 @@ where
 {
     let now = service.oauth.now();
     let result: Result<Response, Problem> = async {
-        let request: CsrfRequest = parse(&body)?;
-        let account = signed_in(&service, &headers, &request.csrf, now).await?;
+        let account = signed_in(&service, &headers, now).await?;
         assertion_options(&service, REAUTH_PURPOSE, Some(account.token.name), now)
     }
     .await;
@@ -935,7 +899,7 @@ where
     };
     let result: Result<Response, Refused> = async {
         let request: AssertionRequest = parse(&body)?;
-        let account = signed_in(&service, &headers, &request.csrf, now).await?;
+        let account = signed_in(&service, &headers, now).await?;
         audit.session = Some(account.token.name.clone());
         let verified = finish_assertion(
             &service,
@@ -981,7 +945,6 @@ where
 async fn add_options<D, G, C, K, S>(
     State(service): State<Shared<D, G, C, K, S>>,
     headers: HeaderMap,
-    body: Bytes,
 ) -> Response
 where
     D: Directory,
@@ -992,8 +955,7 @@ where
 {
     let now = service.oauth.now();
     let result: Result<Response, Problem> = async {
-        let request: CsrfRequest = parse(&body)?;
-        let account = signed_in(&service, &headers, &request.csrf, now).await?;
+        let account = signed_in(&service, &headers, now).await?;
         require_fresh(&account, now)?;
         let exclude = service
             .credentials
@@ -1051,7 +1013,7 @@ where
     };
     let result: Result<Response, Problem> = async {
         let request: AddRequest = parse(&body)?;
-        let account = signed_in(&service, &headers, &request.csrf, now).await?;
+        let account = signed_in(&service, &headers, now).await?;
         audit.session = Some(account.token.name.clone());
         require_fresh(&account, now)?;
         let ceremony: Ceremony<PasskeyRegistration> =
@@ -1130,7 +1092,7 @@ where
     };
     let result: Result<Response, Problem> = async {
         let request: RenameRequest = parse(&body)?;
-        let account = signed_in(&service, &headers, &request.csrf, now).await?;
+        let account = signed_in(&service, &headers, now).await?;
         audit.session = Some(account.token.name.clone());
         let label = clean_label(Some(&request.label)).ok_or(BAD_REQUEST)?;
         let passkeys = service
@@ -1221,7 +1183,7 @@ where
     };
     let result: Result<Response, Problem> = async {
         let request: NameRequest = parse(&body)?;
-        let account = signed_in(&service, &headers, &request.csrf, now).await?;
+        let account = signed_in(&service, &headers, now).await?;
         audit.session = Some(account.token.name.clone());
         require_fresh(&account, now)?;
         let passkeys = service
@@ -1281,7 +1243,7 @@ where
     };
     let result: Result<Response, Problem> = async {
         let request: NameRequest = parse(&body)?;
-        let account = signed_in(&service, &headers, &request.csrf, now).await?;
+        let account = signed_in(&service, &headers, now).await?;
         audit.session = Some(account.token.name.clone());
         require_fresh(&account, now)?;
         let linked = service
@@ -1339,7 +1301,7 @@ where
     };
     let result: Result<Response, Problem> = async {
         let request: NameRequest = parse(&body)?;
-        let account = signed_in(&service, &headers, &request.csrf, now).await?;
+        let account = signed_in(&service, &headers, now).await?;
         let grants = service
             .oauth
             .grants
@@ -1373,7 +1335,6 @@ async fn revoke_others<D, G, C, K, S>(
     State(service): State<Shared<D, G, C, K, S>>,
     requester: Requester,
     headers: HeaderMap,
-    body: Bytes,
 ) -> Response
 where
     D: Directory,
@@ -1389,8 +1350,7 @@ where
         ..Audit::default()
     };
     let result: Result<Response, Problem> = async {
-        let request: CsrfRequest = parse(&body)?;
-        let account = signed_in(&service, &headers, &request.csrf, now).await?;
+        let account = signed_in(&service, &headers, now).await?;
         let grants = service
             .oauth
             .grants
@@ -1427,7 +1387,5 @@ mod tests {
         let refresh = token.encode().replacen("s-", "g-", 1);
         assert_eq!(SessionToken::parse(&refresh), None);
         assert_eq!(SessionToken::parse(token.name()), None);
-        assert_ne!(token.csrf(), SessionToken::generate().unwrap().csrf());
-        assert_eq!(token.csrf().len(), 64);
     }
 }

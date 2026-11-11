@@ -49,7 +49,7 @@ tests; `zeabur-identity-test-support` provides the software authenticator for th
 - **Account page.** `/account` signs in with a passkey into a one-hour session stored as a
   `Grant` named `s-…` (client `zeabur_identity`, which no OAuth client can have, and a name a
   refresh token cannot use). The `__Host-zeabur-identity-session` cookie is `HttpOnly` and
-  `SameSite=Lax`; changes also need a CSRF token derived from the session secret. Every read and
+  `SameSite=Lax`, and changes pass the same-origin check above. Every read and
   write is filtered to the session's user by name and UID. Adding or removing a passkey, and
   linking or unlinking an upstream account, needs a user-verified assertion from the last five
   minutes by one of the user's own passkeys (Kanidm's privilege window works the same way). The
