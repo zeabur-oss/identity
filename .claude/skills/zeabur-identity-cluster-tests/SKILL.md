@@ -6,7 +6,7 @@ description: Run Zeabur Identity's Kubernetes integration and end-to-end tests o
 # Cluster tests
 
 Follow `zeabur-oss-cluster-tests` (committed in `.claude/skills`; the Update workflow copies it from
-zeabur-oss/skills): a disposable cluster on a Linux machine
+zeabur-oss/.github): a disposable cluster on a Linux machine
 or VM, a snapshot restored after every run, and the common failures. Sync with
 `rsync -a --delete --exclude target ./ host:zeabur-identity/`.
 
