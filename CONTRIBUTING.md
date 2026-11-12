@@ -144,12 +144,17 @@ catch a compromised release. An urgent security update overrides it for one comm
 
 The sign-in pages' build tools (`ui/package.json`) follow the same rules: exact versions in a
 committed `bun.lock`, no release younger than seven days (`ui/bunfig.toml`), OSI-approved
-licences and no install scripts. They are the versions Zeabur's web interface uses. The design
-system is a Git dependency pinned to a commit.
+licences and no install scripts. Add them with `bun add -d <pkg>` from `ui/`. TypeScript,
+Tailwind CSS, oxlint, oxfmt and fallow are at the versions Zeabur's web interface uses: move one
+here when web moves it. Only the built assets ship. `bun pm untrusted` lists `@parcel/watcher`,
+through the Tailwind CLI, whose prebuilt binary is used. The design system is
+`@zeabur-oss/design-system` from npm at an exact version, exempt from the seven-day wait; its
+React peers are not installed (`peer = false`), since the build uses only its variants and styles.
 
-[Renovate](https://docs.renovatebot.com/) (`renovate.json`) opens the weekly crate, `ui/` package,
-action digest and k3s updates under the same seven-day delay; compatible crate updates share one
-pull request, and so do compatible `ui/` updates.
+[Renovate](https://docs.renovatebot.com/) (`renovate.json`) opens the crate, `ui/` package and
+action digest updates under the same seven-day delay; compatible crate updates share one pull
+request, and so do compatible `ui/` updates. The design system, our own, and K3s, which follows
+its stable channel, move without the delay.
 A crate update that brings in new `unsafe` or native code fails `unsafe-report` until the
 allowlist entry below is added and reviewed, so those pull requests are never merged unread.
 
