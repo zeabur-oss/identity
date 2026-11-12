@@ -6,7 +6,7 @@ description: Day-to-day development loop for the Zeabur Identity repository — 
 # Zeabur Identity development loop
 
 Follow the shared skills (committed in `.claude/skills`; the Update workflow copies them from
-zeabur-oss/skills): `zeabur-oss-rust` (Nix toolchain, workspace, lints, common
+zeabur-oss/.github): `zeabur-oss-rust` (Nix toolchain, workspace, lints, common
 checks), `zeabur-oss-standards` (with [`STANDARDS.md`](STANDARDS.md) here),
 `zeabur-oss-workflow` (commits and pull requests). This skill adds what is Zeabur Identity's own.
 
