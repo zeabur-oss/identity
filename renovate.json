@@ -1,8 +1,9 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "description": "Cargo crates, the release scripts' package.json and ui/ packages (bun.lock, the same schedule and grouping as Zeabur's web/), and action digests, on the shared zeabur-oss preset, which also moves the k3s test version and the documented K3s release with K3s's stable channel. A regex manager moves the Keycloak image of scripts/keycloak-e2e.sh. Lock file maintenance also updates flake.lock, and with it the Rust nightly.",
+  "description": "Cargo crates, the release scripts' package.json and ui/ packages (bun.lock, the same schedule and grouping as Zeabur's web/), and action digests, on the shared zeabur-oss preset; its k3s preset moves the k3s test version and the documented K3s release with K3s's stable channel. A regex manager moves the Keycloak image of scripts/keycloak-e2e.sh. Lock file maintenance also updates flake.lock, and with it the Rust nightly.",
   "extends": [
-    "github>zeabur-oss/.github"
+    "github>zeabur-oss/.github",
+    "github>zeabur-oss/.github:k3s"
   ],
   "enabledManagers": [
     "cargo",
