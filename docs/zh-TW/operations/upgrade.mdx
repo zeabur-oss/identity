@@ -17,13 +17,75 @@ Zeabur Identity 只執行一個副本，更新時會替換這個副本，不採�
 
 下面每個版本列出升級到該版本前要做的事。如果跳過版本升級，從目前執行的版本讀到目標版本，每一段都要看。最新的版本在最上面。
 
+### v0.2.0 → v0.2.1
+
+v0.2.1 改變了 `UpstreamProvider` 與 `Credential` 的寫法。已存的 `Credential` 不用動；已存的提供者要用新寫法重寫一次，因為只要還有 v0.2.0 寫法的提供者，伺服器就不會啟動。
+
+#### 1. 檢查 Secret 的索引鍵
+
+v0.2.1 不再有 `clientSecretKey`，改從 Secret `zeabur-identity-upstream` 中和提供者同名的索引鍵讀取用戶端機密。如果某個提供者的 `clientSecretKey` 和名稱不同，在 Secret 裡用名稱再存一份：
+
+```sh
+kubectl -n "$NS" get upstreamproviders.identity.zeabur.com \
+  -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.clientSecretKey}{"\n"}{end}'
+```
+
+#### 2. 存下提供者與 v0.2.0 的 CRD
+
+在套用新的 CRD 之前做。套用之後，API 伺服器會丟掉 v0.2.1 沒有的欄位，舊的值就讀不到了。
+
+```sh
+kubectl -n "$NS" get upstreamproviders.identity.zeabur.com -o json \
+  | jq '.items |= map({apiVersion, kind, metadata: (.metadata | {name, namespace, labels}), spec})' \
+  > upgrade-record/upstreamproviders.before.json
+jq '.items |= map(.spec |= ({clientId} + if .type == "GitHub" then {github: {}}
+      else {openid: ({issuer, displayName} + if .scopes then {scopes} else {} end)} end))' \
+  upgrade-record/upstreamproviders.before.json > upgrade-record/upstreamproviders.next.json
+/path/to/old/zeabur-identityctl crds > upgrade-record/crds.before.json
+```
+
+看過 `upstreamproviders.next.json` 之後，在**檢查並套用資源清單**這一步，套用新的 CRD 後立刻套用它，再套用新的 Deployment：
+
+```sh
+kubectl apply --server-side -f upgrade-record/crds.next.json
+kubectl apply -f upgrade-record/upstreamproviders.next.json
+```
+
+#### Credential
+
+不用做任何事。有 `passkey` 的 `Credential` 是通行密鑰，有 `external` 的是已連結帳號。v0.1 與 v0.2.0 寫入的 `type` 和 `provider` 會被忽略。如果你自己的 `Credential` 資源清單寫了 `type` 或 `provider`，要拿掉才能 `kubectl apply`。
+
+#### 回復到 v0.2.0
+
+v0.2.0 讀不了沒有 `type` 的 `Credential` 和提供者。可以還原升級前的備份；或在 Zeabur Identity 停止時匯出 `Credential`、刪除、套用 v0.2.0 的 CRD，再加上 v0.2.0 的類型重新建立。每個已連結帳號會對應到 `upstreamproviders.before.json` 裡同一個 issuer 的提供者。透過升級後才新增的提供者連結的帳號沒有對應，下列指令會略過它：
+
+```sh
+kubectl -n "$NS" get credentials.identity.zeabur.com -o json \
+  | jq --slurpfile p upgrade-record/upstreamproviders.before.json '
+    ($p[0].items | map({key: (if .spec.type == "GitHub" then "https://github.com" else .spec.issuer end),
+                        value: .metadata.name}) | from_entries) as $provider
+    | .items |= map(
+        {apiVersion, kind, metadata: (.metadata | {name, namespace, labels, ownerReferences}), spec}
+        | if .spec.passkey then .spec.type = "Passkey"
+          else .spec.type = "Upstream" | .spec.provider = $provider[.spec.external.issuer] end
+        | select(.spec.type == "Passkey" or .spec.provider != null))' \
+  > upgrade-record/credentials.v0.2.0.json
+kubectl -n "$NS" delete credentials.identity.zeabur.com --all
+kubectl -n "$NS" delete upstreamproviders.identity.zeabur.com --all
+kubectl apply --server-side -f upgrade-record/crds.before.json
+kubectl create -f upgrade-record/credentials.v0.2.0.json
+kubectl create -f upgrade-record/upstreamproviders.before.json
+```
+
+刪除前先看過 `credentials.v0.2.0.json`。`kubectl create` 不會還原 `status`，所以通行密鑰在註冊後改過的名稱和最後登入時間會遺失。最後換回 v0.2.0 的映像檔和資源清單。
+
 ### v0.1 → v0.2
 
-v0.2 改用 `UpstreamProvider` 物件設定 GitHub 與 Google 登入，不再用伺服器選項，也移除了幾個伺服器選項，並改變已連結帳號的儲存方式。通行密鑰不受影響。
+從 v0.1 直接升級到 v0.2.1 或更新的版本，跳過上面 v0.2.0 那一段。v0.2 改用 `UpstreamProvider` 物件設定 GitHub 與 Google 登入，不再用伺服器選項，也移除了幾個伺服器選項。通行密鑰和已連結帳號不用遷移，照常可用。
 
 #### 1. 移除 v0.2 沒有的選項
 
-只要設定了下列任何一個選項或對應的 `ZEABUR_IDENTITY_*` 變數，伺服器就不會啟動，記錄會寫出是哪個選項。產生升級檔案時，不要在 `--serve-arg` 放這些選項；如果你自己在 Deployment 的 `args` 或 `env` 加過，也要刪掉：
+產生升級檔案時，不要在 `--serve-arg` 放這些選項和對應的 `ZEABUR_IDENTITY_*` 變數；如果你自己在 Deployment 的 `args` 或 `env` 加過，也要刪掉。還留著的選項會讓伺服器因為不認得這個參數而無法啟動：
 
 - `--github-client-id`、`--github-client-secret-file`、`--google-client-id`、`--google-client-secret-file`：改用 `UpstreamProvider` 物件（步驟 3）。
 - `--store`：伺服器一律把狀態存在 Kubernetes 物件。
@@ -38,7 +100,7 @@ v0.2 改用 `UpstreamProvider` 物件設定 GitHub 與 Google 登入，不再用
 
 如果你使用 GitHub 或 Google 登入，請在**檢查並套用資源清單**這一步，套用新的 CRD 之後、套用新的資源清單之前做這件事。補上之前，登入頁不會出現 **Continue with GitHub** 和 **Continue with Google** 按鈕。
 
-把每個用戶端機密存進 Secret `zeabur-identity-upstream`，索引鍵是 `github` 或 `google`。沿用 v0.1 的用戶端機密即可。沒用到的提供者不用加：
+把每個用戶端機密存進 Secret `zeabur-identity-upstream`，索引鍵用提供者的名稱 `github` 或 `google`。沿用 v0.1 的用戶端機密即可。沒用到的提供者不用加：
 
 ```sh
 read -rs GITHUB_SECRET     # paste the GitHub client secret, then Enter
@@ -58,17 +120,14 @@ kubectl apply -f - <<EOF
 apiVersion: identity.zeabur.com/v1alpha1
 kind: UpstreamProvider
 metadata: {name: github, namespace: $NS}
-spec: {type: GitHub, clientId: $GITHUB_CLIENT_ID, clientSecretKey: github}
+spec: {clientId: $GITHUB_CLIENT_ID, github: {}}
 ---
 apiVersion: identity.zeabur.com/v1alpha1
 kind: UpstreamProvider
 metadata: {name: google, namespace: $NS}
 spec:
-  type: OpenID
-  issuer: https://accounts.google.com
-  displayName: Google
   clientId: $GOOGLE_CLIENT_ID
-  clientSecretKey: google
+  openid: {issuer: https://accounts.google.com, displayName: Google}
 EOF
 ```
 
@@ -80,31 +139,26 @@ EOF
 /path/to/old/zeabur-identityctl crds > upgrade-record/crds.before.json
 ```
 
-#### 第一次啟動時會改的資料
+#### 已連結帳號
 
-v0.2 啟動時，會把每個已連結的 GitHub 或 Google 帳號，也就是 `type: GitHub` 或 `type: Google` 的 `Credential`，改成 `type: Upstream`，並加上 `provider: github` 或 `provider: google`。名稱、擁有者、標籤和連結的帳號都不變，這些帳號照常登入。你自己為已連結帳號建立的 `Credential`，現在要寫 `type: Upstream` 和 `provider`。
+不用做任何事。已連結的 GitHub 或 Google 帳號，也就是 `type: GitHub` 或 `type: Google` 的 `Credential`，會透過 issuer 相同的提供者登入：`https://github.com` 對應 `github`，`https://accounts.google.com` 對應 `google`。v0.2 不會改動這些物件。
 
 #### 回復到 v0.1
 
-v0.1 讀不了 `type: Upstream` 的 `Credential`，它的 CRD 也不接受。v0.2 的 CRD 只允許從 `GitHub` 或 `Google` 改成 `Upstream`，v0.1 的 CRD 完全不允許修改，所以沒辦法直接把類型改回去。要回到 v0.1，需要 v0.1 的 CRD，也要把每個已連結帳號用舊的類型重新寫入。
-
-依下方**回復**的說明還原升級前的備份，這兩件事都會完成。如果要保留升級後的變更，改在 Zeabur Identity 停止的狀態下執行下列指令。透過 `github`、`google` 以外的提供者連結的帳號在 v0.1 沒有對應的形式，會被刪除：
+v0.1 讀不了沒有 `type` 的 `Credential`，而 v0.2 寫入的 `Credential` 不帶 `type`。可以依下方**回復**的說明還原升級前的備份；或在 Zeabur Identity 停止時匯出 `Credential`、刪除、套用 v0.1 的 CRD，再加上 v0.1 的類型重新建立。透過 GitHub、Google 以外的提供者連結的帳號在 v0.1 沒有對應的寫法，下列指令會略過它們：
 
 ```sh
 kubectl -n "$NS" get credentials.identity.zeabur.com -o json | jq '.items |= map(
-    select(.spec.type == "Upstream")
-    | {apiVersion, kind,
-       metadata: (.metadata | {name, namespace, labels, ownerReferences}),
-       spec: (.spec | .type = ({github: "GitHub", google: "Google"}[.provider]) | del(.provider))}
+    {apiVersion, kind, metadata: (.metadata | {name, namespace, labels, ownerReferences}),
+     spec: (.spec | del(.provider) | .type = (if .passkey then "Passkey"
+       else {"https://github.com": "GitHub", "https://accounts.google.com": "Google"}[.external.issuer] end))}
     | select(.spec.type != null))' > upgrade-record/credentials.v0.1.json
-kubectl -n "$NS" get credentials.identity.zeabur.com -o json \
-  | jq -r '.items[] | select(.spec.type == "Upstream") | .metadata.name' \
-  | xargs -r kubectl -n "$NS" delete credentials.identity.zeabur.com
+kubectl -n "$NS" delete credentials.identity.zeabur.com --all
 kubectl apply --server-side -f upgrade-record/crds.before.json
 kubectl create -f upgrade-record/credentials.v0.1.json
 ```
 
-刪除前先看過 `upgrade-record/credentials.v0.1.json`。之後再換回 v0.1 的映像檔和資源清單，並加回步驟 1 的選項。
+刪除前先看過 `credentials.v0.1.json`。`kubectl create` 不會還原 `status`，所以通行密鑰在註冊後改過的名稱和最後登入時間會遺失。最後換回 v0.1 的映像檔和資源清單，並加回步驟 1 的選項。
 
 ## 升級前
 
