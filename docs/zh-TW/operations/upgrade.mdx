@@ -32,7 +32,7 @@ kubectl -n "$NS" get upstreamproviders.identity.zeabur.com \
 
 #### 2. 存下提供者與 v0.2.0 的 CRD
 
-在套用新的 CRD 之前做。套用之後，API 伺服器會丟掉 v0.2.1 沒有的欄位，舊的值就讀不到了。
+這一步要在套用新的 CRD 之前完成。套用之後，API 伺服器會丟掉 v0.2.1 沒有的欄位，舊的值就讀不到了。
 
 ```sh
 kubectl -n "$NS" get upstreamproviders.identity.zeabur.com -o json \
@@ -82,7 +82,7 @@ kubectl create -f upgrade-record/credentials.v0.2.0.json
 kubectl create -f upgrade-record/upstreamproviders.before.json
 ```
 
-`kubectl create` 不會還原 `status`，所以通行密鑰在註冊後改過的名稱和最後登入時間會遺失。最後換回 v0.2.0 的映像檔和資源清單。
+`kubectl create` 不會還原 `status`，所以通行密鑰在註冊後改過的名稱和最後登入時間會遺失。升級後新增或修改過的提供者也會還原成升級前的樣子，需要的話用 v0.2.0 的寫法再加一次。最後換回 v0.2.0 的映像檔和資源清單。
 
 ### v0.1 → v0.2
 

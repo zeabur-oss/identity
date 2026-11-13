@@ -82,7 +82,7 @@ kubectl create -f upgrade-record/credentials.v0.2.0.json
 kubectl create -f upgrade-record/upstreamproviders.before.json
 ```
 
-`kubectl create` doesn't restore `status`, so passkeys lose the names users gave them after enrolment and their last sign-in time. Then switch back to the v0.2.0 image and manifests.
+`kubectl create` doesn't restore `status`, so passkeys lose the names users gave them after enrollment and their last sign-in time. Providers added or changed after the upgrade are gone too; add them again in the v0.2.0 form. Then switch back to the v0.2.0 image and manifests.
 
 ### v0.1 → v0.2
 
@@ -168,7 +168,7 @@ kubectl apply --server-side -f upgrade-record/crds.before.json
 kubectl create -f upgrade-record/credentials.v0.1.json
 ```
 
-`kubectl create` doesn't restore `status`, so passkeys lose the names users gave them after enrolment and their last sign-in time. Then switch back to the v0.1 image and manifests, with the options from step 1.
+`kubectl create` doesn't restore `status`, so passkeys lose the names users gave them after enrollment and their last sign-in time. Then switch back to the v0.1 image and manifests, with the options from step 1.
 
 ## Before upgrading
 
