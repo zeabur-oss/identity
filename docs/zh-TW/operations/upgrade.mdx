@@ -17,13 +17,13 @@ Zeabur Identity 只執行一個副本，更新時會替換這個副本，不採�
 
 下面每個版本列出升級到該版本前要做的事。如果跳過版本升級，從目前執行的版本讀到目標版本，每一段都要看。最新的版本在最上面。
 
-### v0.2.0 → v0.2.1
+### v0.2.0 → v0.3.0
 
-v0.2.1 改變了 `UpstreamProvider` 與 `Credential` 的寫法。已存的 `Credential` 不用動；已存的提供者要用新寫法重寫一次，因為只要還有 v0.2.0 寫法的提供者，伺服器就不會啟動。
+v0.3.0 改變了 `UpstreamProvider` 與 `Credential` 的寫法。已存的 `Credential` 不用動；已存的提供者要用新寫法重寫一次，因為只要還有 v0.2.0 寫法的提供者，伺服器就不會啟動。
 
 #### 1. 檢查 Secret 的索引鍵
 
-v0.2.1 不再有 `clientSecretKey`，改從 Secret `zeabur-identity-upstream` 中和提供者同名的索引鍵讀取用戶端機密。如果某個提供者的 `clientSecretKey` 和名稱不同，在 Secret 裡用名稱再存一份：
+v0.3.0 不再有 `clientSecretKey`，改從 Secret `zeabur-identity-upstream` 中和提供者同名的索引鍵讀取用戶端機密。如果某個提供者的 `clientSecretKey` 和名稱不同，在 Secret 裡用名稱再存一份：
 
 ```sh
 kubectl -n "$NS" get upstreamproviders.identity.zeabur.com \
@@ -32,7 +32,7 @@ kubectl -n "$NS" get upstreamproviders.identity.zeabur.com \
 
 #### 2. 存下提供者與 v0.2.0 的 CRD
 
-這一步要在套用新的 CRD 之前完成。套用之後，API 伺服器會丟掉 v0.2.1 沒有的欄位，舊的值就讀不到了。
+這一步要在套用新的 CRD 之前完成。套用之後，API 伺服器會丟掉 v0.3.0 沒有的欄位，舊的值就讀不到了。
 
 ```sh
 kubectl -n "$NS" get upstreamproviders.identity.zeabur.com -o json \
@@ -86,7 +86,7 @@ kubectl create -f upgrade-record/upstreamproviders.before.json
 
 ### v0.1 → v0.2
 
-從 v0.1 直接升級到 v0.2.1 或更新的版本，跳過上面 v0.2.0 那一段。v0.2 改用 `UpstreamProvider` 物件設定 GitHub 與 Google 登入，不再用伺服器選項，也移除了幾個伺服器選項。通行密鑰和已連結帳號不用遷移，照常可用。
+從 v0.1 直接升級到 v0.3.0 或更新的版本，跳過上面 v0.2.0 那一段。v0.2 改用 `UpstreamProvider` 物件設定 GitHub 與 Google 登入，不再用伺服器選項，也移除了幾個伺服器選項。通行密鑰和已連結帳號不用遷移，照常可用。
 
 #### 1. 移除 v0.2 沒有的選項
 
@@ -146,11 +146,11 @@ EOF
 
 #### 已連結帳號
 
-不用做任何事。已連結的 GitHub 或 Google 帳號，也就是 `type: GitHub` 或 `type: Google` 的 `Credential`，會用 issuer 相同的提供者登入：`https://github.com` 對應 `github`，`https://accounts.google.com` 對應 `google`。v0.2.1 不會改動這些物件。
+不用做任何事。已連結的 GitHub 或 Google 帳號，也就是 `type: GitHub` 或 `type: Google` 的 `Credential`，會用 issuer 相同的提供者登入：`https://github.com` 對應 `github`，`https://accounts.google.com` 對應 `google`。v0.3.0 不會改動這些物件。
 
 #### 回復到 v0.1
 
-v0.1 讀不了沒有 `type` 的 `Credential`，而 v0.2.1 寫入的 `Credential` 不帶 `type`。可以依下方**回復**的說明還原升級前的備份；或在 Zeabur Identity 停止時匯出 `Credential`、刪除、套用 v0.1 的 CRD，再加上 v0.1 的類型重新建立。用 GitHub、Google 以外的提供者連結的帳號在 v0.1 沒有對應的寫法，會被刪除。先匯出 `Credential`：
+v0.1 讀不了沒有 `type` 的 `Credential`，而 v0.3.0 寫入的 `Credential` 不帶 `type`。可以依下方**回復**的說明還原升級前的備份；或在 Zeabur Identity 停止時匯出 `Credential`、刪除、套用 v0.1 的 CRD，再加上 v0.1 的類型重新建立。用 GitHub、Google 以外的提供者連結的帳號在 v0.1 沒有對應的寫法，會被刪除。先匯出 `Credential`：
 
 ```sh
 kubectl -n "$NS" get credentials.identity.zeabur.com -o json | jq '.items |= map(
