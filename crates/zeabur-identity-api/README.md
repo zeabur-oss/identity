@@ -42,7 +42,7 @@ Zeabur Identity has two roles. The types in this crate belong to one or both of 
 | `OAuthClient` | Create, change and delete it. A confidential client stores `token_hash` of its secret in `spec.secretHash`. | A secret that a person chose: the hash is unsalted, so only a random secret of 256 bits is safe. |
 | `Credential` | List it, and delete it to revoke a passkey or unlink an account. | Create or change it. Zeabur Identity writes it when a person enrols a passkey or links an account, and its name is derived from the credential. |
 | `Grant` | List it, and delete it to end a sign-in. | Create or change it. |
-| `UpstreamProvider` | Create, change and delete it. Put its client secret in the Secret `upstream_provider::SECRET` under `spec.clientSecretKey`. | A client secret in the object itself. |
+| `UpstreamProvider` | Create, change and delete it. Put its client secret in the Secret `upstream_provider::SECRET` under the object name. | A client secret in the object itself. |
 
 To invite a person, write an `Invitation` the way `zeabur-identityctl invite` does:
 

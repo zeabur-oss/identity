@@ -7,9 +7,9 @@
 //! - **Invalid objects.** The CRD rejects most mistakes. An object it lets through but Zeabur
 //!   Identity cannot use (for example an issuer that `Issuer` refuses) is left out and logged; the
 //!   other providers keep working.
-//! - **Client secrets.** Each provider reads its secret from the Secret
-//!   [`zeabur_identity_k8s::upstream::SECRET`] at each code exchange. A rotated secret applies at
-//!   the next sign-in; a missing one fails that sign-in before the code is sent.
+//! - **Client secrets.** Each provider reads its secret, the key with the object name, from the
+//!   Secret [`zeabur_identity_k8s::upstream::SECRET`] at each code exchange. A rotated secret
+//!   applies at the next sign-in; a missing one fails that sign-in before the code is sent.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -19,7 +19,7 @@ use kube::ResourceExt as _;
 use kube::api::Api;
 use zeabur_identity_api::upstream::{Issuer, ProviderId};
 use zeabur_identity_api::upstream_provider::{
-    MAX_DISPLAY_NAME, UpstreamProvider, UpstreamProviderSpec, UpstreamType,
+    MAX_DISPLAY_NAME, UpstreamKind, UpstreamProvider, UpstreamProviderSpec,
 };
 use zeabur_identity_signin::upstream::provider::{
     ClientSecret, GitHubEndpoints, Provider, Providers,
@@ -100,30 +100,27 @@ fn build(
     if !is_visible_ascii(&spec.client_id) {
         return Err("clientId must be visible ASCII".to_owned());
     }
-    let secret = client_secret(secrets.clone(), spec.client_secret_key.clone());
-    match spec.kind {
-        UpstreamType::GitHub => Provider::github(
+    let secret = client_secret(secrets.clone(), name.to_owned());
+    match &spec.kind {
+        UpstreamKind::GitHub(_) => Provider::github(
             id,
             spec.client_id.clone(),
             secret,
             GitHubEndpoints::github_com(),
         )
         .map_err(|error| error.to_string()),
-        UpstreamType::OpenID => {
-            let issuer = spec
-                .issuer
-                .clone()
-                .ok_or("an OpenID provider needs issuer")?;
-            let issuer = Issuer::new(issuer).map_err(|error| format!("issuer: {error}"))?;
-            let label = spec
+        UpstreamKind::OpenID(openid) => {
+            let issuer =
+                Issuer::new(openid.issuer.clone()).map_err(|error| format!("issuer: {error}"))?;
+            let label = openid
                 .display_name
                 .clone()
                 .filter(|label| !label.trim().is_empty())
-                .ok_or("an OpenID provider needs displayName")?;
+                .unwrap_or_else(|| name.to_owned());
             if label.chars().count() > MAX_DISPLAY_NAME {
                 return Err("displayName is too long".to_owned());
             }
-            let scopes = spec.scopes.clone().unwrap_or_default();
+            let scopes = openid.scopes.clone().unwrap_or_default();
             if let Some(bad) = scopes.iter().find(|scope| !is_scope(scope)) {
                 return Err(format!("scope {bad:?} is not a scope token"));
             }
@@ -172,8 +169,8 @@ mod tests {
         object(
             "keycloak",
             serde_json::json!({
-                "type": "OpenID", "issuer": issuer, "displayName": "Keycloak",
-                "clientId": "identity", "clientSecretKey": "keycloak",
+                "clientId": "identity",
+                "openid": {"issuer": issuer, "displayName": "Keycloak"},
             }),
         )
     }
@@ -181,7 +178,7 @@ mod tests {
     fn github() -> UpstreamProvider {
         object(
             "github",
-            serde_json::json!({"type": "GitHub", "clientId": "Iv1.abc", "clientSecretKey": "github"}),
+            serde_json::json!({"clientId": "Iv1.abc", "github": {}}),
         )
     }
 
@@ -191,20 +188,22 @@ mod tests {
         let mut builder = Builder::new(secrets(), Arc::clone(&registry));
         let bad_issuer = object(
             "bad",
-            serde_json::json!({
-                "type": "OpenID", "issuer": "http://idp.example", "displayName": "Bad",
-                "clientId": "c", "clientSecretKey": "bad",
-            }),
+            serde_json::json!({"clientId": "c", "openid": {"issuer": "http://idp.example"}}),
         );
         let bad_scope = object(
             "scopes",
             serde_json::json!({
-                "type": "OpenID", "issuer": "https://idp.example", "displayName": "Scopes",
-                "clientId": "c", "clientSecretKey": "s", "scopes": ["a b"],
+                "clientId": "c",
+                "openid": {"issuer": "https://idp.example", "scopes": ["a b"]},
             }),
+        );
+        let unnamed = object(
+            "corp",
+            serde_json::json!({"clientId": "c", "openid": {"issuer": "https://corp.example"}}),
         );
         builder.publish(&[
             bad_issuer,
+            unnamed,
             github(),
             keycloak("https://sso.example/realms/dev"),
             bad_scope,
@@ -214,7 +213,8 @@ mod tests {
             .iter()
             .map(|p| p.id().as_str().to_owned())
             .collect();
-        assert_eq!(ids, ["github", "keycloak"]);
+        assert_eq!(ids, ["corp", "github", "keycloak"]);
+        assert_eq!(registry.get("corp").unwrap().descriptor().label, "corp");
         let keycloak = registry.get("keycloak").unwrap().descriptor();
         assert_eq!(keycloak.label, "Keycloak");
         assert_eq!(keycloak.issuer.as_str(), "https://sso.example/realms/dev");

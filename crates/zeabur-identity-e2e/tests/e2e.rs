@@ -1315,8 +1315,8 @@ mod tests {
                 "apiVersion": "identity.zeabur.com/v1alpha1", "kind": "UpstreamProvider",
                 "metadata": {"name": "keycloak", "namespace": namespace},
                 "spec": {
-                    "type": "OpenID", "issuer": keycloak.issuer, "displayName": "Keycloak",
-                    "clientId": "zeabur-identity", "clientSecretKey": "keycloak",
+                    "clientId": "zeabur-identity",
+                    "openid": {"issuer": keycloak.issuer, "displayName": "Keycloak"},
                 },
             }),
         )

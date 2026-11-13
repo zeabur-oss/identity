@@ -801,12 +801,7 @@
           {
             "additionalPrinterColumns": [
               {
-                "jsonPath": ".spec.type",
-                "name": "Type",
-                "type": "string"
-              },
-              {
-                "jsonPath": ".spec.issuer",
+                "jsonPath": ".spec.openid.issuer",
                 "name": "Issuer",
                 "type": "string"
               },
@@ -822,7 +817,19 @@
                 "description": "A GitHub OAuth app or an OpenID provider that people sign in to Zeabur Identity with.",
                 "properties": {
                   "spec": {
-                    "description": "A provider that people sign in with, after an administrator links their account at the\nprovider to their `User`.\n\nThe object name is the provider ID: register `<issuer>/upstream/<name>/callback` as the\nredirect URI at the provider. Accounts are identified by the issuer and the subject, not by the\nprovider ID. Thus two objects with the same issuer sign in the same accounts.",
+                    "description": "A provider that people sign in with, after an administrator links their account at the\nprovider to their `User`.\n\nThe object name is the provider ID: register `<issuer>/upstream/<name>/callback` as the\nredirect URI at the provider. The client secret is the key with the object name in the Secret\n`zeabur-identity-upstream`. Accounts are identified by the issuer and the subject, not by the\nprovider ID. Thus two objects with the same issuer sign in the same accounts.",
+                    "oneOf": [
+                      {
+                        "required": [
+                          "openid"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "github"
+                        ]
+                      }
+                    ],
                     "properties": {
                       "clientId": {
                         "description": "The client ID registered at the provider.",
@@ -831,74 +838,55 @@
                         "pattern": "^[!-~]+$",
                         "type": "string"
                       },
-                      "clientSecretKey": {
-                        "description": "The key of the client secret in the Secret `zeabur-identity-upstream`.",
-                        "maxLength": 253,
-                        "minLength": 1,
-                        "pattern": "^[-._a-zA-Z0-9]+$",
-                        "type": "string"
+                      "github": {
+                        "description": "github.com, which has OAuth 2.0 without OpenID. Zeabur Identity reads the numeric user ID\nfrom GitHub's API.",
+                        "type": "object"
                       },
-                      "displayName": {
-                        "description": "`OpenID` only: the name on the sign-in button, for example \"Keycloak\".",
-                        "maxLength": 64,
-                        "minLength": 1,
-                        "nullable": true,
-                        "type": "string"
-                      },
-                      "issuer": {
-                        "description": "`OpenID` only: the issuer, exactly as in the `iss` claim of its ID tokens. Zeabur Identity\nreads `<issuer>/.well-known/openid-configuration`.",
-                        "maxLength": 256,
-                        "minLength": 1,
-                        "nullable": true,
-                        "type": "string",
-                        "x-kubernetes-validations": [
-                          {
-                            "message": "the issuer must be https:// with a host; visible ASCII, no user information, query or fragment",
-                            "rule": "self.matches('^[!-~]+$') && isURL(self) && !self.matches('^[^/]*//[^/?]*@') && !self.contains('?') && !self.contains('#') && self.startsWith('https://') && url(self).getHostname() != ''"
+                      "openid": {
+                        "description": "An OpenID provider. Zeabur Identity reads its endpoints from its discovery document and\nchecks its ID tokens.",
+                        "properties": {
+                          "displayName": {
+                            "description": "The name on the sign-in button, for example \"Keycloak\". The object name if not set.",
+                            "maxLength": 64,
+                            "minLength": 1,
+                            "nullable": true,
+                            "type": "string"
+                          },
+                          "issuer": {
+                            "description": "The issuer, exactly as in the `iss` claim of its ID tokens. Zeabur Identity reads\n`<issuer>/.well-known/openid-configuration`.",
+                            "maxLength": 256,
+                            "minLength": 1,
+                            "type": "string",
+                            "x-kubernetes-validations": [
+                              {
+                                "message": "the issuer must be https:// with a host; visible ASCII, no user information, query or fragment",
+                                "rule": "self.matches('^[!-~]+$') && isURL(self) && !self.matches('^[^/]*//[^/?]*@') && !self.contains('?') && !self.contains('#') && self.startsWith('https://') && url(self).getHostname() != ''"
+                              }
+                            ]
+                          },
+                          "scopes": {
+                            "description": "Scopes to request in addition to `openid`.",
+                            "items": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "pattern": "^[\\x21\\x23-\\x5B\\x5D-\\x7E]+$",
+                              "type": "string"
+                            },
+                            "maxItems": 16,
+                            "nullable": true,
+                            "type": "array"
                           }
-                        ]
-                      },
-                      "scopes": {
-                        "description": "`OpenID` only: scopes to request in addition to `openid`.",
-                        "items": {
-                          "maxLength": 128,
-                          "minLength": 1,
-                          "pattern": "^[\\x21\\x23-\\x5B\\x5D-\\x7E]+$",
-                          "type": "string"
                         },
-                        "maxItems": 16,
-                        "nullable": true,
-                        "type": "array"
-                      },
-                      "type": {
-                        "description": "`OpenID` or `GitHub`.",
-                        "enum": [
-                          "OpenID",
-                          "GitHub"
+                        "required": [
+                          "issuer"
                         ],
-                        "type": "string"
+                        "type": "object"
                       }
                     },
                     "required": [
-                      "clientId",
-                      "clientSecretKey",
-                      "type"
+                      "clientId"
                     ],
-                    "type": "object",
-                    "x-kubernetes-validations": [
-                      {
-                        "message": "issuer is set exactly when type is OpenID",
-                        "rule": "(self.type == 'OpenID') == has(self.issuer)"
-                      },
-                      {
-                        "message": "displayName is set exactly when type is OpenID",
-                        "rule": "(self.type == 'OpenID') == has(self.displayName)"
-                      },
-                      {
-                        "message": "scopes are set only when type is OpenID",
-                        "rule": "self.type == 'OpenID' || !has(self.scopes)"
-                      }
-                    ]
+                    "type": "object"
                   }
                 },
                 "required": [
