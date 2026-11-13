@@ -112,15 +112,14 @@ metadata:
   name: keycloak
   namespace: zeabur-identity
 spec:
-  type: OpenID
-  issuer: https://sso.example.com/realms/staff
-  displayName: Company SSO
   clientId: zeabur-identity
-  clientSecretKey: keycloak
+  openid:
+    issuer: https://sso.example.com/realms/staff
+    displayName: Company SSO
 EOF
 ```
 
-`displayName` is what the button says, up to 64 characters. `issuer` must use `https`. Add `scopes` only if the provider needs more than `openid` to sign someone in.
+`displayName` is what the button says, up to 64 characters. Without it, the button shows the object name. `issuer` must use `https`. Add `scopes` under `openid` only if the provider needs more than `openid` to sign someone in.
 
 </Tab>
 
@@ -134,13 +133,12 @@ metadata:
   name: github
   namespace: zeabur-identity
 spec:
-  type: GitHub
   clientId: Ov23li...
-  clientSecretKey: github
+  github: {}
 EOF
 ```
 
-A `GitHub` provider has no `issuer`, `displayName` or `scopes`. The button says **Continue with GitHub**.
+`github` has no fields. The button says **Continue with GitHub**.
 
 </Tab>
 
@@ -154,11 +152,10 @@ metadata:
   name: google
   namespace: zeabur-identity
 spec:
-  type: OpenID
-  issuer: https://accounts.google.com
-  displayName: Google
   clientId: 1234567890-example.apps.googleusercontent.com
-  clientSecretKey: google
+  openid:
+    issuer: https://accounts.google.com
+    displayName: Google
 EOF
 ```
 
@@ -245,7 +242,6 @@ If you know the account's ID at the provider, you can create its `Credential` yo
 
 ```sh
 USER_NAME=alice                                # an existing User
-PROVIDER=github                                # the UpstreamProvider's name
 ISSUER=https://github.com
 SUBJECT=$(curl -fsS https://api.github.com/users/octocat | jq -r .id)
 USER_UID=$(kubectl -n zeabur-identity get users.identity.zeabur.com "$USER_NAME" -o jsonpath='{.metadata.uid}')
@@ -260,8 +256,6 @@ metadata:
   ownerReferences:
     - {apiVersion: identity.zeabur.com/v1alpha1, kind: User, name: $USER_NAME, uid: $USER_UID}
 spec:
-  type: Upstream
-  provider: $PROVIDER
   user: $USER_NAME
   external: {issuer: "$ISSUER", subject: "$SUBJECT"}
 EOF
@@ -280,7 +274,7 @@ Check `$SUBJECT` before you apply. A wrong ID links someone else's account. With
 | No button for the provider on the sign-in page | Run `kubectl -n zeabur-identity get upstreamproviders`. If the object exists, run `kubectl -n zeabur-identity logs deploy/zeabur-identity` and look for `upstream_provider_invalid`, which names the field it can't use. |
 | The provider says the redirect URI doesn't match | The address registered at the provider must be exactly `<issuer>/upstream/<name>/callback`, with the `UpstreamProvider`'s name. Google also rejects names such as `identity.example.test`. |
 | **Unable to complete the request** right after choosing the button | If the provider was removed or renamed after the page loaded, reload the page. If the logs show `provider_unavailable`, Zeabur Identity can't read the issuer's `/.well-known/openid-configuration`: check that the Pod can reach the issuer over HTTPS and, for a private CA, the steps above. |
-| **Unable to verify the provider's answer** after the provider sends the user back | Look for `provider_unavailable` in the logs. The Secret `zeabur-identity-upstream` doesn't exist or lacks the key that `clientSecretKey` names, or the Pod can't reach the provider's token or key addresses. |
+| **Unable to verify the provider's answer** after the provider sends the user back | Look for `provider_unavailable` in the logs. The Secret `zeabur-identity-upstream` doesn't exist or lacks a key with the provider's name, or the Pod can't reach the provider's token or key addresses. |
 | **This account isn't linked** | Link the account first. Zeabur Identity doesn't match accounts by email address or name. A `Credential` you created with a wrong name or ID gives the same message. |
 | **Use a passkey for this account** | The account is linked to an admin account, which signs in only with passkeys. |
 | `org_internal` or another Google access error | Check the application's **Audience** and the account's organization policies. |

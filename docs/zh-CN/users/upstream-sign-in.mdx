@@ -112,15 +112,14 @@ metadata:
   name: keycloak
   namespace: zeabur-identity
 spec:
-  type: OpenID
-  issuer: https://sso.example.com/realms/staff
-  displayName: Company SSO
   clientId: zeabur-identity
-  clientSecretKey: keycloak
+  openid:
+    issuer: https://sso.example.com/realms/staff
+    displayName: Company SSO
 EOF
 ```
 
-`displayName` 是按钮上显示的名称，最多 64 个字符。`issuer` 必须使用 `https`。只有提供方要求 `openid` 以外的作用域才能完成登录时，才需要添加 `scopes`。
+`displayName` 是按钮上显示的名称，最多 64 个字符；不填则显示对象名称。`issuer` 必须使用 `https`。只有提供方要求 `openid` 以外的作用域才能完成登录时，才需要在 `openid` 下添加 `scopes`。
 
 </Tab>
 
@@ -134,13 +133,12 @@ metadata:
   name: github
   namespace: zeabur-identity
 spec:
-  type: GitHub
   clientId: Ov23li...
-  clientSecretKey: github
+  github: {}
 EOF
 ```
 
-`GitHub` 提供方没有 `issuer`、`displayName` 或 `scopes` 字段，按钮显示**使用 GitHub 继续**。
+`github` 没有任何字段，按钮显示**使用 GitHub 继续**。
 
 </Tab>
 
@@ -154,11 +152,10 @@ metadata:
   name: google
   namespace: zeabur-identity
 spec:
-  type: OpenID
-  issuer: https://accounts.google.com
-  displayName: Google
   clientId: 1234567890-example.apps.googleusercontent.com
-  clientSecretKey: google
+  openid:
+    issuer: https://accounts.google.com
+    displayName: Google
 EOF
 ```
 
@@ -245,7 +242,6 @@ kubectl auth whoami          # the user is zeabur:<username>
 
 ```sh
 USER_NAME=alice                                # an existing User
-PROVIDER=github                                # the UpstreamProvider's name
 ISSUER=https://github.com
 SUBJECT=$(curl -fsS https://api.github.com/users/octocat | jq -r .id)
 USER_UID=$(kubectl -n zeabur-identity get users.identity.zeabur.com "$USER_NAME" -o jsonpath='{.metadata.uid}')
@@ -260,8 +256,6 @@ metadata:
   ownerReferences:
     - {apiVersion: identity.zeabur.com/v1alpha1, kind: User, name: $USER_NAME, uid: $USER_UID}
 spec:
-  type: Upstream
-  provider: $PROVIDER
   user: $USER_NAME
   external: {issuer: "$ISSUER", subject: "$SUBJECT"}
 EOF
@@ -280,7 +274,7 @@ EOF
 | 登录页面没有对应提供方的按钮 | 执行 `kubectl -n zeabur-identity get upstreamproviders`。如果对象存在，执行 `kubectl -n zeabur-identity logs deploy/zeabur-identity`，查找 `upstream_provider_invalid`，其中会指出无法使用的字段。 |
 | 提供方提示重定向 URI 不匹配 | 在提供方注册的地址必须与 `<issuer>/upstream/<name>/callback` 完全相同，其中名称必须是 `UpstreamProvider` 的名称。Google 还会拒绝 `identity.example.test` 这类域名。 |
 | 选择按钮后立即显示**无法完成操作** | 如果页面加载后提供方已移除或改名，重新加载页面。如果日志显示 `provider_unavailable`，说明 Zeabur Identity 无法读取 issuer 的 `/.well-known/openid-configuration`。检查 Pod 能否通过 HTTPS 连接到 issuer；如果使用私有 CA，还要检查是否已完成前面的配置。 |
-| 提供方将用户重定向回来后显示**无法验证外部账号的响应** | 在日志中查找 `provider_unavailable`。Secret `zeabur-identity-upstream` 不存在、缺少 `clientSecretKey` 指定的键，或 Pod 无法连接到提供方的 token 地址或密钥地址。 |
+| 提供方将用户重定向回来后显示**无法验证外部账号的响应** | 在日志中查找 `provider_unavailable`。Secret `zeabur-identity-upstream` 不存在、缺少与提供方同名的键，或 Pod 无法连接到提供方的 token 地址或密钥地址。 |
 | **此账号尚未关联** | 先关联账号。Zeabur Identity 不会根据电子邮箱或姓名匹配账号。自行创建的 `Credential` 如果名称或 ID 错误，也会出现相同提示。 |
 | **此账号要用通行密钥登录** | 外部账号关联到了管理员账号，管理员账号只能用通行密钥登录。 |
 | `org_internal` 或其他 Google 访问错误 | 检查应用的 **Audience** 和账号所属组织的政策。 |
