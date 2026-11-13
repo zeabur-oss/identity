@@ -57,7 +57,7 @@ kubectl apply -f upgrade-record/upstreamproviders.next.json
 
 #### 回復到 v0.2.0
 
-v0.2.0 讀不了沒有 `type` 的 `Credential` 和提供者。可以還原升級前的備份；或在 Zeabur Identity 停止時匯出 `Credential`、刪除、套用 v0.2.0 的 CRD，再加上 v0.2.0 的類型重新建立。每個已連結帳號會對應到 `upstreamproviders.before.json` 裡同一個 issuer 的提供者。透過升級後才新增的提供者連結的帳號沒有對應，下列指令會略過它：
+v0.2.0 讀不了沒有 `type` 的 `Credential` 和提供者。可以還原升級前的備份；或在 Zeabur Identity 停止時匯出 `Credential`、刪除、套用 v0.2.0 的 CRD，再加上 v0.2.0 的類型重新建立。每個已連結帳號會對應到 `upstreamproviders.before.json` 裡 issuer 相同的提供者。如果那裡沒有這個 issuer 的提供者，帳號就無法寫成 v0.2.0 的形式，會被刪除。先匯出 `Credential`：
 
 ```sh
 kubectl -n "$NS" get credentials.identity.zeabur.com -o json \
@@ -70,6 +70,11 @@ kubectl -n "$NS" get credentials.identity.zeabur.com -o json \
           else .spec.type = "Upstream" | .spec.provider = $provider[.spec.external.issuer] end
         | select(.spec.type == "Passkey" or .spec.provider != null))' \
   > upgrade-record/credentials.v0.2.0.json
+```
+
+看過 `credentials.v0.2.0.json`，確認哪些帳號沒有匯出，再刪除並重新建立：
+
+```sh
 kubectl -n "$NS" delete credentials.identity.zeabur.com --all
 kubectl -n "$NS" delete upstreamproviders.identity.zeabur.com --all
 kubectl apply --server-side -f upgrade-record/crds.before.json
@@ -77,7 +82,7 @@ kubectl create -f upgrade-record/credentials.v0.2.0.json
 kubectl create -f upgrade-record/upstreamproviders.before.json
 ```
 
-刪除前先看過 `credentials.v0.2.0.json`。`kubectl create` 不會還原 `status`，所以通行密鑰在註冊後改過的名稱和最後登入時間會遺失。最後換回 v0.2.0 的映像檔和資源清單。
+`kubectl create` 不會還原 `status`，所以通行密鑰在註冊後改過的名稱和最後登入時間會遺失。最後換回 v0.2.0 的映像檔和資源清單。
 
 ### v0.1 → v0.2
 
@@ -141,11 +146,11 @@ EOF
 
 #### 已連結帳號
 
-不用做任何事。已連結的 GitHub 或 Google 帳號，也就是 `type: GitHub` 或 `type: Google` 的 `Credential`，會透過 issuer 相同的提供者登入：`https://github.com` 對應 `github`，`https://accounts.google.com` 對應 `google`。v0.2 不會改動這些物件。
+不用做任何事。已連結的 GitHub 或 Google 帳號，也就是 `type: GitHub` 或 `type: Google` 的 `Credential`，會用 issuer 相同的提供者登入：`https://github.com` 對應 `github`，`https://accounts.google.com` 對應 `google`。v0.2.1 不會改動這些物件。
 
 #### 回復到 v0.1
 
-v0.1 讀不了沒有 `type` 的 `Credential`，而 v0.2 寫入的 `Credential` 不帶 `type`。可以依下方**回復**的說明還原升級前的備份；或在 Zeabur Identity 停止時匯出 `Credential`、刪除、套用 v0.1 的 CRD，再加上 v0.1 的類型重新建立。透過 GitHub、Google 以外的提供者連結的帳號在 v0.1 沒有對應的寫法，下列指令會略過它們：
+v0.1 讀不了沒有 `type` 的 `Credential`，而 v0.2.1 寫入的 `Credential` 不帶 `type`。可以依下方**回復**的說明還原升級前的備份；或在 Zeabur Identity 停止時匯出 `Credential`、刪除、套用 v0.1 的 CRD，再加上 v0.1 的類型重新建立。用 GitHub、Google 以外的提供者連結的帳號在 v0.1 沒有對應的寫法，會被刪除。先匯出 `Credential`：
 
 ```sh
 kubectl -n "$NS" get credentials.identity.zeabur.com -o json | jq '.items |= map(
@@ -153,12 +158,17 @@ kubectl -n "$NS" get credentials.identity.zeabur.com -o json | jq '.items |= map
      spec: (.spec | del(.provider) | .type = (if .passkey then "Passkey"
        else {"https://github.com": "GitHub", "https://accounts.google.com": "Google"}[.external.issuer] end))}
     | select(.spec.type != null))' > upgrade-record/credentials.v0.1.json
+```
+
+看過 `credentials.v0.1.json`，確認哪些帳號沒有匯出，再刪除並重新建立：
+
+```sh
 kubectl -n "$NS" delete credentials.identity.zeabur.com --all
 kubectl apply --server-side -f upgrade-record/crds.before.json
 kubectl create -f upgrade-record/credentials.v0.1.json
 ```
 
-刪除前先看過 `credentials.v0.1.json`。`kubectl create` 不會還原 `status`，所以通行密鑰在註冊後改過的名稱和最後登入時間會遺失。最後換回 v0.1 的映像檔和資源清單，並加回步驟 1 的選項。
+`kubectl create` 不會還原 `status`，所以通行密鑰在註冊後改過的名稱和最後登入時間會遺失。最後換回 v0.1 的映像檔和資源清單，並加回步驟 1 的選項。
 
 ## 升級前
 

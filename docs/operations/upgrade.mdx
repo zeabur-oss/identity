@@ -57,7 +57,7 @@ Nothing to do. A `Credential` is a passkey when it has `passkey` and a linked ac
 
 #### Roll back to v0.2.0
 
-v0.2.0 can't read a `Credential` or a provider without `type`. Restore the pre-upgrade backup, or export the credentials, delete them, apply v0.2.0's CRDs and create them again with their v0.2.0 type. Do this with Zeabur Identity stopped. Each linked account gets the provider with its issuer from `upstreamproviders.before.json`. An account linked through a provider added after the upgrade has none, so this leaves it out:
+v0.2.0 can't read a `Credential` or a provider without `type`. Restore the pre-upgrade backup, or export the credentials, delete them, apply v0.2.0's CRDs and create them again with their v0.2.0 type. Do this with Zeabur Identity stopped. Each linked account gets the provider with the same issuer in `upstreamproviders.before.json`. If no provider there has an account's issuer, the account can't be written in the v0.2.0 form and is deleted. First export the credentials:
 
 ```sh
 kubectl -n "$NS" get credentials.identity.zeabur.com -o json \
@@ -70,6 +70,11 @@ kubectl -n "$NS" get credentials.identity.zeabur.com -o json \
           else .spec.type = "Upstream" | .spec.provider = $provider[.spec.external.issuer] end
         | select(.spec.type == "Passkey" or .spec.provider != null))' \
   > upgrade-record/credentials.v0.2.0.json
+```
+
+Read `credentials.v0.2.0.json` and check what it leaves out, then delete and recreate:
+
+```sh
 kubectl -n "$NS" delete credentials.identity.zeabur.com --all
 kubectl -n "$NS" delete upstreamproviders.identity.zeabur.com --all
 kubectl apply --server-side -f upgrade-record/crds.before.json
@@ -77,7 +82,7 @@ kubectl create -f upgrade-record/credentials.v0.2.0.json
 kubectl create -f upgrade-record/upstreamproviders.before.json
 ```
 
-Read `credentials.v0.2.0.json` before you delete anything. `kubectl create` doesn't restore `status`, so passkeys lose the names users gave them after enrolment and their last sign-in time. Then switch back to the v0.2.0 image and manifests.
+`kubectl create` doesn't restore `status`, so passkeys lose the names users gave them after enrolment and their last sign-in time. Then switch back to the v0.2.0 image and manifests.
 
 ### v0.1 → v0.2
 
@@ -141,11 +146,11 @@ Save v0.1's CRDs with the old `zeabur-identityctl` next to your upgrade record. 
 
 #### Linked accounts
 
-Nothing to do. Each linked GitHub or Google account, a `Credential` with `type: GitHub` or `type: Google`, signs in through the provider with its issuer: `github` for `https://github.com`, `google` for `https://accounts.google.com`. v0.2 doesn't change these objects.
+Nothing to do. Each linked GitHub or Google account, a `Credential` with `type: GitHub` or `type: Google`, signs in through the provider with its issuer: `github` for `https://github.com`, `google` for `https://accounts.google.com`. v0.2.1 doesn't change these objects.
 
 #### Roll back to v0.1
 
-v0.1 can't read a `Credential` without `type`, and v0.2 writes credentials without it. Restore the pre-upgrade backup, as described under **Roll back** below, or export the credentials, delete them, apply the v0.1 CRDs and create them again with their v0.1 type. Do this with Zeabur Identity stopped. Accounts linked through a provider other than GitHub or Google have no v0.1 form, so this leaves them out:
+v0.1 can't read a `Credential` without `type`, and v0.2.1 writes credentials without it. Restore the pre-upgrade backup, as described under **Roll back** below, or export the credentials, delete them, apply the v0.1 CRDs and create them again with their v0.1 type. Do this with Zeabur Identity stopped. Accounts linked through a provider other than GitHub or Google have no v0.1 form, so they're deleted. First export the credentials:
 
 ```sh
 kubectl -n "$NS" get credentials.identity.zeabur.com -o json | jq '.items |= map(
@@ -153,12 +158,17 @@ kubectl -n "$NS" get credentials.identity.zeabur.com -o json | jq '.items |= map
      spec: (.spec | del(.provider) | .type = (if .passkey then "Passkey"
        else {"https://github.com": "GitHub", "https://accounts.google.com": "Google"}[.external.issuer] end))}
     | select(.spec.type != null))' > upgrade-record/credentials.v0.1.json
+```
+
+Read `credentials.v0.1.json` and check what it leaves out, then delete and recreate:
+
+```sh
 kubectl -n "$NS" delete credentials.identity.zeabur.com --all
 kubectl apply --server-side -f upgrade-record/crds.before.json
 kubectl create -f upgrade-record/credentials.v0.1.json
 ```
 
-Read `credentials.v0.1.json` before you delete anything. `kubectl create` doesn't restore `status`, so passkeys lose the names users gave them after enrolment and their last sign-in time. Then switch back to the v0.1 image and manifests, with the options from step 1.
+`kubectl create` doesn't restore `status`, so passkeys lose the names users gave them after enrolment and their last sign-in time. Then switch back to the v0.1 image and manifests, with the options from step 1.
 
 ## Before upgrading
 
