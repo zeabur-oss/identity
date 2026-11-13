@@ -48,7 +48,7 @@ mod tests {
     use tokio_rustls::TlsConnector;
     use url::Url;
     use zeabur_identity_api::client::{ClientType, OAuthClient, OAuthClientSpec};
-    use zeabur_identity_api::credential::Credential;
+    use zeabur_identity_api::credential::{Credential, CredentialKind};
     use zeabur_identity_api::user::User;
     use zeabur_identity_api::{USER_LABEL, definitions};
     use zeabur_identity_core::clock::{Clock as _, SystemClock};
@@ -1419,11 +1419,9 @@ mod tests {
             .await
             .unwrap()
             .items;
-        let subject_of = |c: &Credential| {
-            c.spec
-                .external
-                .as_ref()
-                .map(|e| e.subject.as_str().to_owned())
+        let subject_of = |c: &Credential| match &c.spec.kind {
+            CredentialKind::External(e) => Some(e.subject.as_str().to_owned()),
+            CredentialKind::Passkey(_) => None,
         };
         let bob = mine
             .iter()
@@ -1444,7 +1442,10 @@ mod tests {
             .unwrap()
             .items;
         assert!(left.iter().all(|c| c.name_any() != bob));
-        assert!(left.iter().any(|c| c.spec.passkey.is_some()));
+        assert!(
+            left.iter()
+                .any(|c| matches!(c.spec.kind, CredentialKind::Passkey(_)))
+        );
         assert!(
             left.iter()
                 .any(|c| subject_of(c).as_deref() == Some(KC_ALICE.2))

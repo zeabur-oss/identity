@@ -1251,7 +1251,7 @@ mod tests {
         use base64::engine::general_purpose::URL_SAFE_NO_PAD;
         use zeabur_identity_api::credential::Credential;
         use zeabur_identity_api::invitation::Invitation;
-        use zeabur_identity_api::upstream::{ExternalId, Issuer, ProviderId, Subject};
+        use zeabur_identity_api::upstream::{ExternalId, Issuer, Subject};
         use zeabur_identity_core::clock::UnixTime;
         use zeabur_identity_core::config::BaseUrl;
         use zeabur_identity_k8s::credentials::KubeCredentialStore;
@@ -1333,7 +1333,6 @@ mod tests {
                     subject: Subject::new(generation).unwrap(),
                 },
                 user: "alice".into(),
-                provider: ProviderId::new("github").unwrap(),
                 user_subject: uid.clone(),
             };
             credential_store.link(&external).await.unwrap();
@@ -1840,7 +1839,7 @@ mod tests {
             refused(&providers, provider(name, spec), case).await;
         }
 
-        // Credentials: the provider goes with type Upstream only; the old types are gone.
+        // Credentials: exactly one of passkey and external.
         let credentials = dynamic_api(
             &env.admin,
             &env.namespace,
@@ -1851,29 +1850,19 @@ mod tests {
                 "metadata": {"name": name}, "spec": spec})
         };
         let external = json!({"issuer": "https://github.com", "subject": "1"});
+        let passkey = json!({"credentialId": "AAEC", "record": "{}"});
         for (case, spec) in [
+            ("neither", json!({"user": "alice"})),
             (
-                "old type GitHub",
-                json!({"user": "alice", "type": "GitHub", "external": external}),
-            ),
-            (
-                "Upstream without provider",
-                json!({"user": "alice", "type": "Upstream", "external": external}),
-            ),
-            (
-                "Upstream with a bad provider",
-                json!({"user": "alice", "type": "Upstream", "external": external, "provider": "Git"}),
-            ),
-            (
-                "Upstream without external",
-                json!({"user": "alice", "type": "Upstream", "provider": "github"}),
+                "both",
+                json!({"user": "alice", "external": external, "passkey": passkey}),
             ),
         ] {
             refused(&credentials, credential("c-refused", spec), case).await;
         }
         let linked: kube::api::DynamicObject = serde_json::from_value(credential(
             "c-linked",
-            json!({"user": "alice", "type": "Upstream", "external": external, "provider": "github"}),
+            json!({"user": "alice", "external": external}),
         ))
         .unwrap();
         credentials
@@ -1881,8 +1870,7 @@ mod tests {
             .await
             .unwrap();
 
-        // Zeabur Identity reads providers and their one Secret, and writes neither. It may patch
-        // a credential, but admission keeps the spec as it is.
+        // Zeabur Identity reads providers and their one Secret, and writes neither.
         let as_identity: Api<UpstreamProvider> = env.zeabur_identity_api();
         assert!(as_identity.get("keycloak").await.is_ok());
         assert!(as_identity.list(&ListParams::default()).await.is_ok());
@@ -1916,20 +1904,16 @@ mod tests {
             &env.namespace,
             &ApiResource::erase::<Credential>(&()),
         );
-        for (case, spec) in [
-            ("another provider", json!({"spec": {"provider": "google"}})),
-            ("another user", json!({"spec": {"user": "mallory"}})),
-            (
-                "back to an old type",
-                json!({"spec": {"type": "GitHub", "provider": null}}),
-            ),
-        ] {
-            let error = identity_credentials
-                .patch("c-linked", &PatchParams::default(), &Patch::Merge(&spec))
-                .await
-                .unwrap_err();
-            assert_eq!(status_code(&error), Some(422), "{case}: {error}");
-        }
+        // Zeabur Identity cannot change a credential; the account owner deletes it instead.
+        let error = identity_credentials
+            .patch(
+                "c-linked",
+                &PatchParams::default(),
+                &Patch::Merge(&json!({"spec": {"user": "mallory"}})),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(status_code(&error), Some(403), "{error}");
         env.cleanup().await;
     }
 
@@ -2042,151 +2026,6 @@ mod tests {
                 .unwrap(),
             "second"
         );
-        env.cleanup().await;
-    }
-
-    /// The migration on a copy of the `Credential` CRD under another group whose `type` still
-    /// allows `GitHub` and `Google`, as the CRD of v0.1 did.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    #[ignore = "needs a Kubernetes cluster (KUBECONFIG)"]
-    #[expect(clippy::too_many_lines, reason = "one migration scenario")]
-    async fn linked_accounts_migrate_with_their_names_owners_and_labels() {
-        use kube::api::{ApiResource, DynamicObject, Patch, PatchParams};
-        use serde_json::json;
-        use zeabur_identity_api::credential::Credential;
-        use zeabur_identity_k8s::migrate;
-
-        const GROUP: &str = "migration-test.identity.zeabur.com";
-        let env = Env::new().await;
-        let mut crd = <Credential as kube::CustomResourceExt>::crd();
-        crd.metadata.name = Some(format!("credentials.{GROUP}"));
-        crd.spec.group = GROUP.to_owned();
-        let mut value = serde_json::to_value(&crd).unwrap();
-        let types = &mut value["spec"]["versions"][0]["schema"]["openAPIV3Schema"]["properties"]["spec"]
-            ["properties"]["type"]["enum"];
-        types
-            .as_array_mut()
-            .unwrap()
-            .extend([json!("GitHub"), json!("Google")]);
-        let crd: CustomResourceDefinition = serde_json::from_value(value).unwrap();
-        let crds: Api<CustomResourceDefinition> = Api::all(env.admin.clone());
-        let name = crd.name_any();
-        match crds.create(&PostParams::default(), &crd).await {
-            Ok(_) => {}
-            Err(error) if status_code(&error) == Some(409) => {
-                let mut desired = crd.clone();
-                desired.metadata.resource_version =
-                    crds.get(&name).await.unwrap().metadata.resource_version;
-                crds.replace(&name, &PostParams::default(), &desired)
-                    .await
-                    .unwrap();
-            }
-            Err(error) => panic!("{error}"),
-        }
-        let mut resource = ApiResource::erase::<Credential>(&());
-        resource.group = GROUP.to_owned();
-        resource.api_version = format!("{GROUP}/{}", resource.version);
-        let api = dynamic_api(&env.admin, &env.namespace, &resource);
-
-        let users: Api<User> = env.admin_api();
-        let alice = users
-            .create(&PostParams::default(), &user_object("alice"))
-            .await
-            .unwrap();
-        let owner = json!([{"apiVersion": "identity.zeabur.com/v1alpha1", "kind": "User",
-            "name": "alice", "uid": alice.uid().unwrap()}]);
-        let object = |name: &str, spec: serde_json::Value| -> DynamicObject {
-            serde_json::from_value(
-                json!({"apiVersion": resource.api_version, "kind": "Credential",
-                "metadata": {"name": name, "ownerReferences": owner,
-                    "labels": {"identity.zeabur.com/user": "alice", "example.com/team": "a"}},
-                "spec": spec}),
-            )
-            .unwrap()
-        };
-        let github = json!({"issuer": "https://github.com", "subject": "583231"});
-        let google = json!({"issuer": "https://accounts.google.com", "subject": "1047"});
-        let passkey = json!({"user": "alice", "type": "Passkey", "passkey": {
-            "credentialId": "AAAA", "record": "{}", "backupEligible": false}});
-        // The CRD may still be starting to serve the new group.
-        let mut before = Vec::new();
-        for (name, spec) in [
-            (
-                "c-github",
-                json!({"user": "alice", "type": "GitHub", "external": github}),
-            ),
-            (
-                "c-google",
-                json!({"user": "alice", "type": "Google", "external": google}),
-            ),
-            ("p-passkey", passkey.clone()),
-        ] {
-            let mut created = None;
-            for _ in 0..50 {
-                match api
-                    .create(&PostParams::default(), &object(name, spec.clone()))
-                    .await
-                {
-                    Ok(done) => {
-                        created = Some(done);
-                        break;
-                    }
-                    Err(error) if status_code(&error) == Some(404) => {
-                        tokio::time::sleep(Duration::from_millis(200)).await;
-                    }
-                    Err(error) => panic!("{name}: {error}"),
-                }
-            }
-            before.push(created.unwrap());
-        }
-
-        // The rule allows the migration step only: not another provider or another account.
-        for (case, patch) in [
-            (
-                "wrong provider",
-                json!({"spec": {"type": "Upstream", "provider": "google"}}),
-            ),
-            (
-                "changed account",
-                json!({"spec": {"type": "Upstream", "provider": "github",
-                "external": {"issuer": "https://github.com", "subject": "1"}}}),
-            ),
-            (
-                "changed user",
-                json!({"spec": {"type": "Upstream", "provider": "github", "user": "bob"}}),
-            ),
-        ] {
-            let error = api
-                .patch("c-github", &PatchParams::default(), &Patch::Merge(&patch))
-                .await
-                .unwrap_err();
-            assert_eq!(status_code(&error), Some(422), "{case}: {error}");
-        }
-
-        let migrated = migrate::linked_accounts_at(env.admin.clone(), &env.namespace, &resource)
-            .await
-            .unwrap();
-        assert_eq!(migrated, 2);
-        for (old, provider) in before.iter().zip([Some("github"), Some("google"), None]) {
-            let new = api.get(&old.name_any()).await.unwrap();
-            assert_eq!(new.uid(), old.uid());
-            assert_eq!(new.metadata.owner_references, old.metadata.owner_references);
-            assert_eq!(new.metadata.labels, old.metadata.labels);
-            assert_eq!(new.data["spec"]["user"], old.data["spec"]["user"]);
-            match provider {
-                Some(provider) => {
-                    assert_eq!(new.data["spec"]["type"], "Upstream");
-                    assert_eq!(new.data["spec"]["provider"], provider);
-                    assert_eq!(new.data["spec"]["external"], old.data["spec"]["external"]);
-                }
-                None => assert_eq!(new.data["spec"], old.data["spec"]),
-            }
-        }
-        // Done objects are left alone.
-        let again = migrate::linked_accounts_at(env.admin.clone(), &env.namespace, &resource)
-            .await
-            .unwrap();
-        assert_eq!(again, 0);
         env.cleanup().await;
     }
 

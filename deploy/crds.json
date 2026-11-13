@@ -157,11 +157,6 @@
                 "type": "string"
               },
               {
-                "jsonPath": ".spec.type",
-                "name": "Type",
-                "type": "string"
-              },
-              {
                 "jsonPath": ".metadata.creationTimestamp",
                 "name": "Age",
                 "type": "date"
@@ -174,10 +169,21 @@
                 "properties": {
                   "spec": {
                     "description": "A way for a `User` to sign in.\n\nThe object name is derived from the credential's unique key (`c-` + hex SHA-256 of the\npasskey credential ID, or of the upstream issuer and subject), so creating a duplicate fails\nwith `409 AlreadyExists`. That is the uniqueness check WebAuthn Level 3 §7.1 asks for, and\nit holds across replicas. The spec is immutable; revoking is deleting. `status` holds what\nthe user may change (the label) and when the credential was last used.",
+                    "oneOf": [
+                      {
+                        "required": [
+                          "passkey"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "external"
+                        ]
+                      }
+                    ],
                     "properties": {
                       "external": {
-                        "description": "Upstream identity, when `type` is `Upstream`.",
-                        "nullable": true,
+                        "description": "An account at an upstream provider, which any `UpstreamProvider` with its issuer signs in.",
                         "properties": {
                           "issuer": {
                             "description": "Upstream issuer.",
@@ -199,8 +205,7 @@
                         "type": "object"
                       },
                       "passkey": {
-                        "description": "Passkey details, when `type` is `Passkey`.",
-                        "nullable": true,
+                        "description": "A WebAuthn discoverable credential.",
                         "properties": {
                           "aaguid": {
                             "description": "Authenticator model (AAGUID), when the authenticator reports one.",
@@ -239,21 +244,6 @@
                         ],
                         "type": "object"
                       },
-                      "provider": {
-                        "description": "The `UpstreamProvider` that linked the account, when `type` is `Upstream`. Sign-in does not\nread it: any provider with the same issuer signs the account in.",
-                        "maxLength": 63,
-                        "minLength": 1,
-                        "pattern": "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$",
-                        "type": "string"
-                      },
-                      "type": {
-                        "description": "Kind of credential.",
-                        "enum": [
-                          "Passkey",
-                          "Upstream"
-                        ],
-                        "type": "string"
-                      },
                       "user": {
                         "description": "Name of the `User` object.",
                         "maxLength": 253,
@@ -262,26 +252,13 @@
                       }
                     },
                     "required": [
-                      "type",
                       "user"
                     ],
                     "type": "object",
                     "x-kubernetes-validations": [
                       {
                         "message": "credentials are immutable; delete and re-enrol instead",
-                        "rule": "self == oldSelf || (oldSelf.type in ['GitHub', 'Google'] && self.type == 'Upstream' && self.user == oldSelf.user && !has(self.passkey) && has(self.external) && has(oldSelf.external) && self.external == oldSelf.external && has(self.provider) && self.provider == (oldSelf.type == 'GitHub' ? 'github' : 'google'))"
-                      },
-                      {
-                        "message": "passkey is set exactly when type is Passkey",
-                        "rule": "(self.type == 'Passkey') == has(self.passkey)"
-                      },
-                      {
-                        "message": "external is set exactly when type is Upstream",
-                        "rule": "(self.type != 'Passkey') == has(self.external)"
-                      },
-                      {
-                        "message": "provider is set exactly when type is Upstream",
-                        "rule": "(self.type == 'Upstream') == has(self.provider)"
+                        "rule": "self == oldSelf"
                       }
                     ]
                   },

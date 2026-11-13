@@ -384,14 +384,6 @@ mod tests {
             }
         }
 
-        fn id(self) -> ProviderId {
-            ProviderId::new(match self {
-                Self::GitHub => "github",
-                Self::Google => "google",
-            })
-            .unwrap()
-        }
-
         fn issuer(self) -> &'static str {
             match self {
                 Self::GitHub => GITHUB_ISSUER,
@@ -694,7 +686,6 @@ mod tests {
             .link(&NewExternal {
                 id: external(kind, subject),
                 user: user.into(),
-                provider: kind.id(),
                 user_subject: format!("uid-{user}"),
             })
             .await
@@ -1691,7 +1682,6 @@ mod tests {
             .link(&NewExternal {
                 id: external(Kind::Google, "second"),
                 user: "alice".into(),
-                provider: Kind::Google.id(),
                 user_subject: "uid-alice".into(),
             })
             .await
@@ -1772,7 +1762,6 @@ mod tests {
                     subject: Subject::new(GOOGLE_SUB).unwrap(),
                 },
                 user: "alice".into(),
-                provider: Kind::Google.id(),
                 user_subject: "uid-alice".into(),
             })
             .await

@@ -1,8 +1,7 @@
 //! `zeabur-identity`: wires configuration, storage, keys and HTTP together.
 //!
 //! Kubernetes mode binds the internal port first, failing immediately if it is unavailable.
-//! Startup first migrates linked accounts from before `UpstreamProvider`
-//! ([`zeabur_identity_k8s::migrate`]). It refuses to bind the public port until directory metadata
+//! It refuses to bind the public port until directory metadata
 //! watches publish their initial snapshots, the upstream providers are read and signing keys are
 //! reconciled. Background tasks watch metadata, rotate keys,
 //! collect expired grants and invitations, and serve internal TLS.
@@ -33,7 +32,7 @@ use zeabur_identity_k8s::grants::KubeGrantStore;
 use zeabur_identity_k8s::keys::SecretKeyStore;
 use zeabur_identity_k8s::objects::list_all;
 use zeabur_identity_k8s::setup::KubeSetupStore;
-use zeabur_identity_k8s::{gc, migrate, upstream as kube_upstream};
+use zeabur_identity_k8s::{gc, upstream as kube_upstream};
 use zeabur_identity_keys::manager::{KeyManager, ManagerError};
 use zeabur_identity_keys::store::KeyStore;
 use zeabur_identity_oauth::discovery::ProviderMetadata;
@@ -75,10 +74,6 @@ pub enum ServeError {
     /// Kubernetes directory metadata could not be synchronized at startup.
     #[error("preparing directory metadata: {0}")]
     Directory(#[from] zeabur_identity_store::StoreError),
-    /// Linked accounts from before `UpstreamProvider` could not be migrated. Apply this version's
-    /// CRDs and RBAC first.
-    #[error("migrating linked accounts (apply this version's CRDs and RBAC first): {0}")]
-    Migration(kube::Error),
     /// `UpstreamProvider` objects could not be read. Apply this version's CRDs and RBAC first.
     #[error("reading UpstreamProvider objects (apply this version's CRDs and RBAC first): {0}")]
     Upstream(kube::Error),
@@ -115,12 +110,6 @@ pub async fn serve(config: ServeConfig) -> Result<(), ServeError> {
         .clone()
         .unwrap_or_else(|| client.default_namespace().to_owned());
     tracing::info!("using Kubernetes storage");
-    let migrated = migrate::linked_accounts(client.clone(), &namespace)
-        .await
-        .map_err(ServeError::Migration)?;
-    if migrated > 0 {
-        tracing::info!(migrated, "linked accounts migrated to UpstreamProvider");
-    }
     let keys = SecretKeyStore::new(
         Api::namespaced(client.clone(), &namespace),
         key_secret.clone(),

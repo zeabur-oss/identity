@@ -15,7 +15,7 @@ mod tests {
     use kube::api::Api;
     use serde_json::{Value, json};
     use tokio::sync::{Barrier, Mutex};
-    use zeabur_identity_api::upstream::{ExternalId, Issuer, ProviderId, Subject};
+    use zeabur_identity_api::upstream::{ExternalId, Issuer, Subject};
     use zeabur_identity_core::clock::UnixTime;
     use zeabur_identity_k8s::credentials::KubeCredentialStore;
     use zeabur_identity_k8s::grants::KubeGrantStore;
@@ -218,7 +218,7 @@ mod tests {
         let mut object = json!({"apiVersion":"identity.zeabur.com/v1alpha1","kind":"Credential",
             "metadata":{"name":name,"labels":{"identity.zeabur.com/user":"alice"},
                 "creationTimestamp":"2026-10-01T00:00:00Z"},
-            "spec":{"user":user,"type":"Passkey",
+            "spec":{"user":user,
                 "passkey":{"credentialId":name,"record":"{}","backupEligible":true,
                     "label":"Laptop","aaguid":"fbfc3007-154e-4ecc-8c0b-6e020557d7bd"}}});
         if let Some(uid) = owner {
@@ -239,7 +239,7 @@ mod tests {
         json!({"apiVersion":"identity.zeabur.com/v1alpha1","kind":"Credential",
             "metadata":{"name":name,"labels":{"identity.zeabur.com/user":"alice"},
                 "ownerReferences":owners},
-            "spec":{"user":"alice","type":"Upstream","provider":"github",
+            "spec":{"user":"alice",
                 "external":{"issuer":"https://github.com","subject":name}}})
     }
 
@@ -394,7 +394,6 @@ mod tests {
                 subject: Subject::new("new").unwrap(),
             },
             user: "alice".into(),
-            provider: ProviderId::new("github").unwrap(),
             user_subject: "uid-old-alice".into(),
         };
         assert!(store.link(&stale).await.is_err());
