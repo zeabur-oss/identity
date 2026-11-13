@@ -74,8 +74,11 @@ pub enum ServeError {
     /// Kubernetes directory metadata could not be synchronized at startup.
     #[error("preparing directory metadata: {0}")]
     Directory(#[from] zeabur_identity_store::StoreError),
-    /// `UpstreamProvider` objects could not be read. Apply this version's CRDs and RBAC first.
-    #[error("reading UpstreamProvider objects (apply this version's CRDs and RBAC first): {0}")]
+    /// `UpstreamProvider` objects could not be read. Apply this version's CRDs and RBAC first, and
+    /// write each object with `openid` or `github`.
+    #[error(
+        "reading UpstreamProvider objects (apply this version's CRDs and RBAC, and give each object openid or github): {0}"
+    )]
     Upstream(kube::Error),
     /// The process sealing key could not be created.
     #[error("creating the process sealing key failed")]

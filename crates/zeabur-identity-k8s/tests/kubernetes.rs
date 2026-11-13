@@ -1749,11 +1749,16 @@ mod tests {
             json!({"apiVersion": "identity.zeabur.com/v1alpha1", "kind": "UpstreamProvider",
                 "metadata": {"name": name}, "spec": spec})
         };
-        let github = json!({"type": "GitHub", "clientId": "Iv1.abc", "clientSecretKey": "github"});
-        let keycloak = json!({"type": "OpenID", "issuer": "https://sso.example/realms/dev",
-            "displayName": "Keycloak", "clientId": "identity", "clientSecretKey": "keycloak",
-            "scopes": ["profile"]});
-        for (name, spec) in [("github", &github), ("keycloak", &keycloak)] {
+        let github = json!({"clientId": "Iv1.abc", "github": {}});
+        let keycloak = json!({"clientId": "identity", "openid": {
+            "issuer": "https://sso.example/realms/dev", "displayName": "Keycloak",
+            "scopes": ["profile"]}});
+        let unnamed = json!({"clientId": "identity", "openid": {"issuer": "https://sso.example"}});
+        for (name, spec) in [
+            ("github", &github),
+            ("keycloak", &keycloak),
+            ("unnamed", &unnamed),
+        ] {
             let object: kube::api::DynamicObject =
                 serde_json::from_value(provider(name, spec.clone())).unwrap();
             providers
@@ -1761,77 +1766,51 @@ mod tests {
                 .await
                 .unwrap();
         }
-        let with = |base: &serde_json::Value, key: &str, value: serde_json::Value| {
-            let mut spec = base.clone();
-            if value.is_null() {
-                spec.as_object_mut().unwrap().remove(key);
-            } else {
-                spec[key] = value;
-            }
+        let openid = |field: &str, value: serde_json::Value| {
+            let mut spec = keycloak.clone();
+            spec["openid"][field] = value;
             spec
         };
         for (case, name, spec) in [
+            ("neither kind", "a", json!({"clientId": "c"})),
             (
-                "OpenID without issuer",
-                "a",
-                with(&keycloak, "issuer", json!(null)),
-            ),
-            (
-                "OpenID without displayName",
+                "both kinds",
                 "b",
-                with(&keycloak, "displayName", json!(null)),
+                json!({"clientId": "c", "github": {}, "openid": {"issuer": "https://sso.example"}}),
             ),
             (
-                "GitHub with issuer",
+                "openid without issuer",
                 "c",
-                with(&github, "issuer", json!("https://github.com")),
+                json!({"clientId": "c", "openid": {}}),
             ),
-            (
-                "GitHub with displayName",
-                "d",
-                with(&github, "displayName", json!("GitHub")),
-            ),
-            (
-                "GitHub with scopes",
-                "e",
-                with(&github, "scopes", json!(["user"])),
-            ),
+            ("no client ID", "d", json!({"github": {}})),
             (
                 "http issuer",
                 "f",
-                with(&keycloak, "issuer", json!("http://sso.example")),
+                openid("issuer", json!("http://sso.example")),
             ),
             (
                 "issuer with a query",
                 "g",
-                with(&keycloak, "issuer", json!("https://sso.example?x=1")),
+                openid("issuer", json!("https://sso.example?x=1")),
             ),
             (
                 "issuer with a fragment",
                 "h",
-                with(&keycloak, "issuer", json!("https://sso.example#x")),
+                openid("issuer", json!("https://sso.example#x")),
             ),
             (
                 "issuer with user information",
                 "i",
-                with(&keycloak, "issuer", json!("https://u@sso.example")),
+                openid("issuer", json!("https://u@sso.example")),
             ),
-            (
-                "scope with a space",
-                "j",
-                with(&keycloak, "scopes", json!(["a b"])),
-            ),
-            (
-                "secret key with a slash",
-                "k",
-                with(&keycloak, "clientSecretKey", json!("a/b")),
-            ),
+            ("scope with a space", "j", openid("scopes", json!(["a b"]))),
+            ("empty display name", "k", openid("displayName", json!(""))),
             (
                 "empty client ID",
                 "l",
-                with(&keycloak, "clientId", json!("")),
+                json!({"clientId": "", "github": {}}),
             ),
-            ("unknown type", "m", with(&github, "type", json!("SAML"))),
             ("name with a capital", "GitHub", github.clone()),
             ("name with a dot", "git.hub", github.clone()),
             ("name ending in a dash", "github-", github.clone()),
@@ -1926,7 +1905,7 @@ mod tests {
         use k8s_openapi::ByteString;
         use kube::api::{Patch, PatchParams};
         use serde_json::json;
-        use zeabur_identity_api::upstream_provider::{SECRET, UpstreamProvider};
+        use zeabur_identity_api::upstream_provider::{SECRET, UpstreamKind, UpstreamProvider};
         use zeabur_identity_k8s::upstream;
 
         let env = Env::new().await;
@@ -1934,7 +1913,13 @@ mod tests {
         let watcher = tokio::spawn(upstream::watch(env.zeabur_identity_api(), move |objects| {
             let seen = objects
                 .iter()
-                .map(|o| (o.name_any(), o.spec.issuer.clone()))
+                .map(|o| {
+                    let issuer = match &o.spec.kind {
+                        UpstreamKind::OpenID(openid) => Some(openid.issuer.clone()),
+                        UpstreamKind::GitHub(_) => None,
+                    };
+                    (o.name_any(), issuer)
+                })
                 .collect();
             tx.send_replace(Some(seen));
         }));
@@ -1957,8 +1942,8 @@ mod tests {
         let keycloak = |issuer: &str| -> UpstreamProvider {
             serde_json::from_value(json!({"apiVersion": "identity.zeabur.com/v1alpha1",
                 "kind": "UpstreamProvider", "metadata": {"name": "keycloak"},
-                "spec": {"type": "OpenID", "issuer": issuer, "displayName": "Keycloak",
-                    "clientId": "identity", "clientSecretKey": "keycloak"}}))
+                "spec": {"clientId": "identity",
+                    "openid": {"issuer": issuer, "displayName": "Keycloak"}}}))
             .unwrap()
         };
         providers
@@ -1973,7 +1958,9 @@ mod tests {
             .patch(
                 "keycloak",
                 &PatchParams::default(),
-                &Patch::Merge(json!({"spec": {"issuer": "https://sso.example/realms/b"}})),
+                &Patch::Merge(
+                    json!({"spec": {"openid": {"issuer": "https://sso.example/realms/b"}}}),
+                ),
             )
             .await
             .unwrap();
