@@ -117,8 +117,7 @@
           ],
           "verbs": [
             "create",
-            "delete",
-            "patch"
+            "delete"
           ]
         },
         {

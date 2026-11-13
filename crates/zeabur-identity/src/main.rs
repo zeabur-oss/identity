@@ -51,7 +51,6 @@ fn serve(args: &ServeArgs) -> ExitCode {
                 ServeError::Kubernetes(_) => "kubernetes_unavailable",
                 ServeError::Keys(_) => "signing_keys_failed",
                 ServeError::Directory(_) => "directory_unavailable",
-                ServeError::Migration(_) => "credential_migration_failed",
                 ServeError::Upstream(_) => "upstream_providers_unavailable",
                 ServeError::Crypto => "sealing_key_failed",
                 ServeError::Config(_) => "invalid_configuration",

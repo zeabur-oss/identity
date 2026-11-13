@@ -67,7 +67,7 @@ mod tests {
             "spec":{"username":"alice","accountType":"Admin","disabled":false}})),
             (Method::GET, "credentials") => ok(json!({"apiVersion":"identity.zeabur.com/v1alpha1",
             "kind":"CredentialList", "metadata":{}, "items":if state.credentials {
-                vec![json!({"metadata":{"name":"old"},"spec":{"user":"alice","type":"Passkey",
+                vec![json!({"metadata":{"name":"old"},"spec":{"user":"alice",
                     "passkey":{"credentialId":"YWJj","record":"{}","backupEligible":false}}})]
             } else { vec![] }})),
             (Method::DELETE, collection @ ("invitations" | "credentials" | "grants")) => {

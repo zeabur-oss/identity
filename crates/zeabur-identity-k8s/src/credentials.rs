@@ -15,7 +15,7 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
 use k8s_openapi::jiff::Timestamp;
 use kube::ResourceExt as _;
 use kube::api::{Api, ListParams, ObjectMeta, Patch, PatchParams, PostParams};
-use zeabur_identity_api::credential::{Credential, CredentialSpec, CredentialType, Passkey};
+use zeabur_identity_api::credential::{Credential, CredentialKind, CredentialSpec, Passkey};
 use zeabur_identity_api::{GROUP, USER_LABEL};
 use zeabur_identity_core::clock::UnixTime;
 use zeabur_identity_store::{
@@ -79,8 +79,7 @@ async fn owned_passkeys(api: &Api<Credential>, user: &User) -> Result<Vec<Creden
         .into_iter()
         .filter(|object| {
             object.spec.user == user.name
-                && object.spec.kind == CredentialType::Passkey
-                && object.spec.passkey.is_some()
+                && matches!(object.spec.kind, CredentialKind::Passkey(_))
                 && !owned_by_another(&object.metadata, &user.subject)
         })
         .collect())
@@ -98,8 +97,7 @@ async fn owned_externals(
         .into_iter()
         .filter(|object| {
             object.spec.user == user.name
-                && object.spec.kind != CredentialType::Passkey
-                && object.spec.external.is_some()
+                && matches!(object.spec.kind, CredentialKind::External(_))
                 && user_owner_uid(&object.metadata) == Some(user.subject.as_str())
         })
         .collect())
@@ -149,7 +147,9 @@ async fn delete_keeping(
 }
 
 fn summary(object: &Credential) -> Option<PasskeySummary> {
-    let passkey = object.spec.passkey.as_ref()?;
+    let CredentialKind::Passkey(passkey) = &object.spec.kind else {
+        return None;
+    };
     let status = object.status.as_ref();
     Some(PasskeySummary {
         name: object.name_any(),
@@ -185,16 +185,13 @@ impl CredentialStore for KubeCredentialStore {
             },
             spec: CredentialSpec {
                 user: passkey.user.clone(),
-                kind: CredentialType::Passkey,
-                passkey: Some(Passkey {
+                kind: CredentialKind::Passkey(Passkey {
                     credential_id: passkey.credential_id.clone(),
                     record: passkey.record.clone(),
                     backup_eligible: passkey.backup_eligible,
                     aaguid: passkey.aaguid.clone(),
                     label: passkey.label.clone(),
                 }),
-                external: None,
-                provider: None,
             },
             status: None,
         };
@@ -223,14 +220,14 @@ impl CredentialStore for KubeCredentialStore {
                     .as_ref()
                     .and_then(|s| s.last_used_at)
                     .map(time);
-                let spec = object.spec;
-                spec.passkey
-                    .filter(|_| spec.kind == CredentialType::Passkey)
-                    .map(|passkey| StoredPasskey {
-                        user: spec.user,
-                        record: passkey.record,
-                        last_used_at,
-                    })
+                let CredentialKind::Passkey(passkey) = object.spec.kind else {
+                    return None;
+                };
+                Some(StoredPasskey {
+                    user: object.spec.user,
+                    record: passkey.record,
+                    last_used_at,
+                })
             }))
         }
     }
@@ -251,10 +248,7 @@ impl CredentialStore for KubeCredentialStore {
             },
             spec: CredentialSpec {
                 user: external.user.clone(),
-                kind: CredentialType::Upstream,
-                passkey: None,
-                external: Some(external.id.clone()),
-                provider: Some(external.provider.clone()),
+                kind: CredentialKind::External(external.id.clone()),
             },
             status: None,
         };
@@ -283,7 +277,7 @@ impl CredentialStore for KubeCredentialStore {
         async move {
             let object = api.get_opt(&name).await.map_err(|e| backend(&e))?;
             Ok(object
-                .filter(|o| o.spec.kind != CredentialType::Passkey && o.spec.external.is_some())
+                .filter(|o| matches!(o.spec.kind, CredentialKind::External(_)))
                 .map(|o| LinkedAccount {
                     user_subject: user_owner_uid(&o.metadata).map(str::to_owned),
                     user: o.spec.user,
@@ -392,10 +386,11 @@ impl CredentialStore for KubeCredentialStore {
                 .await?
                 .iter()
                 .filter_map(|object| {
-                    let external = object.spec.external.as_ref()?;
+                    let CredentialKind::External(external) = &object.spec.kind else {
+                        return None;
+                    };
                     Some(LinkedSummary {
                         name: object.name_any(),
-                        provider: object.spec.provider.clone(),
                         issuer: external.issuer.clone(),
                         created_at: object
                             .metadata

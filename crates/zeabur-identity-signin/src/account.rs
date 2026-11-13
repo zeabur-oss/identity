@@ -500,16 +500,11 @@ where
     response
 }
 
-/// How a linked account's provider is shown: the provider it was linked through. If that
-/// provider is gone, a provider with the same issuer, which signs the account in, or else GitHub,
-/// Google or the issuer's host. The user can unlink the account either way.
+/// How a linked account's provider is shown: a provider with the account's issuer, which signs
+/// the account in, or else GitHub, Google or the issuer's host. The user can unlink the account
+/// either way.
 fn shown_provider(account: &LinkedSummary, providers: &[Descriptor]) -> (String, &'static str) {
-    let current = account
-        .provider
-        .as_ref()
-        .and_then(|id| providers.iter().find(|p| p.id == *id))
-        .or_else(|| providers.iter().find(|p| p.issuer == account.issuer));
-    match current {
+    match providers.iter().find(|p| p.issuer == account.issuer) {
         Some(descriptor) => (descriptor.label.clone(), descriptor.icon),
         None if account.issuer.as_str() == GITHUB_ISSUER => ("GitHub".to_owned(), "GithubLogo"),
         None if account.issuer.as_str() == GOOGLE_ISSUER => ("Google".to_owned(), "GoogleLogo"),

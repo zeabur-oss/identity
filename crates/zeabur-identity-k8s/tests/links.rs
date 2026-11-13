@@ -94,7 +94,7 @@ mod tests {
             "labels":{"identity.zeabur.com/user":"alice"},
             "ownerReferences":[{"apiVersion":"identity.zeabur.com/v1alpha1","kind":"User",
                 "name":"alice","uid":owner}]},
-            "spec":{"user":"alice","type":"Passkey",
+            "spec":{"user":"alice",
                 "passkey":{"credentialId":"YWJj","record":"{}","backupEligible":false}}})
     }
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # k3s with cert-manager, whose kube-apiserver reads its AuthenticationConfiguration from
 # $work/authn so that the end-to-end test can install Zeabur Identity's (and remove it after): the
-# integration tests, then passkey sign-in and `kubectl auth whoami`. The cluster `zeabur-identity`
-# and its directory (kubeconfig, authentication configuration, measurements) are deleted at the end;
+# integration tests, the upgrade test, then passkey sign-in and `kubectl auth whoami`. The cluster
+# `zeabur-identity` and its directory (kubeconfig, authentication configuration, measurements) are deleted at the end;
 # ZEABUR_CI_KEEP=1 keeps both. K3S_IMAGE picks the k3s release.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -46,6 +46,8 @@ trap end EXIT
 CLUSTER="$cluster" K3S_IMAGE="$k3s_image" ./scripts/k3d-up.sh "$work"
 export KUBECONFIG="$work/kubeconfig"
 cargo nextest run --locked --run-ignored only -E 'binary(kubernetes)'
+# Replaces the Credential CRD, so it runs alone.
+cargo nextest run --locked --run-ignored only -E 'binary(upgrade)'
 ./scripts/build-image.sh zeabur-identity:e2e
 k3d image import zeabur-identity:e2e --cluster "$cluster"
 ZEABUR_IDENTITY_E2E_IMAGE=zeabur-identity:e2e \

@@ -8,7 +8,7 @@ use std::sync::{Mutex, PoisonError};
 use thiserror::Error;
 use zeabur_identity_api::ADMIN_GROUP;
 use zeabur_identity_api::client::ClientType;
-use zeabur_identity_api::upstream::{ExternalId, Issuer, ProviderId};
+use zeabur_identity_api::upstream::{ExternalId, Issuer};
 use zeabur_identity_core::account::{AccountType, Settings};
 use zeabur_identity_core::clock::UnixTime;
 use zeabur_identity_core::crypto::ct_eq;
@@ -637,9 +637,6 @@ pub enum Unlink {
 pub struct LinkedSummary {
     /// `Credential` object name.
     pub name: String,
-    /// The `UpstreamProvider` it was linked through. `None` for a credential from before
-    /// `UpstreamProvider` that was not migrated.
-    pub provider: Option<ProviderId>,
     /// The issuer of the account. It still names the account after its provider is deleted.
     pub issuer: Issuer,
     /// When it was linked, if the backend records it.
@@ -668,8 +665,6 @@ pub struct NewExternal {
     pub id: ExternalId,
     /// `User` object name.
     pub user: String,
-    /// The `UpstreamProvider` the account is linked through.
-    pub provider: ProviderId,
     /// The [`User::subject`] (UID) of the user the account signs in as.
     pub user_subject: String,
 }
@@ -889,7 +884,7 @@ pub trait SetupStore: Send + Sync + 'static {
 #[derive(Debug, Default)]
 pub struct MemoryCredentialStore {
     passkeys: Mutex<HashMap<String, MemoryPasskey>>,
-    externals: Mutex<HashMap<String, (LinkedAccount, ProviderId, Issuer)>>,
+    externals: Mutex<HashMap<String, (LinkedAccount, Issuer)>>,
     events: Mutex<Vec<AccountEvent>>,
 }
 
@@ -970,7 +965,6 @@ impl CredentialStore for MemoryCredentialStore {
                         user: external.user.clone(),
                         user_subject: Some(external.user_subject.clone()),
                     },
-                    external.provider.clone(),
                     external.id.issuer.clone(),
                 ));
                 CreateCredential::Created
@@ -1068,9 +1062,8 @@ impl CredentialStore for MemoryCredentialStore {
         let mut list: Vec<LinkedSummary> = externals
             .iter()
             .filter(|(_, (linked, ..))| linked.signs_in_as(user))
-            .map(|(name, (_, provider, issuer))| LinkedSummary {
+            .map(|(name, (_, issuer))| LinkedSummary {
                 name: name.clone(),
-                provider: Some(provider.clone()),
                 issuer: issuer.clone(),
                 created_at: None,
             })

@@ -1,7 +1,6 @@
 //! Command-line flags of the `zeabur-identity` server.
 
 use std::net::SocketAddr;
-use std::path::PathBuf;
 use std::time::Duration;
 
 use clap::{Parser, ValueEnum};
@@ -65,22 +64,6 @@ pub struct ServeArgs {
     #[arg(long, env = "ZEABUR_IDENTITY_INVITATIONS")]
     pub invitations: bool,
 
-    /// Removed: an `UpstreamProvider` object configures GitHub.
-    #[arg(long, env = "ZEABUR_IDENTITY_GITHUB_CLIENT_ID", hide = true)]
-    pub github_client_id: Option<String>,
-
-    /// Removed: the Secret `zeabur-identity-upstream` holds client secrets.
-    #[arg(long, env = "ZEABUR_IDENTITY_GITHUB_CLIENT_SECRET_FILE", hide = true)]
-    pub github_client_secret_file: Option<PathBuf>,
-
-    /// Removed: an `UpstreamProvider` object configures Google.
-    #[arg(long, env = "ZEABUR_IDENTITY_GOOGLE_CLIENT_ID", hide = true)]
-    pub google_client_id: Option<String>,
-
-    /// Removed: the Secret `zeabur-identity-upstream` holds client secrets.
-    #[arg(long, env = "ZEABUR_IDENTITY_GOOGLE_CLIENT_SECRET_FILE", hide = true)]
-    pub google_client_secret_file: Option<PathBuf>,
-
     /// Lifetime of an admin account's access and ID tokens. They carry `cluster-admin`.
     #[arg(long, env = "ZEABUR_IDENTITY_ADMIN_TOKEN_LIFETIME", default_value = "5m", value_parser = parse_duration)]
     pub admin_token_lifetime: Duration,
@@ -121,7 +104,6 @@ impl ServeArgs {
     ///
     /// Returns [`ConfigError`] if the values are inconsistent.
     pub fn config(&self) -> Result<ServeConfig, ConfigError> {
-        self.reject_removed()?;
         let config = ServeConfig {
             issuer: self.issuer.clone(),
             listen: self.listen,
@@ -146,39 +128,6 @@ impl ServeArgs {
         config.validate()?;
         Ok(config)
     }
-
-    /// Refuses the upstream flags that `UpstreamProvider` objects replaced, naming the flag and
-    /// the replacement, so that an upgrade does not start without the sign-in it had.
-    fn reject_removed(&self) -> Result<(), ConfigError> {
-        let removed = [
-            (
-                self.github_client_id.is_some(),
-                "--github-client-id (ZEABUR_IDENTITY_GITHUB_CLIENT_ID) was removed: create an \
-                 UpstreamProvider named github of type GitHub instead",
-            ),
-            (
-                self.github_client_secret_file.is_some(),
-                "--github-client-secret-file (ZEABUR_IDENTITY_GITHUB_CLIENT_SECRET_FILE) was \
-                 removed: put the client secret in the Secret zeabur-identity-upstream instead",
-            ),
-            (
-                self.google_client_id.is_some(),
-                "--google-client-id (ZEABUR_IDENTITY_GOOGLE_CLIENT_ID) was removed: create an \
-                 UpstreamProvider named google of type OpenID instead",
-            ),
-            (
-                self.google_client_secret_file.is_some(),
-                "--google-client-secret-file (ZEABUR_IDENTITY_GOOGLE_CLIENT_SECRET_FILE) was \
-                 removed: put the client secret in the Secret zeabur-identity-upstream instead",
-            ),
-        ];
-        for (given, message) in removed {
-            if given {
-                return Err(ConfigError::Removed(message));
-            }
-        }
-        Ok(())
-    }
 }
 
 #[cfg(test)]
@@ -194,44 +143,6 @@ mod tests {
     #[test]
     fn cli_definition_is_valid() {
         ServeArgs::command().debug_assert();
-    }
-
-    #[test]
-    fn a_removed_upstream_flag_names_itself_and_its_replacement() {
-        for (flag, replacement) in [
-            ("--github-client-id", "UpstreamProvider named github"),
-            (
-                "--github-client-secret-file",
-                "Secret zeabur-identity-upstream",
-            ),
-            ("--google-client-id", "UpstreamProvider named google"),
-            (
-                "--google-client-secret-file",
-                "Secret zeabur-identity-upstream",
-            ),
-        ] {
-            let args = parse(&["--issuer", "https://login.example.com", flag, "x"]).unwrap();
-            let error = args.config().unwrap_err().to_string();
-            assert!(error.starts_with(flag), "{error}");
-            assert!(error.contains(replacement), "{error}");
-        }
-        // Never released, so simply unknown.
-        assert!(
-            parse(&[
-                "--issuer",
-                "https://login.example.com",
-                "--google-issuer",
-                "https://accounts.google.com",
-            ])
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn removed_flags_are_not_in_the_help() {
-        let help = ServeArgs::command().render_long_help().to_string();
-        assert!(!help.contains("client-id"), "{help}");
-        assert!(!help.contains("client-secret"), "{help}");
     }
 
     #[test]

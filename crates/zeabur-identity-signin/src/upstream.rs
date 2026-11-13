@@ -612,7 +612,6 @@ where
             let external = NewExternal {
                 id,
                 user: account.user.name.clone(),
-                provider: provider.id().clone(),
                 user_subject: account.user.subject.clone(),
             };
             return finish_account_link(sign_in, &account, external, linked.is_some(), &requester, now)
@@ -692,7 +691,6 @@ where
         let external = NewExternal {
             id,
             user: stored.user,
-            provider: provider.id().clone(),
             user_subject,
         };
         match sign_in.credentials.link(&external).await {

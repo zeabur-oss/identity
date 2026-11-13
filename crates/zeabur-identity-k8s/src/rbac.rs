@@ -15,10 +15,8 @@
 //! - **Configuration is read-only.** Users, credentials, clients and upstream providers are written
 //!   by admins or GitOps; Zeabur Identity reads them and creates or deletes credentials when a
 //!   passkey is enrolled, removed or an account is linked. On credentials it writes `status` (the
-//!   label a user gives a passkey, and when it was last used). It may also `patch` a credential,
-//!   but the CRD keeps the spec unchanged except for one step: a linked account from before
-//!   `UpstreamProvider` becomes an `Upstream` credential ([`crate::migrate`]). It has no write
-//!   access to users or upstream providers.
+//!   label a user gives a passkey, and when it was last used). It has no write access to users or
+//!   upstream providers.
 //! - **Account settings.** It reads one `ConfigMap`, [`SETTINGS_CONFIG_MAP`], by name. Admins write
 //!   it.
 //! - **Account events.** It creates core `Event`s about users who change their own passkeys or
@@ -95,14 +93,8 @@ pub fn rules() -> Vec<PolicyRule> {
             &[],
             &["get", "list", "watch"],
         ),
-        // Runtime state Zeabur Identity owns. `patch` only migrates linked accounts: the CRD
-        // rejects every other spec change.
-        rule(
-            &[GROUP],
-            &["credentials"],
-            &[],
-            &["create", "delete", "patch"],
-        ),
+        // Runtime state Zeabur Identity owns.
+        rule(&[GROUP], &["credentials"], &[], &["create", "delete"]),
         rule(&[GROUP], &["credentials/status"], &[], &["update", "patch"]),
         rule(
             &[GROUP],
