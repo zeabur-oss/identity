@@ -17,13 +17,75 @@ Zeabur Identity runs a single replica. Updates replace that replica rather than 
 
 Each version below lists what you must do before you upgrade to it. If you skip versions, read every section from the version you run now to the version you're moving to. The newest version is at the top.
 
+### v0.2.0 → v0.2.1
+
+v0.2.1 changes the form of `UpstreamProvider` and `Credential`. Stored credentials keep working as they are. Stored providers don't: the server doesn't start while a provider in the v0.2.0 form is stored, so write each one again in the new form.
+
+#### 1. Check the Secret's keys
+
+v0.2.1 reads each provider's client secret from the key with the provider's name in the Secret `zeabur-identity-upstream`. `clientSecretKey` is gone. If a provider's `clientSecretKey` differs from its name, add the secret under the name as well:
+
+```sh
+kubectl -n "$NS" get upstreamproviders.identity.zeabur.com \
+  -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.clientSecretKey}{"\n"}{end}'
+```
+
+#### 2. Save the providers and v0.2.0's CRDs
+
+Do this before you apply the new CRDs. After that, the API server drops the fields v0.2.1 doesn't have, and the old values can't be read.
+
+```sh
+kubectl -n "$NS" get upstreamproviders.identity.zeabur.com -o json \
+  | jq '.items |= map({apiVersion, kind, metadata: (.metadata | {name, namespace, labels}), spec})' \
+  > upgrade-record/upstreamproviders.before.json
+jq '.items |= map(.spec |= ({clientId} + if .type == "GitHub" then {github: {}}
+      else {openid: ({issuer, displayName} + if .scopes then {scopes} else {} end)} end))' \
+  upgrade-record/upstreamproviders.before.json > upgrade-record/upstreamproviders.next.json
+/path/to/old/zeabur-identityctl crds > upgrade-record/crds.before.json
+```
+
+Read `upstreamproviders.next.json`, then apply it right after the new CRDs in the **Review and apply the manifests** step, before the new Deployment:
+
+```sh
+kubectl apply --server-side -f upgrade-record/crds.next.json
+kubectl apply -f upgrade-record/upstreamproviders.next.json
+```
+
+#### Credentials
+
+Nothing to do. A `Credential` is a passkey when it has `passkey` and a linked account when it has `external`. The `type` and `provider` fields that v0.1 and v0.2.0 wrote are ignored. A `Credential` manifest of your own that sets `type` or `provider` fails `kubectl apply` until you remove them.
+
+#### Roll back to v0.2.0
+
+v0.2.0 can't read a `Credential` or a provider without `type`. Restore the pre-upgrade backup, or export the credentials, delete them, apply v0.2.0's CRDs and create them again with their v0.2.0 type. Do this with Zeabur Identity stopped. Each linked account gets the provider with its issuer from `upstreamproviders.before.json`. An account linked through a provider added after the upgrade has none, so this leaves it out:
+
+```sh
+kubectl -n "$NS" get credentials.identity.zeabur.com -o json \
+  | jq --slurpfile p upgrade-record/upstreamproviders.before.json '
+    ($p[0].items | map({key: (if .spec.type == "GitHub" then "https://github.com" else .spec.issuer end),
+                        value: .metadata.name}) | from_entries) as $provider
+    | .items |= map(
+        {apiVersion, kind, metadata: (.metadata | {name, namespace, labels, ownerReferences}), spec}
+        | if .spec.passkey then .spec.type = "Passkey"
+          else .spec.type = "Upstream" | .spec.provider = $provider[.spec.external.issuer] end
+        | select(.spec.type == "Passkey" or .spec.provider != null))' \
+  > upgrade-record/credentials.v0.2.0.json
+kubectl -n "$NS" delete credentials.identity.zeabur.com --all
+kubectl -n "$NS" delete upstreamproviders.identity.zeabur.com --all
+kubectl apply --server-side -f upgrade-record/crds.before.json
+kubectl create -f upgrade-record/credentials.v0.2.0.json
+kubectl create -f upgrade-record/upstreamproviders.before.json
+```
+
+Read `credentials.v0.2.0.json` before you delete anything. `kubectl create` doesn't restore `status`, so passkeys lose the names users gave them after enrolment and their last sign-in time. Then switch back to the v0.2.0 image and manifests.
+
 ### v0.1 → v0.2
 
-v0.2 sets up GitHub and Google sign-in with `UpstreamProvider` objects instead of server options, removes several server options, and changes how linked accounts are stored. Passkeys aren't affected.
+Upgrade from v0.1 straight to v0.2.1 or later, and skip the v0.2.0 section above. v0.2 sets up GitHub and Google sign-in with `UpstreamProvider` objects instead of server options and removes several server options. Passkeys and linked accounts keep working without a migration.
 
 #### 1. Remove the options v0.2 doesn't have
 
-The server refuses to start while one of these options or its `ZEABUR_IDENTITY_*` variable is set, and the log names the option. Leave them out of every `--serve-arg` when you generate the upgrade files, and delete any you added to the Deployment's `args` or `env` yourself:
+Leave these options and their `ZEABUR_IDENTITY_*` variables out of every `--serve-arg` when you generate the upgrade files, and delete any you added to the Deployment's `args` or `env` yourself. An option that is still set stops the server with an unknown-argument error:
 
 - `--github-client-id`, `--github-client-secret-file`, `--google-client-id`, `--google-client-secret-file`: replaced by `UpstreamProvider` objects (step 3).
 - `--store`: the server always keeps its state in Kubernetes objects.
@@ -38,7 +100,7 @@ If you use Google sign-in and your cluster limits outgoing traffic, also allow H
 
 If you use GitHub or Google sign-in, do this after you apply the new CRDs and before you apply the new manifests in the **Review and apply the manifests** step. Otherwise the **Continue with GitHub** and **Continue with Google** buttons disappear until you do.
 
-Store each client secret in the Secret `zeabur-identity-upstream`, under the key `github` or `google`. Use the same client secrets as v0.1. Leave out a provider you don't use:
+Store each client secret in the Secret `zeabur-identity-upstream`, under the provider's name, `github` or `google`. Use the same client secrets as v0.1. Leave out a provider you don't use:
 
 ```sh
 read -rs GITHUB_SECRET     # paste the GitHub client secret, then Enter
@@ -58,17 +120,14 @@ kubectl apply -f - <<EOF
 apiVersion: identity.zeabur.com/v1alpha1
 kind: UpstreamProvider
 metadata: {name: github, namespace: $NS}
-spec: {type: GitHub, clientId: $GITHUB_CLIENT_ID, clientSecretKey: github}
+spec: {clientId: $GITHUB_CLIENT_ID, github: {}}
 ---
 apiVersion: identity.zeabur.com/v1alpha1
 kind: UpstreamProvider
 metadata: {name: google, namespace: $NS}
 spec:
-  type: OpenID
-  issuer: https://accounts.google.com
-  displayName: Google
   clientId: $GOOGLE_CLIENT_ID
-  clientSecretKey: google
+  openid: {issuer: https://accounts.google.com, displayName: Google}
 EOF
 ```
 
@@ -80,31 +139,26 @@ Save v0.1's CRDs with the old `zeabur-identityctl` next to your upgrade record. 
 /path/to/old/zeabur-identityctl crds > upgrade-record/crds.before.json
 ```
 
-#### What changes at the first start
+#### Linked accounts
 
-When v0.2 starts, it changes each linked GitHub or Google account, a `Credential` of `type: GitHub` or `type: Google`, to `type: Upstream` with `provider: github` or `provider: google`. The name, owner, labels and linked account stay the same, so these accounts sign in as before. A `Credential` you create yourself for a linked account now needs `type: Upstream` and `provider`.
+Nothing to do. Each linked GitHub or Google account, a `Credential` with `type: GitHub` or `type: Google`, signs in through the provider with its issuer: `github` for `https://github.com`, `google` for `https://accounts.google.com`. v0.2 doesn't change these objects.
 
 #### Roll back to v0.1
 
-v0.1 can't read a `Credential` of `type: Upstream`, and its CRD doesn't accept one. The v0.2 CRD only allows the change from `GitHub` or `Google` to `Upstream`, and the v0.1 CRD allows no change at all, so the type can't be patched back in place. Going back to v0.1 needs both the v0.1 CRDs and each linked account written again with its old type.
-
-Restoring the pre-upgrade backup, as described under **Roll back** below, does both. If you need to keep what changed after the upgrade, do the following instead, with Zeabur Identity stopped. Accounts linked through a provider other than `github` or `google` have no v0.1 form, so this deletes them:
+v0.1 can't read a `Credential` without `type`, and v0.2 writes credentials without it. Restore the pre-upgrade backup, as described under **Roll back** below, or export the credentials, delete them, apply the v0.1 CRDs and create them again with their v0.1 type. Do this with Zeabur Identity stopped. Accounts linked through a provider other than GitHub or Google have no v0.1 form, so this leaves them out:
 
 ```sh
 kubectl -n "$NS" get credentials.identity.zeabur.com -o json | jq '.items |= map(
-    select(.spec.type == "Upstream")
-    | {apiVersion, kind,
-       metadata: (.metadata | {name, namespace, labels, ownerReferences}),
-       spec: (.spec | .type = ({github: "GitHub", google: "Google"}[.provider]) | del(.provider))}
+    {apiVersion, kind, metadata: (.metadata | {name, namespace, labels, ownerReferences}),
+     spec: (.spec | del(.provider) | .type = (if .passkey then "Passkey"
+       else {"https://github.com": "GitHub", "https://accounts.google.com": "Google"}[.external.issuer] end))}
     | select(.spec.type != null))' > upgrade-record/credentials.v0.1.json
-kubectl -n "$NS" get credentials.identity.zeabur.com -o json \
-  | jq -r '.items[] | select(.spec.type == "Upstream") | .metadata.name' \
-  | xargs -r kubectl -n "$NS" delete credentials.identity.zeabur.com
+kubectl -n "$NS" delete credentials.identity.zeabur.com --all
 kubectl apply --server-side -f upgrade-record/crds.before.json
 kubectl create -f upgrade-record/credentials.v0.1.json
 ```
 
-Read `upgrade-record/credentials.v0.1.json` before you delete anything. Then switch back to the v0.1 image and manifests, with the options from step 1.
+Read `credentials.v0.1.json` before you delete anything. `kubectl create` doesn't restore `status`, so passkeys lose the names users gave them after enrolment and their last sign-in time. Then switch back to the v0.1 image and manifests, with the options from step 1.
 
 ## Before upgrading
 
