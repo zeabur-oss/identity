@@ -18,10 +18,6 @@ use serde::{Deserialize, Serialize};
 ///
 /// Signing in to the account page creates one too: named `s-…`, with client `zeabur_identity`
 /// (never a valid `OAuthClient` name), and no refresh token.
-#[expect(
-    clippy::duplicated_attributes,
-    reason = "repeated printcolumn arguments such as `type_ = \"string\"` are distinct columns"
-)]
 #[derive(CustomResource, KubeSchema, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[kube(
     group = "identity.zeabur.com",

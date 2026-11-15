@@ -13,10 +13,6 @@ use serde::{Deserialize, Serialize};
 ///
 /// Kubernetes sees the user as `zeabur:<username>` with groups `zeabur:<group>`, plus
 /// `zeabur:admins` for an admin account.
-#[expect(
-    clippy::duplicated_attributes,
-    reason = "repeated printcolumn arguments such as `type_ = \"string\"` are distinct columns"
-)]
 #[derive(
     CustomResource, KubeSchema, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq,
 )]
