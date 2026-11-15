@@ -74,6 +74,7 @@ English, Traditional Chinese or Simplified Chinese.
 - Renovate has no manager for the nightly date. To move it, set `channel` in `rust-toolchain.toml` to a
   newer `nightly-YYYY-MM-DD`, run `nix flake update rust-overlay` if the locked rust-overlay does not
   have that date yet, and fix any new clippy lints or nightly-only setting changes on that pull request.
+  The date is the same in every zeabur-oss Rust repository; bump them together.
 
 Release binaries are built with `trim-paths = "all"`, so they carry no build-host paths.
 
