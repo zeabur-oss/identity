@@ -2,6 +2,38 @@
 
 All notable changes to Zeabur Identity. Versions follow [Semantic Versioning](https://semver.org/); each section comes from the change files in `.changeset/` (docs/internal/releasing.md).
 
+## 0.3.0 (2026-11-16)
+
+### Breaking Changes
+
+#### A `Credential` is a passkey or a linked account by the field it has
+
+A `Credential` has `passkey` or `external`, exactly one, and no longer has `type` or `provider`. Credentials stored by v0.1 and v0.2.0 keep working after you apply this version's CRDs: they sign in and can be unlinked as before, with no migration. A `Credential` manifest of your own that sets `type` or `provider` fails `kubectl apply` until you remove them.
+
+The account page names a linked account after the `UpstreamProvider` with the account's issuer.
+
+Zeabur Identity no longer changes linked accounts when it starts, and its Role no longer has `patch` on `credentials`. The server no longer accepts `--github-client-id`, `--github-client-secret-file`, `--google-client-id` or `--google-client-secret-file`, which v0.2.0 already refused with a message. If one is still in the Deployment's `args`, the server stops with an unknown-argument error. Their `ZEABUR_IDENTITY_*` variables are ignored.
+
+#### An `UpstreamProvider` is OpenID or GitHub by the field it has
+
+An `UpstreamProvider` has `clientId` and exactly one of `openid` or `github`. It no longer has `type` or `clientSecretKey`, and `issuer`, `displayName` and `scopes` move into `openid`:
+
+```yaml
+spec:
+  clientId: 1234-abc.apps.googleusercontent.com
+  openid:
+    issuer: https://accounts.google.com
+    displayName: Google
+---
+spec:
+  clientId: Ov23li...
+  github: {}
+```
+
+The client secret is the key with the object name in the Secret `zeabur-identity-upstream`. `displayName` is optional and defaults to the object name.
+
+The server does not start while an `UpstreamProvider` written for v0.2.0 is stored. After you apply this version's CRDs, apply each provider again in the new form; the upgrade notes have the commands. If a key in `zeabur-identity-upstream` differs from its provider's name, copy the secret to a key with that name.
+
 ## 0.2.0 (2026-11-11)
 
 ### Breaking Changes
