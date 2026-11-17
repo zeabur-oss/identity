@@ -6,6 +6,7 @@
 # ZEABUR_CI_KEEP=1 keeps both. K3S_IMAGE picks the k3s release.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
+source scripts/lib.sh
 
 k3s_image="${K3S_IMAGE:-rancher/k3s:v1.37.2-k3s1}"
 cluster=zeabur-identity

@@ -33,7 +33,11 @@ jobs:
       - uses: zeabur-oss/.github/actions/ci-setup@3e2e5ba4210b60c1e97fa53e2029e1ea9f5e468e # main
         with:
           rust-cache: true
-      - run: nix develop -c scripts/ci/lint.sh
+      - parallel:
+          - name: Static checks
+            run: nix develop -c scripts/ci/lint.sh static
+          - name: Cargo checks
+            run: nix develop -c scripts/ci/lint.sh cargo
       - if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

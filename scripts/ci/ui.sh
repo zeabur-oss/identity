@@ -5,6 +5,7 @@
 # not fail the job.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
+source scripts/lib.sh
 
 (cd ui && bun ci && bun run fmt:check && bun run lint && bun run typecheck)
 ./scripts/build-ui.sh
