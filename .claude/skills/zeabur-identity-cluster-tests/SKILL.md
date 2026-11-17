@@ -5,27 +5,10 @@ description: Run Zeabur Identity's Kubernetes integration and end-to-end tests o
 
 # Cluster tests
 
-Run cluster tests on a disposable Linux machine or VM, never on the cluster you use. Sync with
-`rsync -a --delete --exclude target ./ host:zeabur-identity/`.
-
-## Cluster with a writable authentication config
-`scripts/k3d-up.sh` creates it with cert-manager, as CI does. kube-apiserver re-reads
-`<dir>/authn/authn.yaml` about once a minute; the file starts with no issuer:
-
-```sh
-./scripts/k3d-up.sh ~/zeabur-identity-k3d && export KUBECONFIG=~/zeabur-identity-k3d/kubeconfig
-```
-
-## Run
-```sh
-cargo nextest run --locked --run-ignored only -E 'binary(kubernetes)'          # storage, RBAC, admission
-./scripts/build-image.sh zeabur-identity:e2e && k3d image import zeabur-identity:e2e -c zeabur-identity
-ZEABUR_IDENTITY_E2E_IMAGE=zeabur-identity:e2e ZEABUR_IDENTITY_E2E_AUTHN_DIR=$HOME/zeabur-identity-k3d/authn \
-ZEABUR_IDENTITY_E2E_MEASUREMENTS=/tmp/m.json \
-  cargo nextest run --locked --run-ignored only -E 'binary(e2e) and not test(keycloak)'
-```
-The e2e test takes 1–3 minutes, mostly waiting for kube-apiserver to reload the config.
-After a change to upstream sign-in, also run `./scripts/keycloak-e2e.sh` (its own cluster, Keycloak in Docker).
+Set up the disposable cluster and run the tests as `CONTRIBUTING.md` ("Disposable k3d cluster")
+says, on a Linux machine or VM, never on a cluster you use. kube-apiserver re-reads
+`<dir>/authn/authn.yaml` about once a minute, so the e2e test takes 1–3 minutes. After a change to
+upstream sign-in, also run `./scripts/keycloak-e2e.sh`.
 
 ## What to check when something fails
 - **Tokens never accepted** (whoami times out): read the apiserver log —
@@ -39,6 +22,3 @@ After a change to upstream sign-in, also run `./scripts/keycloak-e2e.sh` (its ow
 - **Probe CEL quickly**: write a candidate config with a dummy issuer into the mounted
   directory, wait ~70 s, and read the log; a health error about the dummy issuer means the
   config itself validated. Restore the empty config afterwards.
-- The e2e test writes the kubelet's memory figures to `ZEABUR_IDENTITY_E2E_MEASUREMENTS`.
-
-Clean up with `k3d cluster delete zeabur-identity`.
