@@ -37,6 +37,8 @@ brotli-decompressor = { version = "6.1", default-features = false, features = ["
 http = "1"
 http-body-util = "0.1"
 hyper = { version = "1.12.0", default-features = false, features = ["client", "http1"] }
+# NFC for passwords (NIST SP 800-63B-4 §3.1.1.2); already in the tree through idna.
+icu_normalizer = "2.4"
 hyper-rustls = { version = "0.27.10", default-features = false, features = ["http1", "aws-lc-rs", "tls12", "logging"] }
 hyper-util = { version = "0.1.21", default-features = false, features = ["client-legacy", "http1", "tokio"] }
 jsonwebtoken = { version = "11", default-features = false, features = ["aws_lc_rs"] }

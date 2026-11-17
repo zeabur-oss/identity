@@ -50,7 +50,7 @@ use zeabur_identity_core::account::SETTINGS_CONFIG_MAP;
 
 use super::keys::SECRET_TYPE;
 use super::setup::SETUP_SECRET;
-use super::{KEY_SECRET, MANAGED_BY, internal_tls};
+use super::{KEY_SECRET, MANAGED_BY, internal_tls, password_key};
 
 /// Name of the service account, `Role` and `RoleBinding`.
 pub const NAME: &str = "zeabur-identity";
@@ -80,6 +80,13 @@ pub fn rules() -> Vec<PolicyRule> {
     vec![
         // Signing keys: read and compare-and-swap one Secret.
         rule(&[""], &["secrets"], &[KEY_SECRET], &["get", "update"]),
+        // Password key: read and fill one Secret once.
+        rule(
+            &[""],
+            &["secrets"],
+            &[password_key::SECRET],
+            &["get", "update"],
+        ),
         // Setup token: read and consume (delete) one Secret; only the cluster admin creates it.
         rule(&[""], &["secrets"], &[SETUP_SECRET], &["get", "delete"]),
         // Internal listener certificate: read one Secret; the cluster admin writes it.
@@ -201,6 +208,11 @@ pub fn manifests(namespace: &str) -> serde_json::Result<Vec<Value>> {
             type_: Some(SECRET_TYPE.to_owned()),
             ..Secret::default()
         })?,
+        serde_json::to_value(Secret {
+            metadata: meta(password_key::SECRET, ns),
+            type_: Some(password_key::SECRET_TYPE.to_owned()),
+            ..Secret::default()
+        })?,
     ])
 }
 
@@ -247,6 +259,7 @@ mod tests {
                 let names = rule.resource_names.clone().unwrap_or_default();
                 assert!(
                     names == [KEY_SECRET]
+                        || names == [password_key::SECRET]
                         || names == [SETUP_SECRET]
                         || names == [internal_tls::SECRET]
                         || names == [upstream_provider::SECRET],

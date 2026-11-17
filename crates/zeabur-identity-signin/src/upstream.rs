@@ -660,6 +660,9 @@ where
             response
                 .headers_mut()
                 .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+            sign_in
+                .passwords
+                .remember(&mut response, &headers, &user.subject);
             clear_cookie(&mut response, UPSTREAM_COOKIE, "Lax");
             clear_cookie(&mut response, FLOW_COOKIE, "Lax");
             return Ok(response);

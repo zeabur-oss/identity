@@ -11,6 +11,7 @@ pub mod invitations;
 pub mod keys;
 pub mod kube_config;
 pub mod objects;
+pub mod password_key;
 pub mod rbac;
 pub mod setup;
 pub mod upstream;

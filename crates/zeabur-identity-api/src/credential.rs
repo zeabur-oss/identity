@@ -1,4 +1,4 @@
-//! `Credential`: a passkey or a linked upstream identity.
+//! `Credential`: a passkey, a linked upstream identity, or a password.
 
 #![expect(
     unreachable_pub,
@@ -14,10 +14,11 @@ use crate::upstream::ExternalId;
 /// A way for a `User` to sign in.
 ///
 /// The object name is derived from the credential's unique key (`c-` + hex SHA-256 of the
-/// passkey credential ID, or of the upstream issuer and subject), so creating a duplicate fails
-/// with `409 AlreadyExists`. That is the uniqueness check WebAuthn Level 3 §7.1 asks for, and
-/// it holds across replicas. The spec is immutable; revoking is deleting. `status` holds what
-/// the user may change (the label) and when the credential was last used.
+/// passkey credential ID, of the upstream issuer and subject, or of the user's UID for a
+/// password), so creating a duplicate fails with `409 AlreadyExists`. That is the uniqueness
+/// check WebAuthn Level 3 §7.1 asks for, and it holds across replicas. The spec is immutable;
+/// revoking is deleting. `status` holds what the user may change (the label) and when the
+/// credential was last used.
 #[derive(CustomResource, KubeSchema, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[kube(
     group = "identity.zeabur.com",
@@ -34,7 +35,7 @@ use crate::upstream::ExternalId;
         type_ = "date",
         json_path = ".metadata.creationTimestamp"
     ),
-    doc = "A passkey or linked upstream identity of a Zeabur Identity user."
+    doc = "A passkey, linked upstream identity or password of a Zeabur Identity user."
 )]
 #[x_kube(
     validation = Rule::new("self == oldSelf").message("credentials are immutable; delete and re-enrol instead")
@@ -44,7 +45,7 @@ pub struct CredentialSpec {
     /// Name of the `User` object.
     #[schemars(length(min = 1, max = 253))]
     pub user: String,
-    /// What signs in: a passkey or an upstream account.
+    /// What signs in: a passkey, an upstream account or a password.
     #[serde(flatten)]
     pub kind: CredentialKind,
 }
@@ -57,6 +58,24 @@ pub enum CredentialKind {
     Passkey(Passkey),
     /// An account at an upstream provider, which any `UpstreamProvider` with its issuer signs in.
     External(ExternalId),
+    /// A password hash. A user has at most one; its object name is derived from the user.
+    Password(Password),
+}
+
+/// A password hash: salted PBKDF2, then keyed with a server key kept in another Secret, so the
+/// hash alone cannot be attacked offline.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Password {
+    /// `$<scheme>$i=<iterations>$<salt>$<hash>`.
+    #[schemars(length(min = 1, max = 256))]
+    pub hash: String,
+}
+
+impl std::fmt::Debug for Password {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Password(..)")
+    }
 }
 
 /// The public part of a WebAuthn credential. Nothing here is secret.
@@ -102,6 +121,54 @@ pub struct CredentialStatus {
     #[serde(default)]
     #[schemars(range(min = 0))]
     pub revision: i64,
+    /// Failed password sign-ins, for a password credential.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guesses: Option<Guesses>,
+}
+
+/// Failed password sign-ins, counted per browser.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Guesses {
+    /// Every browser without a device cookie for the user.
+    #[serde(default)]
+    pub unknown: GuessCount,
+    /// Browsers that signed in as the user before. Always written, so a merge patch replaces the
+    /// whole list.
+    #[serde(default)]
+    #[schemars(length(max = 16))]
+    pub known: Vec<KnownGuessCount>,
+}
+
+/// One count of failed password sign-ins.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GuessCount {
+    /// When the count started, in Unix seconds.
+    #[serde(default)]
+    #[schemars(range(min = 0))]
+    pub since: i64,
+    /// Failures since then.
+    #[serde(default)]
+    #[schemars(range(min = 0))]
+    pub failures: i64,
+    /// Until when password sign-in from these browsers is held back, in Unix seconds; 0 when it
+    /// is not. Always written, so a merge patch clears an earlier value.
+    #[serde(default)]
+    #[schemars(range(min = 0))]
+    pub held_until: i64,
+}
+
+/// The count of one known browser.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct KnownGuessCount {
+    /// SHA-256 hex of the browser's device cookie nonce.
+    #[schemars(regex(pattern = r"^[0-9a-f]{64}$"))]
+    pub device: String,
+    /// Its failures.
+    #[serde(flatten)]
+    pub count: GuessCount,
 }
 
 #[cfg(test)]
@@ -157,6 +224,15 @@ mod tests {
         assert!(matches!(passkey.spec.kind, CredentialKind::Passkey(_)));
         assert_eq!(github.spec.kind, CredentialKind::External(github_account()));
         assert_eq!(upstream.spec, github.spec);
+    }
+
+    #[test]
+    fn a_password_reads_back_and_never_prints_its_hash() {
+        let object = stored(&json!({"user": "alice", "password": {"hash": "$s$i=1$AA$BB"}}));
+        let credential: Credential = serde_json::from_value(object.clone()).unwrap();
+        assert!(matches!(credential.spec.kind, CredentialKind::Password(_)));
+        assert_eq!(serde_json::to_value(&credential).unwrap(), object);
+        assert!(!format!("{credential:?}").contains("$s$i=1"));
     }
 
     #[test]

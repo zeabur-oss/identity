@@ -40,6 +40,7 @@ Zeabur Identity 用 `User` 对象的 UID 识别每个人。每个令牌的 `sub`
 | 集群的数据存储备份，以及发行版打开备份所需的服务器令牌、加密密钥与集群证书 | 这是保留 UID 与通行密钥的唯一方式。无法解密的快照无法用于恢复。 |
 | `users`、`credentials`、`oauthclients`、`upstreamproviders`（`*.identity.zeabur.com`） | 保存用户与组、通行密钥记录、已关联的外部账号、已注册的客户端，以及登录提供方。 |
 | Secret `zeabur-identity-signing-keys` | 保存所有签名私钥，包括即将启用与已退役的密钥。其他数据无法重建这些密钥。 |
+| Secret `zeabur-identity-password-key` | 保存 Zeabur Identity 哈希密码时加入的密钥。缺少它，所有密码都会失效，用户必须通过设置链接重设密码。 |
 | Secret `zeabur-identity-internal-ca` | 保存根 CA 与私钥。cert-manager 用它签发证书，供 kube-apiserver 连接内部地址时验证。这份 Secret 要与每台控制平面机器上的认证文件一起保存。cert-manager 会用它重新签发 `zeabur-identity-internal-tls`。 |
 | Deployment、Service、ServiceAccount、Role 与 RoleBinding `zeabur-identity`，以及 ClusterRoleBinding `zeabur-identity-cluster-admins` | 保存 Zeabur Identity 的运行方式与管理员权限。也要备份你为其他应用创建的 RoleBinding。 |
 | ConfigMap `zeabur-identity-settings`，如果你创建过 | 保存 `teams` 与 `admin-aal3` 配置。缺少它时，所有配置都会回到默认值。 |
@@ -105,7 +106,8 @@ for resource in users credentials oauthclients grants invitations; do
   kubectl -n "$NS" get "$resource.identity.zeabur.com" -o json \
     > "$BACKUP/$resource.json"
 done
-kubectl -n "$NS" get secret zeabur-identity-signing-keys zeabur-identity-internal-ca -o json \
+kubectl -n "$NS" get secret zeabur-identity-signing-keys zeabur-identity-internal-ca \
+  zeabur-identity-password-key -o json \
   > "$BACKUP/identity-secrets.json"
 kubectl -n "$NS" get svc zeabur-identity -o json > "$BACKUP/service.json"
 kubectl -n "$NS" get serviceaccount/zeabur-identity role/zeabur-identity rolebinding/zeabur-identity -o json \
@@ -379,7 +381,7 @@ done
 
 `identity-secrets.json` 包含列表，其他文件各包含一份 Secret。这个过滤器能处理两种格式。
 
-这里使用 `apply`，因为安装程序已创建空的签名密钥 Secret。如果应用时报冲突，先查明字段所有者，再决定是否加入 `--force-conflicts`。
+这里使用 `apply`，因为安装程序已创建空的签名密钥与密码密钥 Secret。如果应用时报冲突，先查明字段所有者，再决定是否加入 `--force-conflicts`。
 
 </Step>
 

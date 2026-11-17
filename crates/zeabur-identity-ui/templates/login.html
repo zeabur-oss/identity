@@ -30,30 +30,26 @@
     {#- Present and empty from first paint, so screen readers announce what the script writes. -#}
     <div id="status" role="status" aria-live="polite" class="empty:sr-only text-[0.8125rem] leading-5 text-secondary"></div>
     <div id="error" role="alert" class="empty:sr-only text-[0.8125rem] leading-5 text-pretty text-fail-strong"></div>
-    <div id="unsupported" hidden>
-      {% call ui::alert(m.passkey_unsupported_title, "default", "Key", live = "") %}{{ m.passkey_unsupported_body }}{% endcall %}
-    </div>
     <noscript>{% call ui::alert(m.noscript_title, "default", "Key", live = "") %}{{ m.noscript_body }}{% endcall %}</noscript>
     <form id="sign-in" class="flex flex-col gap-5" novalidate
           data-msg-failed="{{ m.passkey_failed }}" data-msg-cancelled="{{ m.passkey_cancelled }}"
           data-msg-working="{{ m.working }}" data-msg-error="{{ m.generic_error }}"
-          data-msg-device-passkey="{{ m.device_passkey_needed }}"
+          data-msg-device-passkey="{{ m.device_passkey_needed }}" data-msg-admin-passkey="{{ m.admin_passkey_only }}"
+          data-msg-password-failed="{{ m.password_failed }}" data-msg-password-held="{{ m.password_held }}"
+          data-msg-password-missing="{{ m.password_missing }}" data-msg-busy="{{ m.busy }}"
           {%- if let Some(seconds) = expires_in %} data-expires-in="{{ seconds }}"{% endif %}>
-      {#- Without a login hint the script folds this away when the browser offers passkeys itself. -#}
-      <div id="username-field"{% if login_hint.is_none() %} data-collapsible{% endif %}>
-      {% call ui::field("username", m.login_username, m.login_username_hint) %}
+      {% call ui::field("username", m.login_username) %}
       <input id="username" name="username" type="text" class="{{ ds::input() }}"
              autocomplete="username webauthn" autocapitalize="none" spellcheck="false"
-             value="{{ login_hint.unwrap_or_default() }}"
-             {{- ui::field_describedby("username", m.login_username_hint) }}>
+             value="{{ login_hint.unwrap_or_default() }}">
       {% endcall %}
-      </div>
-      <div class="flex flex-col gap-2">
-        <button type="submit" class="{{ ds::button("primary", "lg") }} w-full">{{ icons::icon("Fingerprint") }}{{ m.login_passkey }}</button>
-        {%- if login_hint.is_none() %}
-        <button type="button" id="use-username" hidden aria-controls="username-field"
-                class="inline-flex min-h-8 items-center self-center rounded-md px-2 text-[0.8125rem] leading-5 text-secondary underline-offset-4 hover:text-main hover:underline">{{ m.use_username }}</button>
-        {%- endif %}
+      {% call ui::field("password", m.login_password) %}
+      <input id="password" name="password" type="password" maxlength="1024" class="{{ ds::input() }}"
+             autocomplete="current-password">
+      {% endcall %}
+      <div class="flex flex-col gap-3">
+        <button type="submit" class="{{ ds::button("primary", "lg") }} w-full">{{ m.login_submit }}</button>
+        <button type="button" id="passkey" class="{{ ds::button("secondary", "lg") }} w-full">{{ icons::icon("Fingerprint") }}{{ m.login_passkey }}</button>
       </div>
     </form>
     {{ upstream::buttons(providers, m) }}

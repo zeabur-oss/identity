@@ -32,13 +32,14 @@ use zeabur_identity_k8s::grants::KubeGrantStore;
 use zeabur_identity_k8s::keys::SecretKeyStore;
 use zeabur_identity_k8s::objects::list_all;
 use zeabur_identity_k8s::setup::KubeSetupStore;
-use zeabur_identity_k8s::{gc, upstream as kube_upstream};
+use zeabur_identity_k8s::{gc, password_key, upstream as kube_upstream};
 use zeabur_identity_keys::manager::{KeyManager, ManagerError};
 use zeabur_identity_keys::store::KeyStore;
 use zeabur_identity_oauth::discovery::ProviderMetadata;
 use zeabur_identity_oauth::metadata::{AppState, router};
 use zeabur_identity_oauth::{AuthorizationServer, OneTimeIds, endpoints};
 use zeabur_identity_signin::passkeys::Passkeys;
+use zeabur_identity_signin::password::Passwords;
 use zeabur_identity_signin::upstream::http::HyperClient;
 use zeabur_identity_signin::upstream::provider::Providers;
 use zeabur_identity_signin::upstream::{self, Upstream};
@@ -139,6 +140,7 @@ pub async fn serve(config: ServeConfig) -> Result<(), ServeError> {
     let providers = Arc::new(Providers::default());
     background.push(watch_providers(&client, &namespace, &providers, shutdown_rx.clone()).await?);
     let internal_secrets = Api::namespaced(client.clone(), &namespace);
+    let password_key = password_key::load_or_init(&internal_secrets).await?;
     let gc = tokio::spawn({
         let shutdown = shutdown_rx.clone();
         async move { gc::run::<Grant, _>(client, &namespace, SystemClock, shutdown).await }
@@ -146,7 +148,7 @@ pub async fn serve(config: ServeConfig) -> Result<(), ServeError> {
     run(
         &config,
         (keys, directory, grants, credentials, setup),
-        providers,
+        (providers, password_key),
         background.into_iter().chain([gc]).collect(),
         (internal_listener, resolver, internal_secrets),
         shutdown_tx,
@@ -233,7 +235,7 @@ fn limits(router: axum::Router) -> axum::Router {
 async fn run<S: KeyStore, D: Directory, G: GrantStore, K: CredentialStore, T: SetupStore>(
     config: &ServeConfig,
     (keys, directory, grants, credentials, setup): (S, D, G, K, T),
-    providers: Arc<Providers>,
+    (providers, password_key): (Arc<Providers>, [u8; password_key::KEY_LEN]),
     mut background: Vec<JoinHandle<()>>,
     (listener, resolver, secrets): (TlsListener, Arc<Resolver>, Api<Secret>),
     shutdown_tx: watch::Sender<bool>,
@@ -284,6 +286,7 @@ async fn run<S: KeyStore, D: Directory, G: GrantStore, K: CredentialStore, T: Se
         setup,
         used_ceremonies: OneTimeIds::default(),
         providers: Arc::clone(&providers),
+        passwords: Passwords::new(&password_key),
     });
     let app = router(AppState::new(
         metadata,

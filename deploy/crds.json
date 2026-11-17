@@ -165,10 +165,10 @@
             "name": "v1alpha1",
             "schema": {
               "openAPIV3Schema": {
-                "description": "A passkey or linked upstream identity of a Zeabur Identity user.",
+                "description": "A passkey, linked upstream identity or password of a Zeabur Identity user.",
                 "properties": {
                   "spec": {
-                    "description": "A way for a `User` to sign in.\n\nThe object name is derived from the credential's unique key (`c-` + hex SHA-256 of the\npasskey credential ID, or of the upstream issuer and subject), so creating a duplicate fails\nwith `409 AlreadyExists`. That is the uniqueness check WebAuthn Level 3 §7.1 asks for, and\nit holds across replicas. The spec is immutable; revoking is deleting. `status` holds what\nthe user may change (the label) and when the credential was last used.",
+                    "description": "A way for a `User` to sign in.\n\nThe object name is derived from the credential's unique key (`c-` + hex SHA-256 of the\npasskey credential ID, of the upstream issuer and subject, or of the user's UID for a\npassword), so creating a duplicate fails with `409 AlreadyExists`. That is the uniqueness\ncheck WebAuthn Level 3 §7.1 asks for, and it holds across replicas. The spec is immutable;\nrevoking is deleting. `status` holds what the user may change (the label) and when the\ncredential was last used.",
                     "oneOf": [
                       {
                         "required": [
@@ -178,6 +178,11 @@
                       {
                         "required": [
                           "external"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "password"
                         ]
                       }
                     ],
@@ -244,6 +249,21 @@
                         ],
                         "type": "object"
                       },
+                      "password": {
+                        "description": "A password hash. A user has at most one; its object name is derived from the user.",
+                        "properties": {
+                          "hash": {
+                            "description": "`$<scheme>$i=<iterations>$<salt>$<hash>`.",
+                            "maxLength": 256,
+                            "minLength": 1,
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "hash"
+                        ],
+                        "type": "object"
+                      },
                       "user": {
                         "description": "Name of the `User` object.",
                         "maxLength": 253,
@@ -266,6 +286,86 @@
                     "description": "What changes after enrolment. Written by Zeabur Identity only.",
                     "nullable": true,
                     "properties": {
+                      "guesses": {
+                        "description": "Failed password sign-ins, for a password credential.",
+                        "nullable": true,
+                        "properties": {
+                          "known": {
+                            "default": [],
+                            "description": "Browsers that signed in as the user before. Always written, so a merge patch replaces the\nwhole list.",
+                            "items": {
+                              "description": "The count of one known browser.",
+                              "properties": {
+                                "device": {
+                                  "description": "SHA-256 hex of the browser's device cookie nonce.",
+                                  "pattern": "^[0-9a-f]{64}$",
+                                  "type": "string"
+                                },
+                                "failures": {
+                                  "default": 0,
+                                  "description": "Failures since then.",
+                                  "format": "int64",
+                                  "minimum": 0.0,
+                                  "type": "integer"
+                                },
+                                "heldUntil": {
+                                  "default": 0,
+                                  "description": "Until when password sign-in from these browsers is held back, in Unix seconds; 0 when it\nis not. Always written, so a merge patch clears an earlier value.",
+                                  "format": "int64",
+                                  "minimum": 0.0,
+                                  "type": "integer"
+                                },
+                                "since": {
+                                  "default": 0,
+                                  "description": "When the count started, in Unix seconds.",
+                                  "format": "int64",
+                                  "minimum": 0.0,
+                                  "type": "integer"
+                                }
+                              },
+                              "required": [
+                                "device"
+                              ],
+                              "type": "object"
+                            },
+                            "maxItems": 16,
+                            "type": "array"
+                          },
+                          "unknown": {
+                            "default": {
+                              "failures": 0,
+                              "heldUntil": 0,
+                              "since": 0
+                            },
+                            "description": "Every browser without a device cookie for the user.",
+                            "properties": {
+                              "failures": {
+                                "default": 0,
+                                "description": "Failures since then.",
+                                "format": "int64",
+                                "minimum": 0.0,
+                                "type": "integer"
+                              },
+                              "heldUntil": {
+                                "default": 0,
+                                "description": "Until when password sign-in from these browsers is held back, in Unix seconds; 0 when it\nis not. Always written, so a merge patch clears an earlier value.",
+                                "format": "int64",
+                                "minimum": 0.0,
+                                "type": "integer"
+                              },
+                              "since": {
+                                "default": 0,
+                                "description": "When the count started, in Unix seconds.",
+                                "format": "int64",
+                                "minimum": 0.0,
+                                "type": "integer"
+                              }
+                            },
+                            "type": "object"
+                          }
+                        },
+                        "type": "object"
+                      },
                       "label": {
                         "description": "The label the user gave it last; takes the place of `spec.passkey.label`.",
                         "maxLength": 64,

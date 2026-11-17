@@ -1421,7 +1421,7 @@ mod tests {
             .items;
         let subject_of = |c: &Credential| match &c.spec.kind {
             CredentialKind::External(e) => Some(e.subject.as_str().to_owned()),
-            CredentialKind::Passkey(_) => None,
+            CredentialKind::Passkey(_) | CredentialKind::Password(_) => None,
         };
         let bob = mine
             .iter()

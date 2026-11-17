@@ -62,7 +62,7 @@ zeabur-identityctl invite --username alice --display-name "Alice Chen" --group d
 
 ### 将链接交给用户
 
-通过你信任的渠道，将链接交给 Alice。她打开链接后，可以创建通行密钥。如果你已[添加外部账号登录](./upstream-sign-in.mdx)，例如 GitHub，她也可以改为关联该账号。
+通过你信任的渠道，将链接交给 Alice。她打开链接后，可以创建通行密钥或设置密码。如果你已[添加外部账号登录](./upstream-sign-in.mdx)，例如 GitHub，她也可以改为关联该账号。
 
 <Callout type="warn">
 
@@ -155,6 +155,16 @@ kubectl auth whoami          # Groups lists zeabur:dev and zeabur:oncall
 `groups` 不接受 `admins` 群组。这个群组只由账号类型决定，详见[管理员账号与会话](./admin-sessions.mdx)。
 
 用户名无法修改，RBAC 绑定和审计记录都会引用用户名。要更换用户名，创建新用户后，再[移除旧用户](./offboarding.mdx)。
+
+## 密码
+
+普通用户可以在设置页面改为设置密码，之后用用户名和密码登录。管理员账号必须使用通行密钥。
+
+密码至少要有 15 个字符。Zeabur Identity 会拒绝常见密码，以及含有用户名或网站名称的密码。
+
+用户登录过的浏览器各自计算输错次数，其他浏览器则共用一组次数。同一组次数在 1 小时内输错 10 次后，Zeabur Identity 会在 1 小时内拒绝这组的密码登录。其他地方的猜测不会让用户在自己的浏览器上被挡住。
+
+目前还不能在账号页面修改或删除密码。要重设密码，请删除对应的 `Credential`，再发送新的设置链接。
 
 ## 用户自行管理账号
 

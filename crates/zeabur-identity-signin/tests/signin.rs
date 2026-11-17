@@ -178,6 +178,7 @@ mod tests {
             setup,
             used_ceremonies: OneTimeIds::default(),
             providers: Arc::default(),
+            passwords: zeabur_identity_signin::password::Passwords::with_iterations(&[9; 32], 1),
         });
         let app =
             endpoints::router(oauth).merge(zeabur_identity_signin::router(Arc::clone(&service)));
@@ -209,6 +210,19 @@ mod tests {
         }
         fn kind(&self) -> String {
             self.body["type"].as_str().unwrap_or_default().to_owned()
+        }
+    }
+
+    /// The audit event, phase and method a path logs.
+    fn audited(path: &str) -> Option<(&'static str, Option<&'static str>, &'static str)> {
+        match path {
+            "/setup/options" => Some(("auth.passkey_enrollment", Some("start"), "passkey")),
+            "/setup" => Some(("auth.passkey_enrollment", Some("finish"), "passkey")),
+            "/login/options" => Some(("auth.passkey_options", None, "passkey")),
+            "/login" => Some(("auth.sign_in", None, "passkey")),
+            "/login/password" => Some(("auth.sign_in", None, "password")),
+            "/setup/password" => Some(("auth.password_enrollment", None, "password")),
+            _ => None,
         }
     }
 
@@ -252,18 +266,11 @@ mod tests {
             .iter()
             .filter(|r| r["target"] == "zeabur_identity::audit")
             .collect();
-        let operation = match path {
-            "/setup/options" => Some(("auth.passkey_enrollment", Some("start"))),
-            "/setup" => Some(("auth.passkey_enrollment", Some("finish"))),
-            "/login/options" => Some(("auth.passkey_options", None)),
-            "/login" => Some(("auth.sign_in", None)),
-            _ => None,
-        };
-        if let Some((event, phase)) = operation {
+        if let Some((event, phase, method)) = audited(path) {
             assert_eq!(audit.len(), 1, "{records:?}");
             let fields = &audit[0]["fields"];
             assert_eq!(fields["event"], event);
-            assert_eq!(fields["method"], "passkey");
+            assert_eq!(fields["method"], method);
             assert_eq!(
                 fields["outcome"],
                 if parts.status.is_success() {
@@ -320,6 +327,7 @@ mod tests {
                 if matches!(
                     key.as_str(),
                     "token"
+                        | "password"
                         | "id"
                         | "rawId"
                         | "clientDataJSON"
@@ -1901,6 +1909,190 @@ mod tests {
                     "manage": "https://login.example.com/account",
                 })
             );
+        }
+    }
+
+    mod password {
+        use zeabur_identity_core::guessing::{HOLD, LIMIT};
+        use zeabur_identity_signin::password::DEVICE_COOKIE;
+
+        use super::*;
+
+        const GOOD: &str = "violet kettle under the stairs";
+
+        /// Opens an authorization request; returns the flow cookie.
+        async fn flow(h: &Harness) -> String {
+            let authorize = format!(
+                "/authorize?client_id=kubectl&redirect_uri=http%3A%2F%2F127.0.0.1%3A8000%2F&response_type=code&scope=openid&code_challenge={CHALLENGE}&code_challenge_method=S256&state=xyz"
+            );
+            let reply = call(&h.app, Method::GET, &authorize, None, &[], None).await;
+            reply.cookie(FLOW_COOKIE).unwrap()
+        }
+
+        async fn set_password(h: &Harness, token: &str, password: &str) -> Reply {
+            post(
+                &h.app,
+                "/setup/password",
+                json!({ "token": token, "password": password }),
+                &[],
+            )
+            .await
+        }
+
+        async fn sign_in(
+            h: &Harness,
+            username: &str,
+            password: &str,
+            device: Option<&str>,
+        ) -> Reply {
+            let flow = flow(h).await;
+            let mut cookies = vec![(FLOW_COOKIE, flow.as_str())];
+            cookies.extend(device.map(|d| (DEVICE_COOKIE, d)));
+            post(
+                &h.app,
+                "/login/password",
+                json!({ "username": username, "password": password }),
+                &cookies,
+            )
+            .await
+        }
+
+        /// Sets dana's password with the invitation; returns the device cookie it gave.
+        async fn dana_with_password(h: &Harness) -> String {
+            let reply = set_password(h, INVITATION, GOOD).await;
+            assert_eq!(reply.status, StatusCode::CREATED, "{}", reply.body);
+            assert_eq!(reply.body["username"], "dana");
+            reply.cookie(DEVICE_COOKIE).unwrap()
+        }
+
+        #[tokio::test]
+        async fn a_password_set_with_an_invitation_signs_in() {
+            let h = harness().await;
+            let device = dana_with_password(&h).await;
+            let reply = sign_in(&h, "dana", GOOD, Some(&device)).await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+            assert!(reply.cookie(DEVICE_COOKIE).is_some());
+            let tokens = exchange(&h, &reply).await;
+            let payload = tokens["access_token"]
+                .as_str()
+                .unwrap()
+                .split('.')
+                .nth(1)
+                .unwrap();
+            let claims: Value =
+                serde_json::from_slice(&URL_SAFE_NO_PAD.decode(payload).unwrap()).unwrap();
+            assert_eq!(claims["sub"], DANA_UID);
+            assert_eq!(claims["amr"], json!(["pwd"]));
+            // The invitation is used up.
+            assert_eq!(
+                set_password(&h, INVITATION, GOOD).await.status,
+                StatusCode::UNAUTHORIZED
+            );
+        }
+
+        #[tokio::test]
+        async fn weak_passwords_are_refused_and_leave_the_link_usable() {
+            let h = harness().await;
+            for (password, weakness) in [
+                ("too short", "too-short"),
+                ("passwordpassword", "common"),
+                ("dana keeps a tidy garden", "context"),
+                ("example rocks on my server", "context"),
+            ] {
+                let reply = set_password(&h, INVITATION, password).await;
+                assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY, "{password}");
+                assert_eq!(reply.body["weakness"], weakness, "{password}");
+            }
+            dana_with_password(&h).await;
+        }
+
+        #[tokio::test]
+        async fn admins_cannot_set_a_password() {
+            let h = harness().await;
+            let reply = set_password(&h, SETUP_TOKEN, GOOD).await;
+            assert_eq!(reply.status, StatusCode::FORBIDDEN);
+            assert!(reply.kind().ends_with(":admin-needs-passkey"));
+        }
+
+        #[tokio::test]
+        async fn every_failure_gives_the_same_answer() {
+            let h = harness().await;
+            dana_with_password(&h).await;
+            for (username, password) in [
+                ("dana", "not the password at all"),
+                ("nobody", GOOD),
+                ("admin", GOOD),
+                ("dana", ""),
+            ] {
+                let reply = sign_in(&h, username, password, None).await;
+                assert_eq!(reply.status, StatusCode::UNAUTHORIZED, "{username}");
+                assert_eq!(
+                    reply.body["title"],
+                    "Unable to sign in with this username and password."
+                );
+                assert!(reply.cookie(DEVICE_COOKIE).is_none());
+            }
+        }
+
+        #[tokio::test]
+        async fn a_sign_in_needs_a_request_in_progress() {
+            let h = harness().await;
+            dana_with_password(&h).await;
+            let reply = post(
+                &h.app,
+                "/login/password",
+                json!({ "username": "dana", "password": GOOD }),
+                &[],
+            )
+            .await;
+            assert!(reply.kind().ends_with(":no-request"));
+        }
+
+        #[tokio::test]
+        async fn guesses_from_elsewhere_never_hold_back_a_known_browser() {
+            let h = harness().await;
+            let device = dana_with_password(&h).await;
+            for _ in 0..=LIMIT {
+                let reply = sign_in(&h, "dana", "a wrong guess, again and again", None).await;
+                assert_eq!(reply.status, StatusCode::UNAUTHORIZED);
+            }
+            // Held back, even with the right password, and without hashing.
+            let reply = sign_in(&h, "dana", GOOD, None).await;
+            assert_eq!(reply.status, StatusCode::TOO_MANY_REQUESTS);
+            assert_eq!(
+                reply.headers[header::RETRY_AFTER],
+                HOLD.as_secs().to_string()
+            );
+            // The browser dana signed in with still works.
+            let reply = sign_in(&h, "dana", GOOD, Some(&device)).await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+            // Other browsers can try again after the hold.
+            h.clock.0.fetch_add(HOLD.as_secs(), Ordering::SeqCst);
+            let reply = sign_in(&h, "dana", GOOD, None).await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        }
+
+        #[tokio::test]
+        async fn a_known_browser_is_held_back_by_its_own_guesses() {
+            let h = harness().await;
+            let device = dana_with_password(&h).await;
+            for _ in 0..=LIMIT {
+                sign_in(&h, "dana", "a wrong guess, again and again", Some(&device)).await;
+            }
+            let reply = sign_in(&h, "dana", GOOD, Some(&device)).await;
+            assert_eq!(reply.status, StatusCode::TOO_MANY_REQUESTS);
+            let reply = sign_in(&h, "dana", GOOD, None).await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        }
+
+        #[tokio::test]
+        async fn a_passkey_sign_in_gives_the_browser_a_device_cookie() {
+            let h = harness().await;
+            let mut device = device();
+            enrol(&h, &mut device).await;
+            let reply = super::sign_in(&h, &mut device).await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+            assert!(reply.cookie(DEVICE_COOKIE).unwrap().starts_with(ADMIN_UID));
         }
     }
 }
