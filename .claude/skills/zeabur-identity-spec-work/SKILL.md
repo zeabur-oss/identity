@@ -5,7 +5,7 @@ description: Implement or change a protocol behaviour in Zeabur Identity (OAuth,
 
 # Specification-driven work
 
-Follow `zeabur-oss-spec-work` (a shared skill of zeabur-oss/.github): read the source, cite it in rustdoc, fail
+Follow `zeabur-oss-spec-work` (a shared skill of zeabur-oss/skills): read the source, cite it in rustdoc, fail
 closed, test the attack. In Zeabur Identity also:
 
 1. **Single-use things** (codes, links, ceremonies, PAR URIs, upstream `state`) are consumed by
