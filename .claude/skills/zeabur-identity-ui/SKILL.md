@@ -24,14 +24,8 @@ description: Change Zeabur Identity's sign-in pages (askama templates, the desig
   from the package by the build. A destructive action on each row of a list (remove a passkey)
   takes `ds::button("secondary-destructive", "sm")`; the solid `destructive` is for the final
   confirm only.
-- **Build and check** (inside `nix develop`):
-  ```sh
-  (cd ui && bun ci && bun run fmt:check && bun run lint && bun run typecheck)
-  ./scripts/build-ui.sh && git diff --stat -- crates/zeabur-identity-ui/templates/ds.html
-  ./scripts/ui-budget.sh && python3 .claude/skills/zeabur-identity-ui/contrast.py
-  (cd ui && bun run fallow dead-code --baseline fallow-baseline.json && bun run fallow audit --base main)
-  ZEABUR_IDENTITY_UI_DIST="$PWD/ui/dist" cargo nextest run -p zeabur-identity-signin -E 'binary(pages)'
-  ```
+- **Build and check.** `nix develop -c scripts/ci/ui.sh` runs what CI runs; on a branch, run
+  `(cd ui && bun run fallow audit --base main)` too.
   Commit the regenerated `ds.html` with the source change; CI fails on any difference. Without
   `ZEABUR_IDENTITY_UI_DIST` the tests that read the styles and scripts return early. Format with `bun run fmt` in `ui/`. Look at every page state with
   `ZEABUR_IDENTITY_UI_DIST="$PWD/ui/dist" cargo run -p zeabur-identity-ui --example preview`
@@ -49,8 +43,7 @@ description: Change Zeabur Identity's sign-in pages (askama templates, the desig
 - **Text.** Every string is a field of `Messages` in `crates/zeabur-identity-ui/src/i18n.rs` with English,
   Traditional Chinese (Taiwan usage, 通行密鑰) and Simplified Chinese (mainland usage, 通行密钥)
   values; scripts get their messages from `data-msg-*` attributes. A missing translation is a
-  compile error. Write and review them with the `zeabur-writing` skill, using the terms in Zeabur's
-  `docs/internal/wording.md`.
+  compile error. Use the terms in zeabur-oss/zeabur's `docs/internal/wording.md`.
 - **Contrast.** After changing a token, a colour class or the design-system pin, run
   `python3 .claude/skills/zeabur-identity-ui/contrast.py` (inside `nix develop`; exits 1 on any
   failure). Try a value first with `--set light:input='rgb(126, 122, 133)'`. Add a pair to its

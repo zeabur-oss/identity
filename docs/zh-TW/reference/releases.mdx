@@ -38,7 +38,9 @@ index  ghcr.io/zeabur-oss/identity@sha256:...
 
 ## 下載並驗證
 
-發行檔由 [zeabur-oss/.github](https://github.com/zeabur-oss/.github) 的共用發行 workflow 在 GitHub Actions 中簽署，本儲存庫的發行 workflow 會呼叫這個 workflow，所以簽章憑證的身分是 `zeabur-oss/.github/.github/workflows/release.yml`，執行對象的儲存庫與 ref 則是 `zeabur-oss/identity` 和發行標籤。以下指令會檢查這三項。
+發行檔由本儲存庫的發行 workflow 在 GitHub Actions 中簽署，簽章憑證的身分是 `zeabur-oss/identity/.github/workflows/release.yml`，執行對象的儲存庫與 ref 則是 `zeabur-oss/identity` 和發行標籤。以下指令會檢查這三項。
+
+v0.3.0 及更早的版本由 `zeabur-oss/.github` 的 `release.yml` 簽署，驗證時改用 `identity='^https://github\.com/zeabur-oss/\.github/\.github/workflows/release\.yml@'`；來源證明則用 `--signer-workflow zeabur-oss/.github/.github/workflows/release.yml`。
 
 你需要 GitHub CLI（`gh`）、`cosign` `3.x` 與 GNU `sha256sum`。拉取映像檔還需要 Docker。除了 Docker，其他命令列工具都可在儲存庫的 `nix develop` shell 中使用。
 
@@ -53,7 +55,7 @@ index  ghcr.io/zeabur-oss/identity@sha256:...
 ```sh
 version=v0.1.1
 arch=arm64 # use amd64 for x86_64
-identity='^https://github\.com/zeabur-oss/\.github/\.github/workflows/release\.yml@'
+identity='^https://github\.com/zeabur-oss/identity/\.github/workflows/release\.yml@'
 gh release download "$version" --repo zeabur-oss/identity --dir downloaded
 ```
 
@@ -123,10 +125,10 @@ GitHub 也為每個發行檔和映像檔記錄建置來源（build provenance）
 ```sh
 gh attestation verify "downloaded/zeabur-identityctl-$version-linux-$arch.tar.gz" \
   --repo zeabur-oss/identity --source-ref "refs/tags/$version" \
-  --signer-workflow zeabur-oss/.github/.github/workflows/release.yml
+  --signer-workflow zeabur-oss/identity/.github/workflows/release.yml
 gh attestation verify "oci://$image" \
   --repo zeabur-oss/identity --source-ref "refs/tags/$version" \
-  --signer-workflow zeabur-oss/.github/.github/workflows/release.yml
+  --signer-workflow zeabur-oss/identity/.github/workflows/release.yml
 ```
 
 </Step>

@@ -1,32 +1,226 @@
 name: Release
 
-# Tag vX.Y.Z or vX.Y.Z-<pre-release> on main: the shared release runs scripts/release.ts and
-# leaves a draft release (docs/internal/releasing.md). Manual run: rehearse.
+# Tag vX.Y.Z or vX.Y.Z-<pre-release> on main: build and smoke the CLI and the image on both
+# architectures, push the image by digest, sign it and attest its SBOMs, add the assets to the draft
+# release that the Release pull request workflow left when it tagged, and verify the draft on both
+# architectures (docs/internal/releasing.md). A maintainer publishes the draft. Manual run:
+# rehearse, which builds and smokes and publishes nothing.
 on:
   push:
-    tags: ['v[0-9]*']
+    tags: ["v[0-9]*"]
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to rehearse (v0.1.1); a rehearsal never publishes'
+        description: "Version to rehearse, as in Cargo.toml (v0.1.1); a rehearsal never publishes"
         required: true
 
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: nix develop --command bash -eo pipefail {0}
+
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  CARGO_TERM_COLOR: always
+  VERSION: ${{ inputs.version || github.ref_name }}
+
 jobs:
-  release:
-    uses: zeabur-oss/.github/.github/workflows/release.yml@cb333d6e0f4250e3b2ca3625dffca106d5ea2713 # main
+  check:
+    runs-on: instabox-small
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: zeabur-oss/.github/actions/ci-setup@3e2e5ba4210b60c1e97fa53e2029e1ea9f5e468e # main
+      - name: Install the packages
+        run: bun install --frozen-lockfile
+      - name: The version is the crates' and the UI's, with a CHANGELOG.md section, on main
+        run: |
+          # An image tag cannot hold the + of build metadata.
+          [[ "$VERSION" == v* && "$VERSION" != *+* ]] ||
+            { echo "::error::$VERSION is not v and SemVer without build metadata"; exit 1; }
+          others=$( {
+            cargo metadata --locked --no-deps --format-version 1 | jq -r '.packages[] | "\(.name) \(.version)"'
+            echo "ui/package.json $(jq -r .version ui/package.json)"
+          } | grep -v " ${VERSION#v}\$" || true)
+          [[ -z "$others" ]] || { echo "::error::not at ${VERSION#v}:"; echo "$others"; exit 1; }
+          bun x zeabur-oss-release notes CHANGELOG.md "$VERSION" >/dev/null
+          if [[ "$GITHUB_EVENT_NAME" == push ]]; then
+            git merge-base --is-ancestor HEAD origin/main ||
+              { echo "::error::$VERSION is not on main"; exit 1; }
+          fi
+
+  build:
+    name: build (${{ matrix.arch }})
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: amd64, runner: ubuntu-26.04 }
+          - { arch: arm64, runner: ubuntu-26.04-arm }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: zeabur-oss/.github/actions/ci-setup@3e2e5ba4210b60c1e97fa53e2029e1ea9f5e468e # main
+      - name: Build the CLI and the image, and smoke them on k3s
+        run: scripts/release-build.sh "$VERSION" dist
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: candidate-${{ matrix.arch }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    if: github.event_name == 'push'
+    needs: build
+    runs-on: instabox-small
+    timeout-minutes: 30
     permissions:
-      contents: write
+      contents: read
+      packages: write # the image on ghcr.io
+      id-token: write # keyless signatures
+    outputs:
+      subjects: ${{ steps.publish.outputs.subjects }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: zeabur-oss/.github/actions/ci-setup@3e2e5ba4210b60c1e97fa53e2029e1ea9f5e468e # main
+      - name: Install the packages
+        run: bun install --frozen-lockfile
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: candidate-*
+          path: candidates
+      - id: publish
+        name: Push the image by digest, sign it and attest its SBOMs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          image=ghcr.io/${GITHUB_REPOSITORY,,}:${VERSION#v}
+          if gh release view "$VERSION" --json isDraft --jq '.isDraft' | grep -qx false; then
+            echo "::error::release $VERSION is already published"; exit 1
+          fi
+          crane auth login ghcr.io --username "$GITHUB_ACTOR" --password-stdin <<<"$GH_TOKEN"
+          bun x zeabur-oss-release absent "$image"
+          bun x zeabur-oss-release push-image --out published "$image" \
+            linux/amd64=candidates/candidate-amd64/image.tar linux/arm64=candidates/candidate-arm64/image.tar
+          # Each platform image carries its own SBOM; the index carries both.
+          index=$(awk '$1 == "index" { print $2 }' published/digests.txt)
+          for arch in amd64 arm64; do
+            sbom=candidates/candidate-$arch/zeabur-identity-$VERSION-linux-$arch.cdx.json
+            for ref in "$(awk -v p="linux/$arch" '$1 == p { print $2 }' published/digests.txt)" "$index"; do
+              cosign attest --yes --type cyclonedx --predicate "$sbom" "$ref"
+            done
+          done
+          echo "subjects=$(jq -c . published/subjects.json)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: published
+          path: published/
+          if-no-files-found: error
+          retention-days: 7
+
+  attest:
+    name: attest (${{ matrix.name }}@${{ matrix.digest }})
+    needs: publish
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.publish.outputs.subjects) }}
+    runs-on: instabox-small
+    timeout-minutes: 15
+    permissions:
       packages: write
       id-token: write
       attestations: write
-    with:
-      name: Zeabur Identity
-      version: ${{ inputs.version }}
-      docs: https://oss.zeabur.com/docs/identity/
+    steps:
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ matrix.name }}
+          subject-digest: ${{ matrix.digest }}
+
+  release:
+    needs: [publish, attest]
+    runs-on: instabox-small
+    timeout-minutes: 30
+    permissions:
+      contents: write # the draft
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: zeabur-oss/.github/actions/ci-setup@3e2e5ba4210b60c1e97fa53e2029e1ea9f5e468e # main
+      - name: Install the packages
+        run: bun install --frozen-lockfile
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: candidate-*
+          path: candidates
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: published
+          path: published
+      - name: Make the release assets and their signed checksums
+        run: |
+          mkdir assets
+          cp candidates/*/*.tar.gz candidates/*/*.cdx.json published/digests.txt assets/
+          # The CLI of this release lists the Kubernetes resources it installs.
+          tar -xOzf "candidates/candidate-amd64/zeabur-identityctl-$VERSION-linux-amd64.tar.gz" \
+            zeabur-identityctl >"$RUNNER_TEMP/zeabur-identityctl"
+          chmod +x "$RUNNER_TEMP/zeabur-identityctl"
+          "$RUNNER_TEMP/zeabur-identityctl" resources >assets/resources.json
+          bun x zeabur-oss-release checksums assets
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-checksums: assets/SHA256SUMS
+      - name: Add the assets to the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$VERSION" assets/* --repo "$GITHUB_REPOSITORY" --clobber
+
+  verify:
+    name: verify (${{ matrix.arch }})
+    needs: release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: amd64, runner: ubuntu-26.04 }
+          - { arch: arm64, runner: ubuntu-26.04-arm }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      # GitHub shows a draft release only to a token that can push.
+      contents: write
+      attestations: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: zeabur-oss/.github/actions/ci-setup@3e2e5ba4210b60c1e97fa53e2029e1ea9f5e468e # main
+      - name: Install the packages
+        run: bun install --frozen-lockfile
+      - name: Download the draft's assets and verify them, the image and its SBOM, and smoke them
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SOURCE_REPOSITORY: ${{ github.repository }}
+          RELEASE_SOURCE_REF: refs/tags/${{ env.VERSION }}
+        run: |
+          gh release download "$VERSION" --repo "$GITHUB_REPOSITORY" --dir downloaded
+          bun x zeabur-oss-release verify-assets downloaded
+          scripts/release-verify.sh "$VERSION" downloaded
