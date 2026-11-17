@@ -1,7 +1,6 @@
 # Engineering standards: Zeabur Identity's part
 
-Apply `zeabur-oss-standards`' STANDARDS.md first. Zeabur Identity adds these items to its
-sections.
+What Zeabur Identity checks in review, by section.
 
 ## 1. Comments, doc comments and commit messages
 

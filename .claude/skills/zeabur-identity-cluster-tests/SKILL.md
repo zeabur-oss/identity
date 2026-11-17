@@ -5,8 +5,7 @@ description: Run Zeabur Identity's Kubernetes integration and end-to-end tests o
 
 # Cluster tests
 
-Follow `zeabur-oss-cluster-tests` (a shared skill of zeabur-oss/skills): a disposable cluster on a Linux machine
-or VM, a snapshot restored after every run, and the common failures. Sync with
+Run cluster tests on a disposable Linux machine or VM, never on the cluster you use. Sync with
 `rsync -a --delete --exclude target ./ host:zeabur-identity/`.
 
 ## Cluster with a writable authentication config

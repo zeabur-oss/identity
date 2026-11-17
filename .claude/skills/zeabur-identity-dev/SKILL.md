@@ -5,15 +5,14 @@ description: Day-to-day development loop for the Zeabur Identity repository — 
 
 # Zeabur Identity development loop
 
-Follow the shared skills of zeabur-oss/skills: `zeabur-oss-rust` (Nix toolchain, workspace, lints, common
-checks), `zeabur-oss-standards` (with [`STANDARDS.md`](STANDARDS.md) here),
-`zeabur-oss-workflow` (commits and pull requests). This skill adds what is Zeabur Identity's own.
+What is Zeabur Identity's own. Review standards: [`STANDARDS.md`](STANDARDS.md). Commits and pull
+requests: `CONTRIBUTING.md`.
 
 ## Crates and binaries
 - The crate table is in `README.md`. Binaries: `zeabur-identity` (in-cluster server) and
   `zeabur-identityctl` (admin CLI).
 
-## Checks (what CI runs, beyond `zeabur-oss-rust`'s)
+## Checks (what CI runs)
 ```sh
 nix develop -c bash -c 'bun install --frozen-lockfile && node_modules/.bin/zeabur-oss-unsafe-report zeabur-identity zeabur-identityctl'
 ```
