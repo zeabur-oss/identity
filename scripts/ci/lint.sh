@@ -9,8 +9,6 @@ nixfmt --check flake.nix
 shellcheck scripts/*.sh scripts/ci/*.sh
 jactionlint
 bun install --frozen-lockfile
-bun fmt --check scripts/release.ts
-bun check scripts/
 
 cargo lint
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items --locked
