@@ -15,14 +15,14 @@
 //! account, so it has the same gate as adding a passkey:
 //!
 //! 1. The start needs the account session, and a user-verified passkey confirmation from the last
-//!    [`REAUTH_WINDOW`](crate::account::REAUTH_WINDOW). Under the `admin-aal3` setting, only a
-//!    device-bound passkey confirms an admin account.
+//!    [`REAUTH_WINDOW`](crate::account::REAUTH_WINDOW). When `admin-sign-in` is
+//!    `device-bound-passkey`, only a device-bound passkey confirms an admin account.
 //! 2. The pending request names the session, the user and the user's UID. The callback finishes
 //!    only if the browser still sends that session. RFC 6749 §10.12 asks for this binding of
 //!    `state` to "the user-agent's authenticated state". A provider answer thus cannot link an
 //!    account to another session.
-//! 3. An account linked to anyone already, this user included, is refused. Admin accounts are
-//!    refused at the start and again at the callback.
+//! 3. An account linked to anyone already, this user included, is refused. An admin account that
+//!    the settings keep from upstream sign-in is refused at the start and again at the callback.
 //! 4. The link names the user's UID, as an enrolment link does. The change is logged and recorded
 //!    as an `AccountLinked` event on the user.
 //!
@@ -441,12 +441,14 @@ fn failure(lang: Lang, reason: ErrorReason, detail: &str) -> Response {
 /// Why a callback failed: the audit `reason`, what the page says, and a note for the details.
 type Failure = (&'static str, ErrorReason, Option<String>);
 
-/// Refuses an admin account: it signs in with a passkey only.
+/// Refuses an admin account when the settings do not let admins sign in upstream.
 async fn refuse_admin<D: Directory>(directory: &D, user: &User) -> Result<(), Failure> {
     check_account(directory, user, Method::Upstream)
         .await
         .map_err(|problem| match problem.kind {
-            "admin-needs-passkey" => ("admin_needs_passkey", ErrorReason::AdminNeedsPasskey, None),
+            "admin-needs-passkey" | "admin-needs-two-factor" | "device-passkey-needed" => {
+                ("admin_needs_passkey", ErrorReason::AdminNeedsPasskey, None)
+            }
             _ => ("account_check_failed", ErrorReason::ServerError, None),
         })
 }

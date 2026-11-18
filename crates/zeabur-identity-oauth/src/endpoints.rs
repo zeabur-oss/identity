@@ -13,8 +13,9 @@
 //! carry [`ADMIN_GROUP`](zeabur_identity_api::ADMIN_GROUP), which RBAC binds to
 //! `cluster-admin`. The token endpoint applies the account policy ([`account::allows`]) at code
 //! redemption and again at each refresh, so changing a user to admin ends their GitHub or Google
-//! sessions, and turning on AAL3 ends admin sessions that started with a synced passkey. The
-//! sign-in methods refuse earlier with a message for the person; this check is the backstop.
+//! sessions, and raising `admin-sign-in` ends admin sessions that started with a method it no
+//! longer allows. The sign-in methods refuse earlier with a message for the person; this check is
+//! the backstop.
 //!
 //! Token and refresh lifetimes come from [`Lifetimes::for_account`](crate::Lifetimes::for_account)
 //! with the user's current type and the current settings. A family always ends
@@ -553,15 +554,21 @@ async fn exchange_code<D: Directory, G: GrantStore, C: Clock>(
 }
 
 /// Refuses a user whose account type no longer allows how they signed in (see
-/// [`account::allows`]). `amr` contains `swk` only after a passkey sign-in.
+/// [`account::allows`]). `amr` contains `swk` only after a passkey sign-in, `pwd` only after a
+/// password sign-in, and `mfa` with `pwd` only when a second factor followed the password.
 fn check_policy(
     settings: Settings,
     user: &User,
     amr: &[String],
     device_bound: bool,
 ) -> Result<(), OAuthError> {
-    let method = if amr.iter().any(|m| m == "swk") {
+    let has = |method: &str| amr.iter().any(|m| m == method);
+    let method = if has("swk") {
         Method::Passkey { device_bound }
+    } else if has("pwd") {
+        Method::Password {
+            second_factor: has("mfa"),
+        }
     } else {
         Method::Upstream
     };

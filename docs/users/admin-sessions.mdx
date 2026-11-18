@@ -1,9 +1,9 @@
 ---
 title: Admin accounts and sessions
-description: Create and switch admin accounts, adjust session durations, and configure site-wide team mode and AAL3 passkey restrictions.
+description: Create and switch admin accounts, choose how admins sign in, adjust session durations, and set team mode.
 ---
 
-Admin accounts sign in only with passkeys, and their access tokens expire after 5 minutes. Access tokens for regular accounts expire after 10 minutes. You can adjust session durations and require admins to use device-bound passkeys. Every session ends no later than 12 hours after sign-in.
+By default, admin accounts sign in with a passkey, or with a password and a code from an authenticator app. Their access tokens expire after 5 minutes. Access tokens for regular accounts expire after 10 minutes. You can choose how admins sign in and adjust session durations. Every session ends no later than 12 hours after sign-in.
 
 ## Create and switch admins
 
@@ -15,7 +15,7 @@ Regular accounts have only the permissions you bind to their groups. They have n
 
 <Callout type="warn">
 
-Each admin should also have a regular account for daily work. Use admin accounts only to make changes to the cluster. Admin accounts can't sign in with an upstream account, such as GitHub, or link one. The sign-in page displays **Use a passkey for this account**.
+Each admin should also have a regular account for daily work. Use admin accounts only to make changes to the cluster. By default, admin accounts can't sign in with an upstream account, such as GitHub, or link one. The sign-in page displays **Sign in to this account another way**.
 
 </Callout>
 
@@ -27,7 +27,7 @@ Run the following command to create the first user. This user is an admin accoun
 zeabur-identityctl setup-link --username admin
 ```
 
-If an admin loses all their passkeys, use the same command with `--reset` to recover the account. See [Sign out, recover accounts, and remove users](./offboarding.mdx).
+If an admin can no longer sign in, use the same command with `--reset` to recover the account. See [Sign out, recover accounts, and remove users](./offboarding.mdx).
 
 ### Invite an admin or switch account types
 
@@ -56,7 +56,7 @@ Directory sync doesn't change an account's admin status. See [Sync users from a 
 
 ## Adjust session durations
 
-Each sign-in creates a session. Applications receive a short-lived access token and a refresh token. Until the session ends, they use the refresh token to obtain new access tokens without requiring another passkey sign-in.
+Each sign-in creates a session. Applications receive a short-lived access token and a refresh token. Until the session ends, they use the refresh token to obtain new access tokens without another sign-in.
 
 A session ends when it reaches its idle timeout or maximum duration. The default limits are:
 
@@ -64,9 +64,9 @@ A session ends when it reaches its idle timeout or maximum duration. The default
 |---|---|---|---|
 | Regular account | 10 minutes | 1 hour | 12 hours after sign-in |
 | Admin, single team | 5 minutes | 1 hour | 12 hours after sign-in |
-| Admin, multiple teams or AAL3 enabled | 5 minutes | 15 minutes | 12 hours after sign-in |
+| Admin, multiple teams or device-bound passkeys required | 5 minutes | 15 minutes | 12 hours after sign-in |
 
-The 12-hour limit starts at sign-in with a passkey or an upstream account. Refreshing tokens doesn't reset this limit.
+The 12-hour limit starts at sign-in. Refreshing tokens doesn't reset this limit.
 
 Zeabur Identity doesn't retain a single sign-on session, so every authorization request displays the sign-in page. The `refresh_expires_in` field in the token response indicates how many seconds remain before the refresh token reaches its idle timeout.
 
@@ -77,7 +77,7 @@ Pass the following options to `zeabur-identity` to adjust the limits. When gener
 | `--token-lifetime` | `10m` | Access token and ID token lifetime for regular accounts |
 | `--admin-token-lifetime` | `5m` | Access token and ID token lifetime for admin accounts |
 | `--refresh-idle` | `1h` | Session idle timeout |
-| `--admin-refresh-idle` | `15m` | Admin session idle timeout with multiple teams or AAL3 enabled |
+| `--admin-refresh-idle` | `15m` | Admin session idle timeout with multiple teams or device-bound passkeys required |
 | `--refresh-absolute` | `12h` | Maximum session duration from sign-in |
 
 Token lifetimes must be between 1 minute and 1 hour. Idle timeouts must not exceed `--refresh-absolute`.
@@ -89,7 +89,7 @@ The ConfigMap `zeabur-identity-settings` in the Namespace where Zeabur Identity 
 | Key | Accepted values | Default | Purpose |
 |---|---|---|---|
 | `teams` | `single`, `multiple` | `single` | When set to `multiple`, admin sessions end after 15 minutes of inactivity by default. |
-| `admin-aal3` | `false`, `true` | `false` | When set to `true`, admin accounts must use device-bound passkeys. |
+| `admin-sign-in` | `any`, `two-factor`, `passkey`, `device-bound-passkey` | `two-factor` | How admin accounts sign in. See [Choose how admins sign in](#choose-how-admins-sign-in). |
 
 Every installation starts in single-team mode, where admin and regular accounts use the same idle timeout.
 
@@ -107,13 +107,40 @@ kubectl -n zeabur-identity patch configmap zeabur-identity-settings --type merge
 
 The **Settings** page in Zeabur also writes to this ConfigMap. Zeabur Identity reads the settings at each sign-in and token refresh. No restart is required.
 
-If the ConfigMap or a setting key doesn't exist, Zeabur Identity uses the default value.
+If the ConfigMap or a setting key doesn't exist, Zeabur Identity uses the default value. If a value isn't one of the accepted values, Zeabur Identity uses the stricter choice: `multiple` for `teams` and `device-bound-passkey` for `admin-sign-in`.
+
+## Choose how admins sign in
+
+The `admin-sign-in` setting decides which sign-in methods admin accounts can use. Regular accounts can always use every method.
+
+| Value | Admin accounts sign in with |
+|---|---|
+| `any` | Every method regular accounts use: a passkey, a password, or an upstream account |
+| `two-factor` (default) | A passkey, or a password and a code from an authenticator app |
+| `passkey` | A passkey only |
+| `device-bound-passkey` | A device-bound passkey only, such as a security key |
+
+To change the setting, update the ConfigMap:
+
+```sh
+kubectl -n zeabur-identity patch configmap zeabur-identity-settings --type merge -p '{"data":{"admin-sign-in":"passkey"}}'
+```
+
+Zeabur Identity applies the setting at the next sign-in or token refresh. No restart is required. Sessions that the new setting doesn't allow end at their next token refresh.
+
+### Passwords with an authenticator app
+
+With `two-factor`, an admin who sets a password on the setup page also scans a QR code with an authenticator app, such as Google Authenticator, Microsoft Authenticator or 1Password, and enters a code from it. The setup page then shows 10 recovery codes once. Each recovery code works once in place of a code from the app.
+
+When the admin signs in with the password, the sign-in page then asks for a code. Each code works once. Wrong codes count toward the same limit as wrong passwords. See [Passwords](./manage-users.mdx#passwords).
+
+An admin password set with `any` has no authenticator app, so it stops working when you change the setting to `two-factor`. To reset a password or a lost authenticator app, delete the password's `Credential` and send a new setup link. The new password comes with a new authenticator and new recovery codes.
 
 ## Require device-bound passkeys for admins (AAL3)
 
-When you set `admin-aal3` to `"true"`, admin accounts can use only device-bound passkeys, such as security keys or passkeys that stay on a single device.
+When you set `admin-sign-in` to `device-bound-passkey`, admin accounts can use only device-bound passkeys, such as security keys or passkeys that stay on a single device.
 
-Zeabur Identity rejects synced passkeys, such as those in iCloud Keychain or Google Password Manager, during sign-in, passkey registration, and token refresh. Sessions created with synced passkeys end at the next token refresh. The rejection message is:
+Zeabur Identity rejects synced passkeys, such as those in iCloud Keychain or Google Password Manager, during sign-in, passkey registration, and token refresh. Sessions created with synced passkeys or passwords end at the next token refresh. The rejection message is:
 
 > This passkey syncs to other devices. Admin accounts here need a security key, or a passkey that stays on one device.
 
@@ -144,12 +171,12 @@ zeabur-identityctl setup-link --username <admin> --reset
 
 <Step>
 
-### Enable the admin AAL3 restriction
+### Change the setting
 
 Update the site-wide settings:
 
 ```sh
-kubectl -n zeabur-identity patch configmap zeabur-identity-settings --type merge -p '{"data":{"admin-aal3":"true"}}'
+kubectl -n zeabur-identity patch configmap zeabur-identity-settings --type merge -p '{"data":{"admin-sign-in":"device-bound-passkey"}}'
 ```
 
 Zeabur Identity applies the restriction at the next sign-in or token refresh. No restart is required.

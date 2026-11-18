@@ -70,11 +70,43 @@ pub struct Password {
     /// `$<scheme>$i=<iterations>$<salt>$<hash>`.
     #[schemars(length(min = 1, max = 256))]
     pub hash: String,
+    /// The second factor asked for after the password, if the user enrolled one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub totp: Option<Totp>,
 }
+
+/// A TOTP authenticator and its recovery codes.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Totp {
+    /// The TOTP secret, sealed with a key derived from the password key and bound to the user.
+    #[schemars(length(min = 1, max = 256))]
+    pub secret: String,
+    /// Keyed hashes of the one-time recovery codes, hex.
+    #[schemars(length(max = 16))]
+    pub recovery: Vec<RecoveryHash>,
+}
+
+/// A keyed hash of one recovery code: HMAC-SHA256, hex.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, JsonSchema)]
+#[serde(transparent)]
+pub struct RecoveryHash(#[schemars(regex(pattern = r"^[0-9a-f]{64}$"))] pub String);
 
 impl std::fmt::Debug for Password {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("Password(..)")
+    }
+}
+
+impl std::fmt::Debug for Totp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Totp(..)")
+    }
+}
+
+impl std::fmt::Debug for RecoveryHash {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RecoveryHash(..)")
     }
 }
 
@@ -124,6 +156,14 @@ pub struct CredentialStatus {
     /// Failed password sign-ins, for a password credential.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guesses: Option<Guesses>,
+    /// The last TOTP step accepted, so each code works once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0))]
+    pub totp_last_step: Option<i64>,
+    /// Indexes into `spec.password.totp.recovery` of the recovery codes already used.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(length(max = 16))]
+    pub recovery_used: Vec<i64>,
 }
 
 /// Failed password sign-ins, counted per browser.

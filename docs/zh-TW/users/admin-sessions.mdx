@@ -1,9 +1,9 @@
 ---
 title: 管理員帳號與工作階段
-description: 建立與切換管理員帳號、調整工作階段時長，並設定全站團隊模式與 AAL3 通行密鑰限制。
+description: 建立與切換管理員帳號、選擇管理員的登入方式、調整工作階段時長，並設定團隊模式。
 ---
 
-管理員帳號只能用通行密鑰登入，存取權杖的有效期是 5 分鐘。一般帳號的存取權杖有效期是 10 分鐘。你可以調整工作階段時長，也可以要求管理員使用裝置綁定的通行密鑰。每個工作階段最晚在登入後 12 小時結束。
+管理員帳號預設用通行密鑰登入，或用密碼加上驗證器 App 的驗證碼登入，存取權杖的有效期是 5 分鐘。一般帳號的存取權杖有效期是 10 分鐘。你可以選擇管理員的登入方式，也可以調整工作階段時長。每個工作階段最晚在登入後 12 小時結束。
 
 ## 建立與切換管理員
 
@@ -15,7 +15,7 @@ description: 建立與切換管理員帳號、調整工作階段時長，並設�
 
 <Callout type="warn">
 
-每位管理員都應另外建立一個一般帳號，供日常工作使用。只有變更叢集時才使用管理員帳號。管理員帳號無法用 GitHub 等外部帳號登入，也無法連結外部帳號。登入頁面會顯示**這個帳號要用通行密鑰登入**。
+每位管理員都應另外建立一個一般帳號，供日常工作使用。只有變更叢集時才使用管理員帳號。管理員帳號預設無法用 GitHub 等外部帳號登入，也無法連結外部帳號。登入頁面會顯示**這個帳號要改用其他方式登入**。
 
 </Callout>
 
@@ -27,7 +27,7 @@ description: 建立與切換管理員帳號、調整工作階段時長，並設�
 zeabur-identityctl setup-link --username admin
 ```
 
-如果管理員遺失所有通行密鑰，可以在同一個指令加上 `--reset` 來救援帳號，詳見[登出、救援與移除使用者](./offboarding.mdx)。
+如果管理員無法再登入，可以在同一個指令加上 `--reset` 來救援帳號，詳見[登出、救援與移除使用者](./offboarding.mdx)。
 
 ### 邀請管理員或切換帳號類型
 
@@ -56,7 +56,7 @@ kubectl -n zeabur-identity get zbuser            # the Type column shows the acc
 
 ## 調整工作階段時長
 
-每次登入都會建立一個工作階段。應用程式會取得短效存取權杖與更新權杖。在工作階段結束前，應用程式會用更新權杖取得新的存取權杖，不必再次使用通行密鑰。
+每次登入都會建立一個工作階段。應用程式會取得短效存取權杖與更新權杖。在工作階段結束前，應用程式會用更新權杖取得新的存取權杖，不必再次登入。
 
 工作階段會在閒置逾時或達到最長時限時結束。預設限制如下：
 
@@ -64,9 +64,9 @@ kubectl -n zeabur-identity get zbuser            # the Type column shows the acc
 |---|---|---|---|
 | 一般帳號 | 10 分鐘 | 1 小時 | 登入後 12 小時 |
 | 管理員，單一團隊 | 5 分鐘 | 1 小時 | 登入後 12 小時 |
-| 管理員，多個團隊或啟用 AAL3 | 5 分鐘 | 15 分鐘 | 登入後 12 小時 |
+| 管理員，多個團隊或要求裝置綁定的通行密鑰 | 5 分鐘 | 15 分鐘 | 登入後 12 小時 |
 
-這 12 小時從使用通行密鑰或外部帳號登入時起算，更新權杖不會重設這個時限。
+這 12 小時從登入時起算，更新權杖不會重設這個時限。
 
 Zeabur Identity 不保留單一登入工作階段，所以每次授權請求都會顯示登入頁面。權杖回應中的 `refresh_expires_in` 是更新權杖距離閒置逾時還剩的秒數。
 
@@ -77,7 +77,7 @@ Zeabur Identity 不保留單一登入工作階段，所以每次授權請求都�
 | `--token-lifetime` | `10m` | 一般帳號的存取權杖與 ID 權杖有效期 |
 | `--admin-token-lifetime` | `5m` | 管理員帳號的存取權杖與 ID 權杖有效期 |
 | `--refresh-idle` | `1h` | 工作階段的閒置時限 |
-| `--admin-refresh-idle` | `15m` | 多個團隊或啟用 AAL3 時，管理員工作階段的閒置時限 |
+| `--admin-refresh-idle` | `15m` | 多個團隊或要求裝置綁定的通行密鑰時，管理員工作階段的閒置時限 |
 | `--refresh-absolute` | `12h` | 從登入起算的工作階段最長時限 |
 
 權杖有效期必須介於 1 分鐘與 1 小時之間。閒置時限不得超過 `--refresh-absolute`。
@@ -89,7 +89,7 @@ Zeabur Identity 不保留單一登入工作階段，所以每次授權請求都�
 | 鍵 | 可用值 | 預設值 | 用途 |
 |---|---|---|---|
 | `teams` | `single`、`multiple` | `single` | 設為 `multiple` 時，管理員工作階段預設在閒置 15 分鐘後結束。 |
-| `admin-aal3` | `false`、`true` | `false` | 設為 `true` 時，管理員帳號必須使用裝置綁定的通行密鑰。 |
+| `admin-sign-in` | `any`、`two-factor`、`passkey`、`device-bound-passkey` | `two-factor` | 管理員帳號的登入方式，詳見下方〈選擇管理員的登入方式〉。 |
 
 每次安裝都從單一團隊模式開始，管理員與一般帳號使用相同的閒置時限。
 
@@ -107,15 +107,42 @@ kubectl -n zeabur-identity patch configmap zeabur-identity-settings --type merge
 
 Zeabur 的 **Settings** 頁面也會將設定寫入同一個 ConfigMap。Zeabur Identity 每次登入與更新權杖時都會讀取設定，不需要重新啟動。
 
-如果 ConfigMap 或設定鍵不存在，Zeabur Identity 會使用預設值。
+如果 ConfigMap 或設定鍵不存在，Zeabur Identity 會使用預設值。如果值不在可用值之內，Zeabur Identity 會採用較嚴格的設定：`teams` 用 `multiple`，`admin-sign-in` 用 `device-bound-passkey`。
+
+## 選擇管理員的登入方式
+
+`admin-sign-in` 設定決定管理員帳號可以用哪些方式登入。一般帳號一律可以使用所有登入方式。
+
+| 值 | 管理員帳號的登入方式 |
+|---|---|
+| `any` | 和一般帳號相同：通行密鑰、密碼或外部帳號 |
+| `two-factor`（預設） | 通行密鑰，或密碼加上驗證器 App 的驗證碼 |
+| `passkey` | 只能用通行密鑰 |
+| `device-bound-passkey` | 只能用裝置綁定的通行密鑰，例如安全金鑰 |
+
+要變更設定，請更新 ConfigMap：
+
+```sh
+kubectl -n zeabur-identity patch configmap zeabur-identity-settings --type merge -p '{"data":{"admin-sign-in":"passkey"}}'
+```
+
+Zeabur Identity 會在下次登入或更新權杖時套用設定，不需要重新啟動。新設定不允許的工作階段，會在下次更新權杖時結束。
+
+### 用密碼加驗證器 App 登入
+
+設為 `two-factor` 時，管理員在設定頁面設定密碼，還要用驗證器 App 掃描 QR Code，再輸入 App 顯示的驗證碼。Google Authenticator、Microsoft Authenticator 或 1Password 都可以使用。接著設定頁面會顯示 10 組備援碼，只會顯示這一次。每組備援碼可以代替 App 的驗證碼使用一次。
+
+管理員用密碼登入時，登入頁面接著會要求輸入驗證碼。每個驗證碼只能用一次。輸錯驗證碼和輸錯密碼算在同一個次數限制裡，詳見[新增與管理使用者](./manage-users.mdx)。
+
+在 `any` 設定下設定的管理員密碼沒有驗證器 App，所以改成 `two-factor` 後就不能再用。要重設密碼，或管理員無法再使用驗證器 App 時，請刪除密碼的 `Credential`，再寄出新的設定連結。設定新密碼時，也會一併設定新的驗證器與備援碼。
 
 ## 限制管理員使用裝置綁定的通行密鑰（AAL3）
 
-將 `admin-aal3` 設為 `"true"` 後，管理員帳號只能使用裝置綁定的通行密鑰，例如安全金鑰，或只留在單一裝置上的通行密鑰。
+將 `admin-sign-in` 設為 `device-bound-passkey` 後，管理員帳號只能使用裝置綁定的通行密鑰，例如安全金鑰，或只留在單一裝置上的通行密鑰。
 
-Zeabur Identity 會在登入、新增通行密鑰及更新權杖時，拒絕 iCloud Keychain、Google Password Manager 等同步通行密鑰。如果工作階段是用同步通行密鑰建立的，就會在下次更新權杖時結束。拒絕訊息如下：
+Zeabur Identity 會在登入、新增通行密鑰及更新權杖時，拒絕 iCloud Keychain、Google Password Manager 等同步通行密鑰。如果工作階段是用同步通行密鑰或密碼建立的，就會在下次更新權杖時結束。拒絕訊息如下：
 
-> This passkey syncs to other devices. Admin accounts here need a security key, or a passkey that stays on one device.
+> 這個通行密鑰會同步到其他裝置。這裡的管理員帳號要用安全金鑰，或只存在一台裝置上的通行密鑰。
 
 啟用後，不論 `teams` 如何設定，管理員工作階段預設都會在閒置 15 分鐘後結束。一般帳號不受影響。
 
@@ -144,12 +171,12 @@ zeabur-identityctl setup-link --username <admin> --reset
 
 <Step>
 
-### 啟用管理員 AAL3 限制
+### 變更設定
 
 更新全站設定：
 
 ```sh
-kubectl -n zeabur-identity patch configmap zeabur-identity-settings --type merge -p '{"data":{"admin-aal3":"true"}}'
+kubectl -n zeabur-identity patch configmap zeabur-identity-settings --type merge -p '{"data":{"admin-sign-in":"device-bound-passkey"}}'
 ```
 
 Zeabur Identity 會在下次登入或更新權杖時套用限制，不需要重新啟動。

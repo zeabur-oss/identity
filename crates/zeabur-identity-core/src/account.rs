@@ -1,11 +1,12 @@
 //! Account types, and the install-wide settings that decide how each type signs in.
 //!
-//! An admin account signs in only with a passkey, never with a password or a linked account,
-//! and its tokens carry the admin group (`zeabur_identity_api::ADMIN_GROUP`). A regular account may
-//! use every sign-in method the server offers. With [`Settings::admin_aal3`], an admin account
-//! also needs a device-bound passkey: one whose authenticator reports the WebAuthn backup
-//! eligibility flag (BE) as unset. NIST SP 800-63B-4 allows synced passkeys up to AAL2 only,
-//! because syncing makes the key exportable ([sp800-63b]).
+//! A regular account may use every sign-in method the server offers. An admin account's tokens
+//! carry the admin group (`zeabur_identity_api::ADMIN_GROUP`), so [`Settings::admin_sign_in`]
+//! decides which methods it may use. The default, [`AdminSignIn::TwoFactor`], asks for two
+//! factors: a passkey, or a password with a TOTP code. NIST SP 800-63B-4 allows synced passkeys
+//! up to AAL2 only, because syncing makes the key exportable ([sp800-63b]), so
+//! [`AdminSignIn::DeviceBoundPasskey`] asks for a passkey whose authenticator reports the WebAuthn
+//! backup eligibility flag (BE) as unset.
 //!
 //! The authenticator reports BE itself. Attestation is `none`, so nothing verifies the flag.
 //!
@@ -19,8 +20,9 @@ use serde::{Deserialize, Serialize};
 pub const SETTINGS_CONFIG_MAP: &str = "zeabur-identity-settings";
 /// [`SETTINGS_CONFIG_MAP`] key for [`Settings::teams`]: `single` or `multiple`.
 pub const TEAMS_KEY: &str = "teams";
-/// [`SETTINGS_CONFIG_MAP`] key for [`Settings::admin_aal3`]: `true` or `false`.
-pub const ADMIN_AAL3_KEY: &str = "admin-aal3";
+/// [`SETTINGS_CONFIG_MAP`] key for [`Settings::admin_sign_in`]: `any`, `two-factor`, `passkey` or
+/// `device-bound-passkey`.
+pub const ADMIN_SIGN_IN_KEY: &str = "admin-sign-in";
 
 /// What kind of account a `User` is.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -28,7 +30,7 @@ pub enum AccountType {
     /// Day-to-day work. Signs in with every method the server offers.
     #[default]
     Regular,
-    /// Administers the cluster. Signs in with a passkey only.
+    /// Administers the cluster. Signs in as [`Settings::admin_sign_in`] allows.
     Admin,
 }
 
@@ -43,27 +45,41 @@ pub enum Teams {
     Multiple,
 }
 
+/// The sign-in methods an admin account may use, from the weakest to the strictest.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AdminSignIn {
+    /// Every method the server offers, a password alone included (AAL1).
+    Any,
+    /// A passkey, or a password with a second factor (AAL2).
+    #[default]
+    TwoFactor,
+    /// Any passkey: phishing-resistant (AAL2).
+    Passkey,
+    /// Device-bound passkeys only (AAL3). Admin sessions also end after a short idle time.
+    DeviceBoundPasskey,
+}
+
 /// Install-wide settings, from [`SETTINGS_CONFIG_MAP`]. A missing `ConfigMap` or key gives the
 /// default.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Settings {
     /// How many teams share the cluster.
     pub teams: Teams,
-    /// Admin accounts need a device-bound passkey, and their sessions end after a short idle
-    /// time.
-    pub admin_aal3: bool,
+    /// How admin accounts sign in.
+    pub admin_sign_in: AdminSignIn,
 }
 
 impl Settings {
     /// Whether an idle admin session ends after the short admin limit.
     #[must_use]
     pub const fn short_admin_idle(self) -> bool {
-        matches!(self.teams, Teams::Multiple) || self.admin_aal3
+        matches!(self.teams, Teams::Multiple)
+            || matches!(self.admin_sign_in, AdminSignIn::DeviceBoundPasskey)
     }
 
     /// The settings in a `ConfigMap`'s `data`.
     ///
-    /// A value that is not understood gives the stricter setting, and the key appears in the
+    /// A value that is not understood gives the strictest setting, and the key appears in the
     /// returned list of bad keys.
     #[must_use]
     pub fn from_data(data: &BTreeMap<String, String>) -> (Self, Vec<&'static str>) {
@@ -76,15 +92,23 @@ impl Settings {
                 Teams::Multiple
             }
         };
-        let admin_aal3 = match data.get(ADMIN_AAL3_KEY).map(|v| v.trim()) {
-            None | Some("false") => false,
-            Some("true") => true,
+        let admin_sign_in = match data.get(ADMIN_SIGN_IN_KEY).map(|v| v.trim()) {
+            Some("any") => AdminSignIn::Any,
+            None | Some("two-factor") => AdminSignIn::TwoFactor,
+            Some("passkey") => AdminSignIn::Passkey,
+            Some("device-bound-passkey") => AdminSignIn::DeviceBoundPasskey,
             Some(_) => {
-                bad.push(ADMIN_AAL3_KEY);
-                true
+                bad.push(ADMIN_SIGN_IN_KEY);
+                AdminSignIn::DeviceBoundPasskey
             }
         };
-        (Self { teams, admin_aal3 }, bad)
+        (
+            Self {
+                teams,
+                admin_sign_in,
+            },
+            bad,
+        )
     }
 }
 
@@ -96,19 +120,24 @@ pub enum Method {
         /// The passkey cannot be synced to other devices.
         device_bound: bool,
     },
-    /// A linked GitHub or Google account.
+    /// A linked GitHub, Google or OpenID account.
     Upstream,
-    /// A password.
-    Password,
+    /// A password, with a second factor or without.
+    Password {
+        /// A TOTP or recovery code was checked too.
+        second_factor: bool,
+    },
 }
 
 /// Why an account cannot use a sign-in method.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Refusal {
-    /// Admin accounts sign in with a passkey only.
-    AdminNeedsPasskey,
-    /// With [`Settings::admin_aal3`], admin accounts need a device-bound passkey.
-    AdminNeedsDeviceBoundPasskey,
+    /// The setting allows admin accounts a passkey only.
+    Passkey,
+    /// The setting allows admin accounts a device-bound passkey only.
+    DeviceBoundPasskey,
+    /// Admin accounts need a passkey, or a password with a second factor.
+    TwoFactor,
 }
 
 /// Whether `account` may sign in with `method`, or register it, under `settings`.
@@ -121,20 +150,24 @@ pub const fn allows(
     settings: Settings,
     method: Method,
 ) -> Result<(), Refusal> {
-    match (account, method) {
-        (AccountType::Regular, Method::Passkey { .. } | Method::Upstream | Method::Password) => {
-            Ok(())
+    if matches!(account, AccountType::Regular) {
+        return Ok(());
+    }
+    match (settings.admin_sign_in, method) {
+        (AdminSignIn::Any, _)
+        | (AdminSignIn::TwoFactor | AdminSignIn::Passkey, Method::Passkey { .. })
+        | (
+            AdminSignIn::TwoFactor,
+            Method::Password {
+                second_factor: true,
+            },
+        )
+        | (AdminSignIn::DeviceBoundPasskey, Method::Passkey { device_bound: true }) => Ok(()),
+        (AdminSignIn::TwoFactor, Method::Upstream | Method::Password { .. }) => {
+            Err(Refusal::TwoFactor)
         }
-        (AccountType::Admin, Method::Upstream | Method::Password) => {
-            Err(Refusal::AdminNeedsPasskey)
-        }
-        (AccountType::Admin, Method::Passkey { device_bound }) => {
-            if settings.admin_aal3 && !device_bound {
-                Err(Refusal::AdminNeedsDeviceBoundPasskey)
-            } else {
-                Ok(())
-            }
-        }
+        (AdminSignIn::Passkey, Method::Upstream | Method::Password { .. }) => Err(Refusal::Passkey),
+        (AdminSignIn::DeviceBoundPasskey, _) => Err(Refusal::DeviceBoundPasskey),
     }
 }
 
@@ -146,64 +179,96 @@ mod tests {
         device_bound: false,
     };
     const DEVICE: Method = Method::Passkey { device_bound: true };
+    const PASSWORD: Method = Method::Password {
+        second_factor: false,
+    };
+    const TWO_FACTOR: Method = Method::Password {
+        second_factor: true,
+    };
+    const METHODS: [Method; 5] = [SYNCED, DEVICE, Method::Upstream, PASSWORD, TWO_FACTOR];
+
+    fn admin(level: AdminSignIn, method: Method) -> Result<(), Refusal> {
+        let settings = Settings {
+            admin_sign_in: level,
+            ..Settings::default()
+        };
+        allows(AccountType::Admin, settings, method)
+    }
 
     #[test]
-    fn admin_accounts_sign_in_with_passkeys_only() {
-        for settings in [
-            Settings::default(),
-            Settings {
-                teams: Teams::Multiple,
-                admin_aal3: false,
-            },
+    fn regular_accounts_use_every_method_at_every_level() {
+        for level in [
+            AdminSignIn::Any,
+            AdminSignIn::TwoFactor,
+            AdminSignIn::Passkey,
+            AdminSignIn::DeviceBoundPasskey,
         ] {
-            assert_eq!(
-                allows(AccountType::Regular, settings, Method::Upstream),
-                Ok(())
-            );
-            assert_eq!(allows(AccountType::Regular, settings, SYNCED), Ok(()));
-            assert_eq!(
-                allows(AccountType::Admin, settings, Method::Upstream),
-                Err(Refusal::AdminNeedsPasskey)
-            );
-            assert_eq!(allows(AccountType::Admin, settings, SYNCED), Ok(()));
-            assert_eq!(allows(AccountType::Admin, settings, DEVICE), Ok(()));
+            let settings = Settings {
+                admin_sign_in: level,
+                ..Settings::default()
+            };
+            for method in METHODS {
+                assert_eq!(allows(AccountType::Regular, settings, method), Ok(()));
+            }
         }
     }
 
     #[test]
-    fn aal3_refuses_synced_passkeys_for_admins_only() {
-        let aal3 = Settings {
-            teams: Teams::Single,
-            admin_aal3: true,
-        };
-        assert_eq!(
-            allows(AccountType::Admin, aal3, SYNCED),
-            Err(Refusal::AdminNeedsDeviceBoundPasskey)
-        );
-        assert_eq!(allows(AccountType::Admin, aal3, DEVICE), Ok(()));
-        assert_eq!(
-            allows(AccountType::Admin, aal3, Method::Upstream),
-            Err(Refusal::AdminNeedsPasskey)
-        );
-        assert_eq!(allows(AccountType::Regular, aal3, SYNCED), Ok(()));
-        assert_eq!(allows(AccountType::Regular, aal3, Method::Upstream), Ok(()));
-        assert_eq!(allows(AccountType::Regular, aal3, Method::Password), Ok(()));
-        assert_eq!(
-            allows(AccountType::Admin, Settings::default(), Method::Password),
-            Err(Refusal::AdminNeedsPasskey)
-        );
+    fn each_level_allows_admins_what_it_names() {
+        use AdminSignIn::{Any, DeviceBoundPasskey, Passkey, TwoFactor};
+        let cases = [
+            (Any, [Ok(()), Ok(()), Ok(()), Ok(()), Ok(())]),
+            (
+                TwoFactor,
+                [
+                    Ok(()),
+                    Ok(()),
+                    Err(Refusal::TwoFactor),
+                    Err(Refusal::TwoFactor),
+                    Ok(()),
+                ],
+            ),
+            (
+                Passkey,
+                [
+                    Ok(()),
+                    Ok(()),
+                    Err(Refusal::Passkey),
+                    Err(Refusal::Passkey),
+                    Err(Refusal::Passkey),
+                ],
+            ),
+            (
+                DeviceBoundPasskey,
+                [
+                    Err(Refusal::DeviceBoundPasskey),
+                    Ok(()),
+                    Err(Refusal::DeviceBoundPasskey),
+                    Err(Refusal::DeviceBoundPasskey),
+                    Err(Refusal::DeviceBoundPasskey),
+                ],
+            ),
+        ];
+        for (level, expected) in cases {
+            for (method, expected) in METHODS.into_iter().zip(expected) {
+                assert_eq!(admin(level, method), expected, "{level:?} {method:?}");
+            }
+        }
     }
 
     #[test]
-    fn short_admin_idle_follows_teams_or_aal3() {
+    fn short_admin_idle_follows_teams_or_device_bound_passkeys() {
         let cases = [
-            (Teams::Single, false, false),
-            (Teams::Multiple, false, true),
-            (Teams::Single, true, true),
-            (Teams::Multiple, true, true),
+            (Teams::Single, AdminSignIn::TwoFactor, false),
+            (Teams::Multiple, AdminSignIn::TwoFactor, true),
+            (Teams::Single, AdminSignIn::Passkey, false),
+            (Teams::Single, AdminSignIn::DeviceBoundPasskey, true),
         ];
-        for (teams, admin_aal3, short) in cases {
-            let settings = Settings { teams, admin_aal3 };
+        for (teams, admin_sign_in, short) in cases {
+            let settings = Settings {
+                teams,
+                admin_sign_in,
+            };
             assert_eq!(settings.short_admin_idle(), short, "{settings:?}");
         }
     }
@@ -220,25 +285,25 @@ mod tests {
             Settings::from_data(&data(&[])),
             (Settings::default(), vec![])
         );
+        assert_eq!(Settings::default().admin_sign_in, AdminSignIn::TwoFactor);
+        for (value, level) in [
+            ("any", AdminSignIn::Any),
+            ("two-factor", AdminSignIn::TwoFactor),
+            ("passkey", AdminSignIn::Passkey),
+            ("device-bound-passkey", AdminSignIn::DeviceBoundPasskey),
+        ] {
+            let (settings, bad) = Settings::from_data(&data(&[("admin-sign-in", value)]));
+            assert_eq!((settings.admin_sign_in, bad), (level, vec![]));
+        }
+        // A value that is not understood fails closed to the strictest setting.
         assert_eq!(
-            Settings::from_data(&data(&[("teams", "multiple"), ("admin-aal3", "true")])),
+            Settings::from_data(&data(&[("teams", "many"), ("admin-sign-in", "yes")])),
             (
                 Settings {
                     teams: Teams::Multiple,
-                    admin_aal3: true
+                    admin_sign_in: AdminSignIn::DeviceBoundPasskey,
                 },
-                vec![]
-            )
-        );
-        // A value that is not understood fails closed to the stricter setting.
-        assert_eq!(
-            Settings::from_data(&data(&[("teams", "many"), ("admin-aal3", "yes")])),
-            (
-                Settings {
-                    teams: Teams::Multiple,
-                    admin_aal3: true
-                },
-                vec![TEAMS_KEY, ADMIN_AAL3_KEY]
+                vec![TEAMS_KEY, ADMIN_SIGN_IN_KEY]
             )
         );
     }

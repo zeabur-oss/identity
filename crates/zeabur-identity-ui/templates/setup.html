@@ -18,6 +18,12 @@
     <noscript>{% call ui::alert(m.noscript_title, "default", "Key", live = "") %}{{ m.noscript_body }}{% endcall %}</noscript>
     <div id="new-link" hidden>{{ ui::new_link(m, setup_link_command) }}</div>
     <div id="done" hidden tabindex="-1" class="flex flex-col gap-5 outline-none">
+      {#- First, so the codes are saved before anyone leaves the page. -#}
+      <div id="recovery" hidden class="flex flex-col gap-2 text-[0.8125rem] leading-5 text-pretty text-secondary">
+        <p class="text-sm leading-5 font-medium text-main">{{ m.recovery_title }}</p>
+        <p>{{ m.recovery_body }}</p>
+        <pre id="recovery-codes" class="type-mono grid grid-cols-2 gap-x-6 gap-y-1 rounded-md border border-v2-border bg-v2-surface-hover px-3 py-2 text-main select-all"></pre>
+      </div>
       {%- if let Some(client) = client %}
       {% call ui::alert(m.setup_done_title, "default", "Key", live = "") %}{{ m.setup_done_continue_body }}{% endcall %}
       <a href="/login" class="{{ ds::button("primary", "lg") }} w-full">{{ icons::icon("Fingerprint") }}<span class="truncate">{{ m.login_continue_to }} {{ client }}</span></a>
@@ -39,6 +45,7 @@
           data-msg-working="{{ m.working }}" data-msg-error="{{ m.generic_error }}"
           data-msg-invalid="{{ m.setup_invalid }}" data-msg-missing="{{ m.setup_missing_token }}"
           data-msg-device-passkey="{{ m.device_passkey_needed }}" data-msg-admin-passkey="{{ m.admin_passkey_only }}"
+          data-msg-admin-two-factor="{{ m.admin_two_factor }}" data-msg-code-failed="{{ m.setup_code_failed }}"
           data-msg-disabled="{{ m.account_disabled }}" data-msg-busy="{{ m.busy }}" data-msg-expired="{{ m.ceremony_expired }}" data-msg-exists="{{ m.setup_passkey_exists }}">
       <button type="submit" class="{{ ds::button("primary", "lg") }} w-full">{{ icons::icon("Fingerprint") }}{{ m.setup_create }}</button>
     </form>
@@ -57,6 +64,22 @@
              autocomplete="new-password"
              {{- ui::field_describedby("new-password", m.setup_password_hint) }}>
       {% endcall %}
+      {#- Filled by the script when the account needs a second factor. -#}
+      <div id="totp" hidden class="flex flex-col gap-4">
+        <div class="flex flex-col gap-1.5 text-[0.8125rem] leading-5 text-pretty text-secondary">
+          <p class="text-sm leading-5 font-medium text-main">{{ m.setup_totp_title }}</p>
+          <p>{{ m.setup_totp_body }}</p>
+        </div>
+        <svg id="totp-qr" role="img" aria-label="{{ m.setup_totp_qr }}" class="size-44 self-center rounded-md bg-white text-black" shape-rendering="crispEdges"></svg>
+        {% call ui::disclosure(m.setup_totp_key_title, center = true) %}
+        <p>{{ m.setup_totp_key_body }}</p>
+        <pre id="totp-secret" class="type-mono rounded-md border border-v2-border bg-v2-surface-hover px-3 py-2 break-all whitespace-pre-wrap text-main select-all"></pre>
+        {% endcall %}
+        {% call ui::field("totp-code", m.setup_totp_code) %}
+        <input id="totp-code" name="code" type="text" inputmode="numeric" maxlength="6" class="{{ ds::input() }}"
+               autocomplete="one-time-code" spellcheck="false">
+        {% endcall %}
+      </div>
       <button type="submit" class="{{ ds::button("primary", "lg") }} w-full">{{ m.setup_password_set }}</button>
       <button type="button" id="other-ways" class="self-center rounded-md text-[0.8125rem] leading-5 text-secondary hover:text-main">{{ m.setup_other_ways }}</button>
     </form>

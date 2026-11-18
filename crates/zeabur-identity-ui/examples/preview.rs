@@ -301,16 +301,62 @@ fn problem(status: StatusCode, kind: &str, extra: &str) -> Response {
         .into_response()
 }
 
-/// The username `held` shows the held-back answer; any other, a wrong password.
+/// The username `held` shows the held-back answer, `admin` asks for a code (`000000` is wrong);
+/// any other, a wrong password.
 async fn login_password(body: String) -> Response {
     if body.contains(r#""username":"held""#) {
         problem(StatusCode::TOO_MANY_REQUESTS, "password-held", "")
+    } else if body.contains(r#""username":"admin""#) {
+        if body.contains(r#""code":null"#) {
+            problem(StatusCode::UNAUTHORIZED, "code-needed", "")
+        } else {
+            problem(StatusCode::UNAUTHORIZED, "code-failed", "")
+        }
     } else {
         problem(StatusCode::UNAUTHORIZED, "password-failed", "")
     }
 }
 
-/// A password with the word `common` in it is refused as common; any other is set.
+/// The setup token `admin` asks for an authenticator; any other, nothing more.
+async fn setup_password_options(body: String) -> Response {
+    let totp = if body.contains(r#""token":"admin""#) {
+        let uri = "otpauth://totp/identity.example.com:admin?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP&issuer=identity.example.com&algorithm=SHA1&digits=6&period=30";
+        let (size, path) = qr(uri);
+        format!(
+            r#"{{"secret":"JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP","uri":"{uri}","qr":{{"size":{size},"path":"{path}"}},"sealed":"preview"}}"#
+        )
+    } else {
+        "null".to_owned()
+    };
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/json")],
+        format!(r#"{{"totp":{totp}}}"#),
+    )
+        .into_response()
+}
+
+/// A QR code as one SVG path, as the server draws it.
+fn qr(text: &str) -> (usize, String) {
+    use std::fmt::Write as _;
+    let Ok(code) = qrcode::QrCode::new(text.as_bytes()) else {
+        return (0, String::new());
+    };
+    let width = code.width();
+    let mut path = String::new();
+    for (y, row) in code.to_colors().chunks(width).enumerate() {
+        for (x, color) in row.iter().enumerate() {
+            if *color == qrcode::Color::Dark && write!(path, "M{} {}h1v1h-1z", x + 4, y + 4).is_err()
+            {
+                path.clear();
+            }
+        }
+    }
+    (width + 8, path)
+}
+
+/// A password with the word `common` in it is refused as common, the code `000000` is wrong; any
+/// other is set, with recovery codes when a code came with it.
 async fn setup_password(body: String) -> Response {
     if body.contains("common") {
         problem(
@@ -318,6 +364,15 @@ async fn setup_password(body: String) -> Response {
             "password-weak",
             r#","weakness":"common""#,
         )
+    } else if body.contains(r#""code":"000000""#) {
+        problem(StatusCode::UNPROCESSABLE_ENTITY, "code-failed", "")
+    } else if body.contains(r#""sealed":"preview""#) {
+        (
+            StatusCode::CREATED,
+            [(header::CONTENT_TYPE, "application/json")],
+            r#"{"username":"admin","recovery_codes":["k7qd-m2xa-p4tn","v3hc-q9ze-w6rb","f2ny-t8ks-c5mj","x4pw-d7gh-n2qe","b6rt-z3vf-j8kc","m5ea-h2wq-y7tp","s9jc-k4nd-r3xb","g8tz-p6ma-e2hw","q3wv-c7yj-t5fn","d2kb-x8re-h6sq"]}"#,
+        )
+            .into_response()
     } else {
         (
             StatusCode::CREATED,
@@ -355,6 +410,7 @@ async fn main() -> std::io::Result<()> {
         )
         .route("/setup/options", post(setup_options))
         .route("/setup/password", post(setup_password))
+        .route("/setup/password/options", post(setup_password_options))
         .route(
             "/account",
             get(|q: RawQuery, h: HeaderMap| account(Path("all".to_owned()), q, h)),

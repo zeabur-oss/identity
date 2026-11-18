@@ -25,6 +25,7 @@ form_urlencoded.workspace = true
 http-body-util.workspace = true
 hyper-rustls.workspace = true
 hyper-util.workspace = true
+qrcode.workspace = true
 rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true

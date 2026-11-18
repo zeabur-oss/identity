@@ -1,9 +1,9 @@
 ---
 title: 管理员账号与会话
-description: 创建和切换管理员账号、调整会话时长，并配置全站团队模式与 AAL3 通行密钥限制。
+description: 创建和切换管理员账号、选择管理员的登录方式、调整会话时长，并配置团队模式。
 ---
 
-管理员账号只能用通行密钥登录，访问令牌有效期为 5 分钟；普通账号的访问令牌有效期为 10 分钟。你可以调整会话时长，并要求管理员使用设备绑定的通行密钥。每个会话最晚在登录后 12 小时结束。
+管理员账号默认用通行密钥登录，或用密码加上身份验证器应用的验证码登录，访问令牌有效期为 5 分钟；普通账号的访问令牌有效期为 10 分钟。你可以选择管理员的登录方式，并调整会话时长。每个会话最晚在登录后 12 小时结束。
 
 ## 创建和切换管理员
 
@@ -15,7 +15,7 @@ description: 创建和切换管理员账号、调整会话时长，并配置全�
 
 <Callout type="warn">
 
-每位管理员都应另有一个普通账号，用于日常工作。管理员账号只用于更改集群。管理员账号无法用 GitHub 等外部账号登录，也无法关联外部账号。登录页面会显示**此账号要用通行密钥登录**。
+每位管理员都应另有一个普通账号，用于日常工作。管理员账号只用于更改集群。管理员账号默认无法用 GitHub 等外部账号登录，也无法关联外部账号。登录页面会显示**此账号需要改用其他方式登录**。
 
 </Callout>
 
@@ -27,7 +27,7 @@ description: 创建和切换管理员账号、调整会话时长，并配置全�
 zeabur-identityctl setup-link --username admin
 ```
 
-管理员丢失所有通行密钥时，可以在同一条命令后加上 `--reset` 来恢复账号，详见[退出登录、恢复和移除用户](./offboarding.mdx)。
+管理员无法再登录时，可以在同一条命令后加上 `--reset` 来恢复账号，详见[退出登录、恢复和移除用户](./offboarding.mdx)。
 
 ### 邀请管理员或切换账号类型
 
@@ -56,7 +56,7 @@ kubectl -n zeabur-identity get zbuser            # the Type column shows the acc
 
 ## 调整会话时长
 
-每次登录都会创建一个会话。应用会获取短期访问令牌和刷新令牌，并在会话结束前使用刷新令牌获取新的访问令牌，无需再次使用通行密钥。
+每次登录都会创建一个会话。应用会获取短期访问令牌和刷新令牌，并在会话结束前使用刷新令牌获取新的访问令牌，无需再次登录。
 
 会话会在空闲超时或达到最长时限时结束。默认限制如下：
 
@@ -64,9 +64,9 @@ kubectl -n zeabur-identity get zbuser            # the Type column shows the acc
 |---|---|---|---|
 | 普通账号 | 10 分钟 | 1 小时 | 登录后 12 小时 |
 | 管理员，单个团队 | 5 分钟 | 1 小时 | 登录后 12 小时 |
-| 管理员，多个团队或启用 AAL3 | 5 分钟 | 15 分钟 | 登录后 12 小时 |
+| 管理员，多个团队或要求设备绑定的通行密钥 | 5 分钟 | 15 分钟 | 登录后 12 小时 |
 
-12 小时从使用通行密钥或外部账号登录时开始计算，刷新令牌不会重置这个时限。
+12 小时从登录时开始计算，刷新令牌不会重置这个时限。
 
 Zeabur Identity 不保留单点登录会话，所以每次授权请求都会显示登录页面。令牌响应中的 `refresh_expires_in` 表示刷新令牌距离空闲超时还剩多少秒。
 
@@ -77,7 +77,7 @@ Zeabur Identity 不保留单点登录会话，所以每次授权请求都会显�
 | `--token-lifetime` | `10m` | 普通账号的访问令牌与 ID 令牌有效期 |
 | `--admin-token-lifetime` | `5m` | 管理员账号的访问令牌与 ID 令牌有效期 |
 | `--refresh-idle` | `1h` | 会话的空闲时限 |
-| `--admin-refresh-idle` | `15m` | 多个团队或启用 AAL3 时，管理员会话的空闲时限 |
+| `--admin-refresh-idle` | `15m` | 多个团队或要求设备绑定的通行密钥时，管理员会话的空闲时限 |
 | `--refresh-absolute` | `12h` | 从登录开始计算的会话最长时限 |
 
 令牌有效期必须介于 1 分钟与 1 小时之间。空闲时限不得超过 `--refresh-absolute`。
@@ -89,7 +89,7 @@ Zeabur Identity 所在 Namespace 中的 ConfigMap `zeabur-identity-settings` 存
 | 键 | 可用值 | 默认值 | 用途 |
 |---|---|---|---|
 | `teams` | `single`、`multiple` | `single` | 设为 `multiple` 时，管理员会话默认在空闲 15 分钟后结束。 |
-| `admin-aal3` | `false`、`true` | `false` | 设为 `true` 时，管理员账号必须使用设备绑定的通行密钥。 |
+| `admin-sign-in` | `any`、`two-factor`、`passkey`、`device-bound-passkey` | `two-factor` | 管理员账号的登录方式，详见下方“选择管理员的登录方式”。 |
 
 每次安装都以单团队模式开始，管理员与普通账号使用相同的空闲时限。
 
@@ -107,15 +107,42 @@ kubectl -n zeabur-identity patch configmap zeabur-identity-settings --type merge
 
 Zeabur 的 **Settings** 页面也会写入同一个 ConfigMap。Zeabur Identity 在每次登录和刷新令牌时读取配置，无需重启。
 
-ConfigMap 或配置键不存在时，Zeabur Identity 会使用默认值。
+ConfigMap 或配置键不存在时，Zeabur Identity 会使用默认值。值不在可用值之内时，Zeabur Identity 会采用更严格的配置：`teams` 用 `multiple`，`admin-sign-in` 用 `device-bound-passkey`。
+
+## 选择管理员的登录方式
+
+`admin-sign-in` 配置决定管理员账号可以用哪些方式登录。普通账号始终可以使用所有登录方式。
+
+| 值 | 管理员账号的登录方式 |
+|---|---|
+| `any` | 与普通账号相同：通行密钥、密码或外部账号 |
+| `two-factor`（默认） | 通行密钥，或密码加上身份验证器应用的验证码 |
+| `passkey` | 只能用通行密钥 |
+| `device-bound-passkey` | 只能用设备绑定的通行密钥，例如安全密钥 |
+
+要修改配置，请更新 ConfigMap：
+
+```sh
+kubectl -n zeabur-identity patch configmap zeabur-identity-settings --type merge -p '{"data":{"admin-sign-in":"passkey"}}'
+```
+
+Zeabur Identity 会在下次登录或刷新令牌时应用配置，无需重启。新配置不允许的会话，会在下次刷新令牌时结束。
+
+### 用密码加身份验证器应用登录
+
+设为 `two-factor` 时，管理员在设置页面设置密码，还要用身份验证器应用扫描二维码，再输入应用显示的验证码。Google Authenticator、Microsoft Authenticator 或 1Password 都可以使用。随后设置页面会显示 10 个恢复码，只显示这一次。每个恢复码可以代替应用的验证码使用一次。
+
+管理员用密码登录时，登录页面随后会要求输入验证码。每个验证码只能用一次。输错验证码和输错密码计入同一个次数限制，详见[添加和管理用户](./manage-users.mdx)。
+
+在 `any` 配置下设置的管理员密码没有身份验证器应用，所以改为 `two-factor` 后就不能再用。要重设密码，或管理员无法再使用身份验证器应用时，请删除密码的 `Credential`，再发送新的设置链接。设置新密码时，也会一并设置新的身份验证器和恢复码。
 
 ## 限制管理员使用设备绑定的通行密钥（AAL3）
 
-将 `admin-aal3` 设为 `"true"` 后，管理员账号只能使用设备绑定的通行密钥，例如安全密钥，或仅保存在单个设备上的通行密钥。
+将 `admin-sign-in` 设为 `device-bound-passkey` 后，管理员账号只能使用设备绑定的通行密钥，例如安全密钥，或仅保存在单个设备上的通行密钥。
 
-Zeabur Identity 会在登录、添加通行密钥及刷新令牌时，拒绝 iCloud Keychain、Google Password Manager 等同步通行密钥。使用同步通行密钥创建的会话，会在下次刷新令牌时结束。拒绝消息为：
+Zeabur Identity 会在登录、添加通行密钥及刷新令牌时，拒绝 iCloud Keychain、Google Password Manager 等同步通行密钥。使用同步通行密钥或密码创建的会话，会在下次刷新令牌时结束。拒绝消息为：
 
-> This passkey syncs to other devices. Admin accounts here need a security key, or a passkey that stays on one device.
+> 这个通行密钥会同步到其他设备。这里的管理员账号要用安全密钥，或只保存在一台设备上的通行密钥。
 
 启用后，无论 `teams` 如何配置，管理员会话默认都会在空闲 15 分钟后结束。普通账号不受影响。
 
@@ -144,12 +171,12 @@ zeabur-identityctl setup-link --username <admin> --reset
 
 <Step>
 
-### 启用管理员 AAL3 限制
+### 修改配置
 
 更新全站配置：
 
 ```sh
-kubectl -n zeabur-identity patch configmap zeabur-identity-settings --type merge -p '{"data":{"admin-aal3":"true"}}'
+kubectl -n zeabur-identity patch configmap zeabur-identity-settings --type merge -p '{"data":{"admin-sign-in":"device-bound-passkey"}}'
 ```
 
 Zeabur Identity 会在下次登录或刷新令牌时应用限制，无需重启。

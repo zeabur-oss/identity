@@ -185,7 +185,7 @@ pub struct NewGrant {
     /// Whether the authenticator verified the user (WebAuthn UV) at sign-in.
     pub user_verified: bool,
     /// Whether the user signed in with a passkey whose authenticator reported BE unset. A
-    /// refresh checks it again when AAL3 is on for admin accounts.
+    /// refresh checks it again when admin accounts need a device-bound passkey.
     pub device_bound: bool,
 }
 
@@ -760,9 +760,11 @@ pub struct StoredPassword {
     pub name: String,
     /// The hash (see [`zeabur_identity_core::password::Hasher`]).
     pub hash: String,
-    /// Failed sign-ins.
-    pub guesses: Counts,
-    /// The stored version that [`CredentialStore::save_guesses`] and
+    /// The second factor, if the user enrolled one.
+    pub totp: Option<StoredTotp>,
+    /// What each sign-in changes.
+    pub state: PasswordState,
+    /// The stored version that [`CredentialStore::save_state`] and
     /// [`CredentialStore::set_password`] compare against.
     pub version: String,
 }
@@ -771,9 +773,36 @@ impl std::fmt::Debug for StoredPassword {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("StoredPassword")
             .field("name", &self.name)
-            .field("guesses", &self.guesses)
+            .field("totp", &self.totp.is_some())
+            .field("state", &self.state)
             .finish_non_exhaustive()
     }
+}
+
+/// A TOTP authenticator and its recovery codes, as stored.
+#[derive(Clone, PartialEq, Eq)]
+pub struct StoredTotp {
+    /// The sealed secret.
+    pub secret: String,
+    /// Keyed hashes of the recovery codes.
+    pub recovery: Vec<String>,
+}
+
+impl std::fmt::Debug for StoredTotp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("StoredTotp(..)")
+    }
+}
+
+/// What a password sign-in changes.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PasswordState {
+    /// Failed sign-ins.
+    pub guesses: Counts,
+    /// The last TOTP step accepted.
+    pub totp_last_step: Option<u64>,
+    /// Indexes of the recovery codes already used.
+    pub recovery_used: Vec<usize>,
 }
 
 /// Outcome of a write that compares against a stored version.
@@ -874,20 +903,22 @@ pub trait CredentialStore: Send + Sync + 'static {
         user: &User,
     ) -> impl Future<Output = Result<Option<StoredPassword>, StoreError>> + Send;
 
-    /// Stores `hash` as the password of `user`. With `replacing`, replaces that stored password
-    /// unless it changed since it was read; without, adds one, or replaces any it finds.
+    /// Stores `hash`, and `totp` if given, as the password of `user`. With `replacing`, replaces
+    /// that stored password unless it changed since it was read; without, adds one, or replaces
+    /// any it finds. The new password starts with an empty [`PasswordState`].
     fn set_password(
         &self,
         user: &User,
         hash: &str,
+        totp: Option<&StoredTotp>,
         replacing: Option<&StoredPassword>,
     ) -> impl Future<Output = Result<Saved, StoreError>> + Send;
 
-    /// Saves new guess counts for a stored password unless it changed since it was read.
-    fn save_guesses(
+    /// Saves a new state for a stored password unless it changed since it was read.
+    fn save_state(
         &self,
         stored: &StoredPassword,
-        guesses: &Counts,
+        state: &PasswordState,
     ) -> impl Future<Output = Result<Saved, StoreError>> + Send;
 }
 
@@ -1233,6 +1264,7 @@ impl CredentialStore for MemoryCredentialStore {
         &self,
         user: &User,
         hash: &str,
+        totp: Option<&StoredTotp>,
         replacing: Option<&StoredPassword>,
     ) -> impl Future<Output = Result<Saved, StoreError>> + Send {
         let name = password_credential_name(&user.subject);
@@ -1249,7 +1281,8 @@ impl CredentialStore for MemoryCredentialStore {
                     StoredPassword {
                         name,
                         hash: hash.to_owned(),
-                        guesses: Counts::default(),
+                        totp: totp.cloned(),
+                        state: PasswordState::default(),
                         version: self.next_version(),
                     },
                 );
@@ -1260,10 +1293,10 @@ impl CredentialStore for MemoryCredentialStore {
         future::ready(Ok(outcome))
     }
 
-    fn save_guesses(
+    fn save_state(
         &self,
         stored: &StoredPassword,
-        guesses: &Counts,
+        state: &PasswordState,
     ) -> impl Future<Output = Result<Saved, StoreError>> + Send {
         let version = self.next_version();
         let mut passwords = self
@@ -1272,7 +1305,7 @@ impl CredentialStore for MemoryCredentialStore {
             .unwrap_or_else(PoisonError::into_inner);
         let outcome = match passwords.get_mut(&stored.name) {
             Some(current) if current.version == stored.version => {
-                current.guesses = guesses.clone();
+                current.state = state.clone();
                 current.version = version;
                 Saved::Saved
             }

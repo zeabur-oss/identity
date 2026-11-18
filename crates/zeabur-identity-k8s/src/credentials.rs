@@ -16,16 +16,16 @@ use k8s_openapi::jiff::Timestamp;
 use kube::ResourceExt as _;
 use kube::api::{Api, ListParams, ObjectMeta, Patch, PatchParams, PostParams};
 use zeabur_identity_api::credential::{
-    Credential, CredentialKind, CredentialSpec, GuessCount, Guesses, KnownGuessCount, Passkey,
-    Password,
+    Credential, CredentialKind, CredentialSpec, CredentialStatus, GuessCount, Guesses,
+    KnownGuessCount, Passkey, Password, RecoveryHash, Totp,
 };
 use zeabur_identity_api::{GROUP, USER_LABEL};
 use zeabur_identity_core::clock::UnixTime;
 use zeabur_identity_core::guessing::{Count, Counts, Known};
 use zeabur_identity_store::{
     AccountEvent, CreateCredential, CredentialStore, LinkedAccount, LinkedSummary, NewExternal,
-    NewPasskey, PasskeySummary, Removal, Rename, Saved, StoreError, StoredPasskey, StoredPassword,
-    Unlink, User, password_credential_name,
+    NewPasskey, PasskeySummary, PasswordState, Removal, Rename, Saved, StoreError, StoredPasskey,
+    StoredPassword, StoredTotp, Unlink, User, password_credential_name,
 };
 
 use super::MANAGED_BY;
@@ -210,6 +210,21 @@ fn counts_from(guesses: Option<&Guesses>) -> Counts {
                 device: k.device.clone(),
                 count: count_from(&k.count),
             })
+            .collect(),
+    }
+}
+
+fn state_from(status: Option<&CredentialStatus>) -> PasswordState {
+    let Some(status) = status else {
+        return PasswordState::default();
+    };
+    PasswordState {
+        guesses: counts_from(status.guesses.as_ref()),
+        totp_last_step: status.totp_last_step.and_then(|s| u64::try_from(s).ok()),
+        recovery_used: status
+            .recovery_used
+            .iter()
+            .filter_map(|&i| usize::try_from(i).ok())
             .collect(),
     }
 }
@@ -603,7 +618,11 @@ impl CredentialStore for KubeCredentialStore {
                 Some(StoredPassword {
                     name: object.name_any(),
                     hash: password.hash.clone(),
-                    guesses: counts_from(object.status.as_ref().and_then(|s| s.guesses.as_ref())),
+                    totp: password.totp.as_ref().map(|totp| StoredTotp {
+                        secret: totp.secret.clone(),
+                        recovery: totp.recovery.iter().map(|h| h.0.clone()).collect(),
+                    }),
+                    state: state_from(object.status.as_ref()),
                     version: version(&object),
                 })
             }))
@@ -617,6 +636,7 @@ impl CredentialStore for KubeCredentialStore {
         &self,
         user: &User,
         hash: &str,
+        totp: Option<&StoredTotp>,
         replacing: Option<&StoredPassword>,
     ) -> impl Future<Output = Result<Saved, StoreError>> + Send {
         let api = self.api.clone();
@@ -635,6 +655,10 @@ impl CredentialStore for KubeCredentialStore {
                 user: user.name.clone(),
                 kind: CredentialKind::Password(Password {
                     hash: hash.to_owned(),
+                    totp: totp.map(|totp| Totp {
+                        secret: totp.secret.clone(),
+                        recovery: totp.recovery.iter().cloned().map(RecoveryHash).collect(),
+                    }),
                 }),
             },
             status: None,
@@ -673,10 +697,10 @@ impl CredentialStore for KubeCredentialStore {
         }
     }
 
-    fn save_guesses(
+    fn save_state(
         &self,
         stored: &StoredPassword,
-        guesses: &Counts,
+        state: &PasswordState,
     ) -> impl Future<Output = Result<Saved, StoreError>> + Send {
         let api = self.api.clone();
         let name = stored.name.clone();
@@ -688,7 +712,11 @@ impl CredentialStore for KubeCredentialStore {
         // with 409 if the object changed.
         let patch = serde_json::json!({
             "metadata": { "resourceVersion": resource_version },
-            "status": { "guesses": counts_to(guesses) },
+            "status": {
+                "guesses": counts_to(&state.guesses),
+                "totpLastStep": state.totp_last_step,
+                "recoveryUsed": state.recovery_used,
+            },
         });
         async move {
             match api

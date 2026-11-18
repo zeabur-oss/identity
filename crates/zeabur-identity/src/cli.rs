@@ -69,7 +69,7 @@ pub struct ServeArgs {
     pub admin_token_lifetime: Duration,
 
     /// An admin account's refresh-token family ends if unused this long, when several teams share
-    /// the cluster or AAL3 is on. Otherwise `--refresh-idle` applies.
+    /// the cluster or admins need a device-bound passkey. Otherwise `--refresh-idle` applies.
     #[arg(long, env = "ZEABUR_IDENTITY_ADMIN_REFRESH_IDLE", default_value = "15m", value_parser = parse_duration)]
     pub admin_refresh_idle: Duration,
 
