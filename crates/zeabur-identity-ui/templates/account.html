@@ -68,6 +68,7 @@
     {%- if view.passkeys.len() == 1 %}
     {% call ui::alert(m.backup_title, "warn", "Key", live = "") %}{{ m.backup_body }}{% endcall %}
     {%- endif %}
+    {%- if !view.passkeys.is_empty() %}
     <ul class="flex flex-col divide-y divide-v2-border">
       {%- for p in view.passkeys %}
       <li data-passkey="{{ p.name }}" class="flex gap-3 py-3 first:pt-0">
@@ -114,6 +115,7 @@
       </li>
       {%- endfor %}
     </ul>
+    {%- endif %}
     {%- if !view.passkey_confirms %}
     <p class="text-[0.8125rem] leading-5 text-pretty text-secondary">{{ m.passkey_sign_in_needed }}</p>
     {%- else %}

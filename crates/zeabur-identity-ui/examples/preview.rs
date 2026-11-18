@@ -252,6 +252,23 @@ const SESSIONS: [SessionRow<'static>; 3] = [
         current: false,
     },
 ];
+/// The sessions of a user who signed in with a password: the current one names no passkey.
+const PASSWORD_SESSIONS: [SessionRow<'static>; 2] = [
+    SessionRow {
+        name: "s-1",
+        app: None,
+        signed_in: 1_792_000_000,
+        credential: None,
+        current: true,
+    },
+    SessionRow {
+        name: "g-2",
+        app: Some("kubectl"),
+        signed_in: 1_790_500_000,
+        credential: None,
+        current: false,
+    },
+];
 
 async fn account(Path(state): Path<String>, RawQuery(q): RawQuery, h: HeaderMap) -> Response {
     let lang = lang(q.as_deref(), &h);
@@ -285,6 +302,7 @@ async fn account(Path(state): Path<String>, RawQuery(q): RawQuery, h: HeaderMap)
                 authenticator: false,
             });
             view.passkey_confirms = false;
+            view.sessions = &PASSWORD_SESSIONS;
             account_page(lang, Some(view))
         }
         "signed-out" => account_page(lang, None),
