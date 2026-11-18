@@ -2526,5 +2526,112 @@ mod tests {
             let reply = admin_sign_in(&h, saved.1, Some(&code), Some(&device)).await;
             assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
         }
+
+        async fn account_sign_in(
+            h: &Harness,
+            username: &str,
+            password: &str,
+            code: Option<&str>,
+            device: Option<&str>,
+        ) -> Reply {
+            let cookies: Vec<(&str, &str)> =
+                device.map(|d| (DEVICE_COOKIE, d)).into_iter().collect();
+            post(
+                &h.app,
+                "/account/session/password",
+                json!({ "username": username, "password": password, "code": code }),
+                &cookies,
+            )
+            .await
+        }
+
+        #[tokio::test]
+        async fn a_user_with_only_a_password_signs_in_to_the_account_page_and_changes_it() {
+            let h = harness().await;
+            let device = dana_with_password(&h).await;
+            let reply = account_sign_in(&h, "dana", GOOD, None, Some(&device)).await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+            let audit = &reply.audit.as_ref().unwrap()["fields"];
+            assert_eq!(audit["event"], "account.sign_in");
+            assert_eq!(audit["outcome"], "success");
+            let session = Session {
+                cookie: reply.cookie(SESSION_COOKIE).unwrap(),
+            };
+            let html = page(&h, Some(&session.cookie)).await;
+            assert!(html.contains(PASSWORD_FORM));
+            // Without a passkey, the page offers no passkey or link changes.
+            assert!(!html.contains("id=\"add\""));
+            assert!(html.contains("needs a sign-in with a passkey"));
+            let reply = post(
+                &h.app,
+                "/account/passkeys/options",
+                json!({}),
+                &session.cookies(),
+            )
+            .await;
+            assert!(reply.kind().ends_with(":reauth-required"), "{}", reply.body);
+
+            let reply = change(&h, &session, &device, GOOD, NEW).await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+            let reply = sign_in(&h, "dana", GOOD, Some(&device)).await;
+            assert_eq!(reply.status, StatusCode::UNAUTHORIZED);
+            let reply = sign_in(&h, "dana", NEW, Some(&device)).await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        }
+
+        #[tokio::test]
+        async fn an_admin_signs_in_to_the_account_page_with_a_password_and_a_code() {
+            let h = harness().await;
+            let (secret, _, device) = admin_with_authenticator(&h).await;
+            let reply = account_sign_in(&h, "admin", GOOD, None, Some(&device)).await;
+            assert_eq!(reply.status, StatusCode::UNAUTHORIZED);
+            assert!(reply.kind().ends_with(":code-needed"));
+            assert!(reply.cookie(SESSION_COOKIE).is_none());
+            next_step(&h);
+            let code = secret.code_at(now(&h));
+            let reply = account_sign_in(&h, "admin", GOOD, Some(&code), Some(&device)).await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+            let cookie = reply.cookie(SESSION_COOKIE).unwrap();
+            assert!(!page(&h, Some(&cookie)).await.contains(SIGNED_OUT_MARK));
+            // The code works once, here as at the sign-in page.
+            let reply = sign_in_with_code(&h, Some(&code), Some(&device)).await;
+            assert!(reply.kind().ends_with(":code-failed"));
+        }
+
+        #[tokio::test]
+        async fn account_sign_ins_count_against_the_sign_in_limits() {
+            let h = harness().await;
+            let device = dana_with_password(&h).await;
+            for _ in 0..=LIMIT {
+                let reply = account_sign_in(
+                    &h,
+                    "dana",
+                    "a wrong guess, again and again",
+                    None,
+                    Some(&device),
+                )
+                .await;
+                assert!(reply.cookie(SESSION_COOKIE).is_none());
+            }
+            let reply = sign_in(&h, "dana", GOOD, Some(&device)).await;
+            assert_eq!(reply.status, StatusCode::TOO_MANY_REQUESTS);
+            let reply = account_sign_in(&h, "dana", GOOD, None, Some(&device)).await;
+            assert_eq!(reply.status, StatusCode::TOO_MANY_REQUESTS);
+            assert!(reply.headers.contains_key(header::RETRY_AFTER));
+        }
+
+        #[tokio::test]
+        async fn an_unknown_user_gets_the_answer_of_a_wrong_password() {
+            let h = harness().await;
+            dana_with_password(&h).await;
+            let wrong = account_sign_in(&h, "dana", "not the password at all", None, None).await;
+            assert_eq!(wrong.status, StatusCode::UNAUTHORIZED);
+            for (username, password) in [("nobody", GOOD), ("admin", GOOD), ("dana", "")] {
+                let reply = account_sign_in(&h, username, password, None, None).await;
+                assert_eq!(reply.status, wrong.status, "{username}");
+                assert_eq!(reply.body, wrong.body, "{username}");
+                assert!(reply.cookie(SESSION_COOKIE).is_none());
+            }
+        }
     }
 }

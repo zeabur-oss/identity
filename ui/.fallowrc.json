@@ -2,15 +2,17 @@
   "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/v3.33.1/schema.json",
   // The pages that scripts/build-ui.sh builds.
   "entry": ["src/login.ts", "src/setup.ts", "src/account.ts", "styles/app.css"],
-  // A page imports only webauthn.ts, never another page.
+  // A page imports only webauthn.ts and password.ts, never another page.
   "boundaries": {
     "zones": [
       { "name": "pages", "patterns": ["src/login.ts", "src/setup.ts", "src/account.ts"] },
-      { "name": "webauthn", "patterns": ["src/webauthn.ts"] }
+      { "name": "webauthn", "patterns": ["src/webauthn.ts"] },
+      { "name": "password", "patterns": ["src/password.ts"] }
     ],
     "rules": [
-      { "from": "pages", "allow": ["webauthn"] },
-      { "from": "webauthn", "allow": [] }
+      { "from": "pages", "allow": ["webauthn", "password"] },
+      { "from": "webauthn", "allow": [] },
+      { "from": "password", "allow": [] }
     ],
     "coverage": { "requireAllFiles": true, "allowUnmatched": ["styles/**", "scripts/**"] }
   },

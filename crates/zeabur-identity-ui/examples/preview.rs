@@ -159,6 +159,7 @@ async fn index() -> Html<String> {
         "/account/linked",
         "/account/admin",
         "/account/password",
+        "/account/password-only",
         "/account/signed-out",
     ]
     .map(String::from);
@@ -263,6 +264,7 @@ async fn account(Path(state): Path<String>, RawQuery(q): RawQuery, h: HeaderMap)
         password: admin.then_some(PasswordView {
             authenticator: true,
         }),
+        passkey_confirms: true,
         sessions: &SESSIONS,
     };
     match state.as_str() {
@@ -275,6 +277,14 @@ async fn account(Path(state): Path<String>, RawQuery(q): RawQuery, h: HeaderMap)
             view.password = Some(PasswordView {
                 authenticator: false,
             });
+            account_page(lang, Some(view))
+        }
+        "password-only" => {
+            let mut view = view(&[], &LINKED, false);
+            view.password = Some(PasswordView {
+                authenticator: false,
+            });
+            view.passkey_confirms = false;
             account_page(lang, Some(view))
         }
         "signed-out" => account_page(lang, None),

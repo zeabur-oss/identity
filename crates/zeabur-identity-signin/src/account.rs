@@ -44,6 +44,7 @@ use zeabur_identity_core::account::{AccountType, Method};
 use zeabur_identity_core::clock::{Clock, UnixTime};
 use zeabur_identity_core::crypto::{CryptoError, hex, random};
 use zeabur_identity_oauth::Use;
+use zeabur_identity_oauth::authorize::Authentication;
 use zeabur_identity_store::{
     AccountEvent, Classification, CreateCredential, CreateGrant, CredentialStore, Directory, Grant,
     GrantStore, LinkedSummary, NewGrant, PasskeySummary, Removal, Rename, SetupStore, Unlink, User,
@@ -138,6 +139,10 @@ where
             post(session_options::<D, G, C, K, S>),
         )
         .route("/account/session", post(session_create::<D, G, C, K, S>))
+        .route(
+            "/account/session/password",
+            post(crate::password::account_session::<D, G, C, K, S>),
+        )
         .route("/account/sign-out", post(sign_out::<D, G, C, K, S>))
         .route(
             "/account/reauth/options",
@@ -423,7 +428,7 @@ pub(crate) async fn record<D, G, C, K, S>(
     }
 }
 
-fn with_cookie(mut response: Response, token: &SessionToken) -> Response {
+pub(crate) fn with_cookie(mut response: Response, token: &SessionToken) -> Response {
     set_cookie_with(
         &mut response,
         SESSION_COOKIE,
@@ -680,6 +685,7 @@ where
                     password: password.as_ref().map(|p| PasswordView {
                         authenticator: p.totp.is_some(),
                     }),
+                    passkey_confirms: !passkeys.is_empty() || is_fresh(&account.session, now),
                     sessions: &session_rows,
                 }),
             )
@@ -785,6 +791,47 @@ struct SignedIn {
     accepted: Option<Accepted>,
 }
 
+/// Creates the account session grant for `authentication` and returns its token.
+pub(crate) async fn start_session<D, G, C, K, S>(
+    service: &SignIn<D, G, C, K, S>,
+    authentication: &Authentication,
+) -> Result<SessionToken, Problem>
+where
+    D: Directory,
+    G: GrantStore,
+    C: Clock,
+    K: CredentialStore,
+    S: SetupStore,
+{
+    let token = SessionToken::generate().map_err(internal)?;
+    let expires_at = authentication.auth_time.saturating_add(SESSION_LIFETIME);
+    let grant = NewGrant {
+        name: token.name.clone(),
+        user: authentication.user.clone(),
+        client: ACCOUNT_CLIENT.to_owned(),
+        audience: service.oauth.issuer.as_str().to_owned(),
+        scopes: Vec::new(),
+        auth_time: authentication.auth_time,
+        amr: authentication.amr.clone(),
+        expires_at,
+        initial_hash: token.hash(),
+        subject: Some(authentication.subject.clone()),
+        credential: authentication.credential.clone(),
+        user_verified: authentication.user_verified,
+        device_bound: authentication.device_bound,
+    };
+    match service
+        .oauth
+        .grants
+        .create(&grant, expires_at)
+        .await
+        .map_err(internal)?
+    {
+        CreateGrant::Created => Ok(token),
+        CreateGrant::AlreadyExists => Err(internal("session name collision")),
+    }
+}
+
 async fn session_create<D, G, C, K, S>(
     State(service): State<Shared<D, G, C, K, S>>,
     requester: Requester,
@@ -817,34 +864,17 @@ where
         )
         .await?;
         audit.credential = Some(verified.credential.clone());
-        let token = SessionToken::generate().map_err(internal)?;
-        audit.session = Some(token.name.clone());
-        let expires_at = now.saturating_add(SESSION_LIFETIME);
-        let grant = NewGrant {
-            name: token.name.clone(),
+        let authentication = Authentication {
             user: verified.user.name.clone(),
-            client: ACCOUNT_CLIENT.to_owned(),
-            audience: service.oauth.issuer.as_str().to_owned(),
-            scopes: Vec::new(),
+            subject: verified.user.subject.clone(),
             auth_time: now,
             amr: PASSKEY_AMR.iter().map(|m| (*m).to_owned()).collect(),
-            expires_at,
-            initial_hash: token.hash(),
-            subject: Some(verified.user.subject.clone()),
             credential: Some(verified.credential.clone()),
             user_verified: true,
             device_bound: verified.device_bound,
         };
-        match service
-            .oauth
-            .grants
-            .create(&grant, expires_at)
-            .await
-            .map_err(internal)?
-        {
-            CreateGrant::Created => {}
-            CreateGrant::AlreadyExists => return Err(internal("session name collision").into()),
-        }
+        let token = start_session(&service, &authentication).await?;
+        audit.session = Some(token.name.clone());
         touch(&service, &verified, now).await;
         let signal = accepted(&service, &verified.user).await;
         user = Some(verified.user);

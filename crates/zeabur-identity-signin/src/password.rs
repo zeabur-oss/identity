@@ -36,7 +36,8 @@ use zeabur_identity_store::{
 };
 
 use crate::account::{
-    Audit, LAST_CREDENTIAL, done, log_outcome, record, revoke_all_but, signed_in,
+    Audit, LAST_CREDENTIAL, done, log_outcome, record, revoke_all_but, signed_in, start_session,
+    with_cookie,
 };
 use crate::device::Requester;
 use crate::problem::Problem;
@@ -499,6 +500,44 @@ where
     check_request(headers, service.oauth.issuer.as_str())?;
     let request: SignInRequest = parse(body)?;
     let flow = cookie(headers, FLOW_COOKIE).ok_or(NO_REQUEST)?;
+    let authentication = authenticate(service, headers, &request, identity).await?;
+    let subject = authentication.subject.clone();
+    let location =
+        complete_authorization(&service.oauth, flow, authentication).map_err(|error| {
+            tracing::warn!(
+                reason = NO_REQUEST.kind,
+                ?error,
+                "password authorization failed"
+            );
+            NO_REQUEST
+        })?;
+    let mut response = json(
+        StatusCode::OK,
+        &SignedIn {
+            redirect_to: location,
+        },
+    );
+    service.passwords.remember(&mut response, headers, &subject);
+    crate::clear_cookie(&mut response, FLOW_COOKIE, "Lax");
+    Ok(response)
+}
+
+/// Checks a username, a password and, for a user with an authenticator, a code. Every password
+/// sign-in uses it: an unknown user and a held browser get the answer of a wrong password, and a
+/// wrong password or code counts against this browser.
+async fn authenticate<D, G, C, K, S>(
+    service: &SignIn<D, G, C, K, S>,
+    headers: &HeaderMap,
+    request: &SignInRequest,
+    identity: &mut Option<User>,
+) -> Result<Authentication, Failure>
+where
+    D: Directory,
+    G: GrantStore,
+    C: Clock,
+    K: CredentialStore,
+    S: SetupStore,
+{
     let entered = Normalized::new(&request.password).ok_or(PASSWORD_FAILED)?;
     let now = service.oauth.now();
     let passwords = &service.passwords;
@@ -563,7 +602,7 @@ where
     let name = stored.name.clone();
     record_success(service, user, stored, rehashed, device, second).await?;
     let amr = second.map_or(&PASSWORD_AMR[..], SecondFactor::amr);
-    let authentication = Authentication {
+    Ok(Authentication {
         user: user.name.clone(),
         subject: user.subject.clone(),
         auth_time: now,
@@ -571,25 +610,46 @@ where
         credential: Some(name),
         user_verified: false,
         device_bound: false,
+    })
+}
+
+/// `POST /account/session/password`: signs in to the account page with a username and password.
+/// The session is not user-verified, so changes that need a fresh passkey still ask for one.
+pub(crate) async fn account_session<D, G, C, K, S>(
+    State(service): State<Shared<D, G, C, K, S>>,
+    requester: Requester,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response
+where
+    D: Directory,
+    G: GrantStore,
+    C: Clock,
+    K: CredentialStore,
+    S: SetupStore,
+{
+    let mut identity = None;
+    let mut audit = Audit {
+        requester: Some(&requester),
+        ..Audit::default()
     };
-    let location =
-        complete_authorization(&service.oauth, flow, authentication).map_err(|error| {
-            tracing::warn!(
-                reason = NO_REQUEST.kind,
-                ?error,
-                "password authorization failed"
-            );
-            NO_REQUEST
-        })?;
-    let mut response = json(
-        StatusCode::OK,
-        &SignedIn {
-            redirect_to: location,
-        },
-    );
-    passwords.remember(&mut response, headers, &user.subject);
-    crate::clear_cookie(&mut response, FLOW_COOKIE, "Lax");
-    Ok(response)
+    let result: Result<Response, Failure> = async {
+        check_request(&headers, service.oauth.issuer.as_str())?;
+        let request: SignInRequest = parse(&body)?;
+        let authentication = authenticate(&service, &headers, &request, &mut identity).await?;
+        audit.credential.clone_from(&authentication.credential);
+        let token = start_session(&service, &authentication).await?;
+        audit.session = Some(token.name().to_owned());
+        let mut response = json(StatusCode::OK, &serde_json::json!({}));
+        service
+            .passwords
+            .remember(&mut response, &headers, &authentication.subject);
+        Ok(with_cookie(response, &token))
+    }
+    .await;
+    let logged = result.as_ref().map(|_| ()).map_err(Failure::problem);
+    log_outcome("account.sign_in", identity.as_ref(), &audit, &logged);
+    result.unwrap_or_else(Failure::respond)
 }
 
 /// Clears this browser's count, marks the second factor used, and stores a stronger hash.

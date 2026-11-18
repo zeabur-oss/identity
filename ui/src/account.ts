@@ -1,4 +1,4 @@
-// Account page: sign in, then rename, add and remove passkeys, link and unlink GitHub or Google
+// Account page: sign in with a password or a passkey, then rename, add and remove passkeys, link and unlink GitHub or Google
 // accounts, change or remove a password, and end sessions. Adding, linking and removing need a passkey confirmation from the
 // last five minutes. The server says when one is due ("reauth-required"), and the page asks for
 // it, then retries once.
@@ -16,6 +16,7 @@ import {
   supported,
   write,
 } from "./webauthn"
+import { codeStep, entered, wireOtherAccount } from "./password"
 
 const root = document.getElementById("account")
 const text = messages(root)
@@ -35,6 +36,9 @@ const errors: Record<string, string> = {
   "password-held": "msgPasswordHeld",
   "password-conflict": "msgPasswordConflict",
   busy: "msgBusy",
+  "password-failed": "msgPasswordFailed",
+  "code-failed": "msgCodeFailed",
+  "admin-needs-two-factor": "msgAdminTwoFactor",
 }
 
 const weaknesses: Record<string, string> = {
@@ -170,6 +174,19 @@ function refused(reply: Reply, place: Place, passkey: string): void {
   else fail(place, explain(code))
 }
 
+function signInWithPassword(event: SubmitEvent): void {
+  event.preventDefault()
+  const { username, password, code } = entered()
+  if (!username || !password) return fail(header, text("msgPasswordMissing"))
+  run(async () => {
+    const reply = await post("/account/session/password", { username, password, code })
+    if (problem(reply) !== "code-needed") return reply
+    write(header.status, "")
+    codeStep(true)
+    return null
+  })
+}
+
 function signIn(): void {
   run(async () => {
     const credential = await assertion("/account/session/options", {})
@@ -299,11 +316,16 @@ if (root) {
       run(() => post("/account/sessions/revoke", { name: item.dataset.session ?? "" }))
     })
   }
+  document.getElementById("sign-in")?.addEventListener("submit", signInWithPassword)
+  wireOtherAccount(() => {
+    fail(header, "")
+    codeStep(false)
+  })
   const signInButton = document.getElementById("account-sign-in")
   const add = document.getElementById("add") as HTMLFormElement | null
   if (!supported()) {
     document.getElementById("unsupported")?.removeAttribute("hidden")
-    if (signInButton) signInButton.hidden = true
+    document.getElementById("passkey-sign-in")?.setAttribute("hidden", "")
     if (add) add.hidden = true
   } else {
     signInButton?.addEventListener("click", signIn)

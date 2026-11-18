@@ -389,6 +389,9 @@ pub struct AccountView<'a> {
     pub admin: bool,
     /// The user's password, if they have one.
     pub password: Option<PasswordView>,
+    /// The user can confirm with a passkey, which adding a passkey and linking or unlinking an
+    /// account need. False for a password sign-in by a user with no passkey.
+    pub passkey_confirms: bool,
     /// The user's sessions and app grants.
     pub sessions: &'a [SessionRow<'a>],
 }
@@ -461,6 +464,7 @@ struct AccountItems<'a> {
     providers: &'a [ProviderButton<'a>],
     admin: bool,
     password: Option<PasswordView>,
+    passkey_confirms: bool,
     sessions: Vec<SessionItem<'a>>,
 }
 
@@ -511,6 +515,7 @@ pub fn account_page(lang: Lang, view: Option<AccountView<'_>>) -> Response {
         providers: view.providers,
         admin: view.admin,
         password: view.password,
+        passkey_confirms: view.passkey_confirms,
         sessions: view
             .sessions
             .iter()
