@@ -35,6 +35,9 @@ use crate::{
 
 /// Cookie holding the browser's device entries, one per user who signed in here.
 pub const DEVICE_COOKIE: &str = "__Host-zeabur-identity-device";
+/// Joins the entries in the device cookie. Cookie values cannot hold `,`, `;` or spaces
+/// (RFC 6265 §4.1.1), and each entry already uses `.` between its parts.
+const ENTRY_SEPARATOR: &str = "~";
 /// The most users a browser remembers. The oldest entry is dropped first.
 const DEVICE_ENTRIES: usize = 4;
 /// 400 days, the longest lifetime browsers keep (RFC 6265bis §5.5).
@@ -121,7 +124,7 @@ impl Passwords {
     /// The device this browser has for `subject`, if its cookie holds a valid entry.
     fn device(&self, headers: &HeaderMap, subject: &str) -> Option<String> {
         cookie(headers, DEVICE_COOKIE)?
-            .split('~')
+            .split(ENTRY_SEPARATOR)
             .find_map(|entry| self.devices.check(entry, subject))
     }
 
@@ -129,7 +132,7 @@ impl Passwords {
     pub(crate) fn remember(&self, response: &mut Response, headers: &HeaderMap, subject: &str) {
         let mut entries: Vec<&str> = cookie(headers, DEVICE_COOKIE)
             .unwrap_or_default()
-            .split('~')
+            .split(ENTRY_SEPARATOR)
             .filter(|entry| {
                 entry
                     .split_once('.')
@@ -156,7 +159,7 @@ impl Passwords {
             }
         }
         let skip = entries.len().saturating_sub(DEVICE_ENTRIES);
-        let value = entries.split_off(skip).join("~");
+        let value = entries.split_off(skip).join(ENTRY_SEPARATOR);
         // Lax, so the cookie also reaches the upstream callback, a cross-site navigation.
         set_cookie_with(response, DEVICE_COOKIE, &value, DEVICE_MAX_AGE, "Lax");
     }
@@ -523,7 +526,7 @@ mod tests {
             value = set_value(&response);
         }
         let headers = with_cookie(&value);
-        assert_eq!(value.split('~').count(), DEVICE_ENTRIES);
+        assert_eq!(value.split(ENTRY_SEPARATOR).count(), DEVICE_ENTRIES);
         assert!(passwords.device(&headers, "a").is_none());
         let b = passwords.device(&headers, "b").unwrap();
         let mut response = Response::default();
@@ -544,6 +547,6 @@ mod tests {
         assert!(ours.device(&with_cookie(&foreign), "a").is_none());
         let mut response = Response::default();
         ours.remember(&mut response, &with_cookie(&foreign), "b");
-        assert_eq!(set_value(&response).split('~').count(), 1);
+        assert_eq!(set_value(&response).split(ENTRY_SEPARATOR).count(), 1);
     }
 }
