@@ -30,7 +30,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: zeabur-oss/.github/actions/ci-setup@01d7c04f44028272077eaf4ab97f4de5257aad65 # main
+      - uses: zeabur-oss/.github/actions/ci-setup@f3ae87d7ef3c37447432e398200d200b546dfa46 # main
         with:
           rust-cache: true
       - parallel:
@@ -53,7 +53,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: zeabur-oss/.github/actions/ci-setup@01d7c04f44028272077eaf4ab97f4de5257aad65 # main
+      - uses: zeabur-oss/.github/actions/ci-setup@f3ae87d7ef3c37447432e398200d200b546dfa46 # main
         with:
           rust-cache: true
       - run: nix develop -c scripts/ci/test.sh
@@ -67,7 +67,7 @@ jobs:
           persist-credentials: false
           # fallow audit compares HEAD with HEAD^.
           fetch-depth: 2
-      - uses: zeabur-oss/.github/actions/ci-setup@01d7c04f44028272077eaf4ab97f4de5257aad65 # main
+      - uses: zeabur-oss/.github/actions/ci-setup@f3ae87d7ef3c37447432e398200d200b546dfa46 # main
         with:
           rust-cache: true
       - run: nix develop -c scripts/ci/ui.sh
@@ -80,7 +80,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: zeabur-oss/.github/actions/ci-setup@01d7c04f44028272077eaf4ab97f4de5257aad65 # main
+      - uses: zeabur-oss/.github/actions/ci-setup@f3ae87d7ef3c37447432e398200d200b546dfa46 # main
         with:
           rust-cache: true
       - run: nix develop -c scripts/ci/kubernetes.sh

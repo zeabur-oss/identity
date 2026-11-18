@@ -4,11 +4,11 @@
   "workspaces": {
     "": {
       "dependencies": {
-        "@zeabur-oss/release": "github:zeabur-oss/.github#7dae91680f85a518180a8f5a5d80b0ac4ffe52b7",
+        "@zeabur-oss/release": "github:zeabur-oss/.github#f3ae87d7ef3c37447432e398200d200b546dfa46",
       },
     },
   },
   "packages": {
-    "@zeabur-oss/release": ["@zeabur-oss/release@github:zeabur-oss/.github#7dae916", { "bin": { "zeabur-oss-release": "./release/cli.ts", "zeabur-oss-unsafe-report": "./checks/unsafe-report.ts" } }, "zeabur-oss-.github-7dae916", "sha512-drpQLT2HggFgOXaMdG5qrkJkhPwp92wv9RjyLgHd0TEbQB+o4wrqUqzgKue/h4budK24Zvndk2Frf4qTffTWNQ=="],
+    "@zeabur-oss/release": ["@zeabur-oss/release@github:zeabur-oss/.github#f3ae87d", { "bin": { "zeabur-oss-release": "./release/cli.ts", "zeabur-oss-unsafe-report": "./checks/unsafe-report.ts" } }, "zeabur-oss-.github-f3ae87d", "sha512-/Ci6Zx++waSi46wNcfaf7Wrg4y7XgEgCz+hUwU6VgGc82Hepkfp1XQRYgkyNCOcrN6JvNRD63NLIcmcDT2d2Vw=="],
   }
 }
