@@ -332,6 +332,14 @@ where
     let user = identity.insert(user);
     let device = passwords.device(headers, &user.subject);
     if let Some(until) = stored.guesses.held(device.as_deref(), now) {
+        if device.is_none() {
+            // A browser this user never signed in with gets the answer of a wrong password, so a
+            // hold does not show that the account exists.
+            passwords
+                .run(move |hasher| hasher.verify_nothing(&entered))
+                .await?;
+            return Err(PASSWORD_FAILED.into());
+        }
         let seconds = until.as_secs().saturating_sub(now.as_secs()).max(1);
         return Err(Failure::Retry(PASSWORD_HELD, seconds));
     }
@@ -478,11 +486,21 @@ where
     if service.setup.consume(&token).await.map_err(internal)? == Consume::AlreadyUsed {
         return Err(SETUP_INVALID.into());
     }
-    service
-        .credentials
-        .set_password(&owner, &hash, None)
-        .await
-        .map_err(internal)?;
+    // Another setup of this user can write between the read and the write; the later one wins.
+    let mut saved = Saved::Conflict;
+    for _ in 0..3 {
+        saved = service
+            .credentials
+            .set_password(&owner, &hash, None)
+            .await
+            .map_err(internal)?;
+        if saved == Saved::Saved {
+            break;
+        }
+    }
+    if saved == Saved::Conflict {
+        return Err(internal("the password credential kept changing during setup").into());
+    }
     let audit = Audit {
         credential: Some(zeabur_identity_store::password_credential_name(
             &owner.subject,

@@ -2056,13 +2056,13 @@ mod tests {
                 let reply = sign_in(&h, "dana", "a wrong guess, again and again", None).await;
                 assert_eq!(reply.status, StatusCode::UNAUTHORIZED);
             }
-            // Held back, even with the right password, and without hashing.
+            // Held back, even with the right password. The answer is the one an unknown user gets,
+            // so a hold does not show that dana exists.
             let reply = sign_in(&h, "dana", GOOD, None).await;
-            assert_eq!(reply.status, StatusCode::TOO_MANY_REQUESTS);
-            assert_eq!(
-                reply.headers[header::RETRY_AFTER],
-                HOLD.as_secs().to_string()
-            );
+            assert_eq!(reply.status, StatusCode::UNAUTHORIZED);
+            assert!(!reply.headers.contains_key(header::RETRY_AFTER));
+            let unknown = sign_in(&h, "nobody", GOOD, None).await;
+            assert_eq!(reply.body, unknown.body);
             // The browser dana signed in with still works.
             let reply = sign_in(&h, "dana", GOOD, Some(&device)).await;
             assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
