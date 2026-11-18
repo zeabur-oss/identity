@@ -54,6 +54,21 @@
             ""
           ],
           "resourceNames": [
+            "zeabur-identity-password-key"
+          ],
+          "resources": [
+            "secrets"
+          ],
+          "verbs": [
+            "get",
+            "update"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resourceNames": [
             "zeabur-identity-setup"
           ],
           "resources": [
@@ -257,6 +272,18 @@
         "namespace": "zeabur-identity"
       },
       "type": "identity.zeabur.com/signing-keys"
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Secret",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/managed-by": "zeabur-identity"
+        },
+        "name": "zeabur-identity-password-key",
+        "namespace": "zeabur-identity"
+      },
+      "type": "identity.zeabur.com/password-key"
     }
   ],
   "kind": "List"

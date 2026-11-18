@@ -12,6 +12,7 @@ use zeabur_identity_api::upstream::{ExternalId, Issuer};
 use zeabur_identity_core::account::{AccountType, Settings};
 use zeabur_identity_core::clock::UnixTime;
 use zeabur_identity_core::crypto::ct_eq;
+use zeabur_identity_core::guessing::Counts;
 
 /// A storage backend failed or answered ambiguously.
 ///
@@ -740,6 +741,50 @@ pub struct StoredPasskey {
     pub last_used_at: Option<UnixTime>,
 }
 
+/// The `Credential` name for a user's password. Derived from the `User` UID, so a user has at
+/// most one, and a password left over from a deleted `User` of the same name is not found.
+#[must_use]
+pub fn password_credential_name(subject: &str) -> String {
+    let mut input = b"zeabur-identity/password/v1/".to_vec();
+    input.extend_from_slice(subject.as_bytes());
+    format!(
+        "c-{}",
+        zeabur_identity_core::crypto::hex(&zeabur_identity_core::crypto::sha256(&input))
+    )
+}
+
+/// A stored password.
+#[derive(Clone, PartialEq, Eq)]
+pub struct StoredPassword {
+    /// `Credential` object name.
+    pub name: String,
+    /// The hash (see [`zeabur_identity_core::password::Hasher`]).
+    pub hash: String,
+    /// Failed sign-ins.
+    pub guesses: Counts,
+    /// The stored version that [`CredentialStore::save_guesses`] and
+    /// [`CredentialStore::set_password`] compare against.
+    pub version: String,
+}
+
+impl std::fmt::Debug for StoredPassword {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StoredPassword")
+            .field("name", &self.name)
+            .field("guesses", &self.guesses)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Outcome of a write that compares against a stored version.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Saved {
+    /// Written.
+    Saved,
+    /// The stored value changed since it was read; nothing was written.
+    Conflict,
+}
+
 /// Outcome of [`CredentialStore::create`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CreateCredential {
@@ -803,9 +848,9 @@ pub trait CredentialStore: Send + Sync + 'static {
         user: &User,
     ) -> impl Future<Output = Result<Vec<LinkedSummary>, StoreError>> + Send;
 
-    /// Deletes one of `user`'s linked accounts if the user keeps another credential (a passkey
-    /// or another linked account). Two concurrent unlinks must never both succeed when they
-    /// would leave the user with no credential.
+    /// Deletes one of `user`'s linked accounts if the user keeps another credential (a passkey,
+    /// a password or another linked account). Two concurrent unlinks must never both succeed when
+    /// they would leave the user with no credential.
     fn unlink(
         &self,
         user: &User,
@@ -822,6 +867,28 @@ pub trait CredentialStore: Send + Sync + 'static {
 
     /// Records an [`AccountEvent`] where administrators look for it.
     fn record(&self, event: &AccountEvent) -> impl Future<Output = Result<(), StoreError>> + Send;
+
+    /// The password of `user`, if they have one.
+    fn password(
+        &self,
+        user: &User,
+    ) -> impl Future<Output = Result<Option<StoredPassword>, StoreError>> + Send;
+
+    /// Stores `hash` as the password of `user`. With `replacing`, replaces that stored password
+    /// unless it changed since it was read; without, adds one, or replaces any it finds.
+    fn set_password(
+        &self,
+        user: &User,
+        hash: &str,
+        replacing: Option<&StoredPassword>,
+    ) -> impl Future<Output = Result<Saved, StoreError>> + Send;
+
+    /// Saves new guess counts for a stored password unless it changed since it was read.
+    fn save_guesses(
+        &self,
+        stored: &StoredPassword,
+        guesses: &Counts,
+    ) -> impl Future<Output = Result<Saved, StoreError>> + Send;
 }
 
 /// The pending setup token: who it is for, its hash and expiry, and the stored version that a
@@ -886,6 +953,8 @@ pub struct MemoryCredentialStore {
     passkeys: Mutex<HashMap<String, MemoryPasskey>>,
     externals: Mutex<HashMap<String, (LinkedAccount, Issuer)>>,
     events: Mutex<Vec<AccountEvent>>,
+    passwords: Mutex<HashMap<String, StoredPassword>>,
+    versions: std::sync::atomic::AtomicU64,
 }
 
 #[derive(Debug, Clone)]
@@ -903,6 +972,12 @@ impl MemoryCredentialStore {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
+    }
+
+    fn next_version(&self) -> String {
+        self.versions
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            .to_string()
     }
 
     /// Deletes a passkey as an administrator would, without the last-passkey check.
@@ -1084,10 +1159,17 @@ impl CredentialStore for MemoryCredentialStore {
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         let owned = |linked: &LinkedAccount| linked.signs_in_as(user);
+        let password = usize::from(
+            self.passwords
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .contains_key(&password_credential_name(&user.subject)),
+        );
         let others = passkeys
             .values()
             .filter(|stored| stored.passkey.user == user.name)
             .count()
+            + password
             + externals
                 .iter()
                 .filter(|(other, (linked, ..))| other.as_str() != name && owned(linked))
@@ -1130,6 +1212,74 @@ impl CredentialStore for MemoryCredentialStore {
             .unwrap_or_else(PoisonError::into_inner)
             .push(event.clone());
         future::ready(Ok(()))
+    }
+
+    fn password(
+        &self,
+        user: &User,
+    ) -> impl Future<Output = Result<Option<StoredPassword>, StoreError>> + Send {
+        let passwords = self
+            .passwords
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let found = passwords
+            .get(&password_credential_name(&user.subject))
+            .cloned();
+        drop(passwords);
+        future::ready(Ok(found))
+    }
+
+    fn set_password(
+        &self,
+        user: &User,
+        hash: &str,
+        replacing: Option<&StoredPassword>,
+    ) -> impl Future<Output = Result<Saved, StoreError>> + Send {
+        let name = password_credential_name(&user.subject);
+        let mut passwords = self
+            .passwords
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let current = passwords.get(&name).map(|p| p.version.clone());
+        let outcome = match replacing {
+            Some(read) if current.as_deref() != Some(read.version.as_str()) => Saved::Conflict,
+            _ => {
+                passwords.insert(
+                    name.clone(),
+                    StoredPassword {
+                        name,
+                        hash: hash.to_owned(),
+                        guesses: Counts::default(),
+                        version: self.next_version(),
+                    },
+                );
+                Saved::Saved
+            }
+        };
+        drop(passwords);
+        future::ready(Ok(outcome))
+    }
+
+    fn save_guesses(
+        &self,
+        stored: &StoredPassword,
+        guesses: &Counts,
+    ) -> impl Future<Output = Result<Saved, StoreError>> + Send {
+        let version = self.next_version();
+        let mut passwords = self
+            .passwords
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let outcome = match passwords.get_mut(&stored.name) {
+            Some(current) if current.version == stored.version => {
+                current.guesses = guesses.clone();
+                current.version = version;
+                Saved::Saved
+            }
+            Some(_) | None => Saved::Conflict,
+        };
+        drop(passwords);
+        future::ready(Ok(outcome))
     }
 }
 

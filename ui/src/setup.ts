@@ -1,4 +1,5 @@
-// Setup page: registers a passkey with the one-time token from the URL fragment.
+// Setup page: registers a passkey, or sets a password, with the one-time token from the URL
+// fragment.
 import {
   cancelled,
   creationOptions,
@@ -13,7 +14,10 @@ import {
 } from "./webauthn"
 
 const form = document.getElementById("setup") as HTMLFormElement | null
+const passwordForm = document.getElementById("setup-password") as HTMLFormElement | null
+const alternatives = document.getElementById("alternatives")
 const text = messages(form)
+const weakText = messages(passwordForm)
 const token = new URLSearchParams(window.location.hash.slice(1)).get("token")
 
 // Keep the token when switching language: the links carry the fragment.
@@ -26,7 +30,8 @@ function invalid(): void {
   say("error", text("msgInvalid"))
   document.getElementById("new-link")?.removeAttribute("hidden")
   if (form) form.hidden = true
-  document.getElementById("upstream")?.setAttribute("hidden", "")
+  passwordForm?.setAttribute("hidden", "")
+  alternatives?.setAttribute("hidden", "")
 }
 
 const failures: Record<string, string> = {
@@ -35,6 +40,15 @@ const failures: Record<string, string> = {
   "account-disabled": "msgDisabled",
   "ceremony-expired": "msgExpired",
   "passkey-exists": "msgExists",
+  "admin-needs-passkey": "msgAdminPasskey",
+  busy: "msgBusy",
+}
+
+const weaknesses: Record<string, string> = {
+  "too-short": "msgTooShort",
+  "too-long": "msgTooLong",
+  common: "msgCommon",
+  context: "msgContext",
 }
 
 /** A request the server refused, with the problem it named. */
@@ -52,7 +66,7 @@ function refused(kind: string): void {
   else say("error", text(failures[kind] ?? "msgError"))
 }
 
-/** Set while a passkey is being registered: a second press would start a second ceremony. */
+/** Set while a passkey is registered or a password is set: the link works only once. */
 let registering = false
 
 function register(event: SubmitEvent): void {
@@ -62,7 +76,7 @@ function register(event: SubmitEvent): void {
   say("error", "")
   say("status", text("msgWorking"))
   enrol(token)
-    .then(done)
+    .then(() => done(false))
     .catch((error: unknown) => {
       say("status", "")
       if (error instanceof Refused) refused(error.kind)
@@ -86,21 +100,61 @@ async function enrol(token: string): Promise<void> {
   })
   if (!(credential instanceof PublicKeyCredential))
     throw new DOMException("no credential", "NotAllowedError")
-  const label = document.querySelector<HTMLInputElement>("#label")?.value.trim()
-  accepted(
-    await post("/setup", { token, credential: registrationJson(credential), label: label || null }),
-  )
+  accepted(await post("/setup", { token, credential: registrationJson(credential), label: null }))
 }
 
-// Done: forget the token in the address bar and history, show the result.
-function done(): void {
+/** The password typed, if it is long enough to send; otherwise says why not. */
+function typedPassword(): string | null {
+  const password = document.querySelector<HTMLInputElement>("#new-password")?.value ?? ""
+  if ([...password].length >= 15) return password
+  say("error", weakText("msgTooShort"))
+  return null
+}
+
+function setPassword(event: SubmitEvent): void {
+  event.preventDefault()
+  if (!token || registering) return
+  say("status", "")
+  const password = typedPassword()
+  if (password === null) return
+  registering = true
+  say("error", "")
+  post("/setup/password", { token, password })
+    .then(answered)
+    .catch(() => say("error", text("msgError")))
+    .finally(() => {
+      registering = false
+    })
+}
+
+function answered(reply: Reply): void {
+  if (reply.ok) return done(true)
+  const kind = problem(reply)
+  if (kind !== "password-weak") return refused(kind)
+  const weakness = String(reply.body.weakness)
+  say("error", weakText(weaknesses[weakness] ?? "msgCommon"))
+}
+
+// Done: forget the token in the address bar and history, show the result. The backup advice is
+// about passkeys only.
+function done(password: boolean): void {
   say("status", "")
   window.history.replaceState(null, "", window.location.pathname + window.location.search)
   if (form) form.hidden = true
-  document.getElementById("upstream")?.setAttribute("hidden", "")
+  passwordForm?.setAttribute("hidden", "")
+  alternatives?.setAttribute("hidden", "")
+  if (password) document.querySelector('[data-slot="backup"]')?.setAttribute("hidden", "")
   const view = document.getElementById("done")
   view?.removeAttribute("hidden")
   view?.focus()
+}
+
+/** Shows the password form alone, or the other ways back, with the passkey only if supported. */
+function choosePassword(chosen: boolean): void {
+  say("error", "")
+  passwordForm?.toggleAttribute("hidden", !chosen)
+  alternatives?.toggleAttribute("hidden", chosen)
+  form?.toggleAttribute("hidden", chosen || !supported())
 }
 
 if (form) {
@@ -112,14 +166,24 @@ if (form) {
       "account-disabled": () => say("error", text("msgDisabled")),
     })
   else document.getElementById("upstream")?.setAttribute("hidden", "")
-  if (!supported()) {
-    document.getElementById("unsupported")?.removeAttribute("hidden")
-    form.hidden = true
-  } else if (!token) {
+  if (!token) {
     say("error", text("msgMissing"))
     document.getElementById("new-link")?.removeAttribute("hidden")
     form.hidden = true
+    alternatives?.setAttribute("hidden", "")
   } else {
-    form.addEventListener("submit", register)
+    passwordForm?.addEventListener("submit", setPassword)
+    document.getElementById("use-password")?.addEventListener("click", () => {
+      choosePassword(true)
+      document.querySelector<HTMLInputElement>("#new-password")?.focus()
+    })
+    document.getElementById("other-ways")?.addEventListener("click", () => choosePassword(false))
+    if (supported()) form.addEventListener("submit", register)
+    else {
+      // Nothing above the other ways to set them apart from.
+      document.getElementById("unsupported")?.removeAttribute("hidden")
+      form.hidden = true
+      alternatives?.querySelector('[data-slot="field-separator"]')?.setAttribute("hidden", "")
+    }
   }
 }

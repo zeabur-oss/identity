@@ -39,14 +39,27 @@
           data-msg-working="{{ m.working }}" data-msg-error="{{ m.generic_error }}"
           data-msg-invalid="{{ m.setup_invalid }}" data-msg-missing="{{ m.setup_missing_token }}"
           data-msg-device-passkey="{{ m.device_passkey_needed }}" data-msg-admin-passkey="{{ m.admin_passkey_only }}"
-          data-msg-disabled="{{ m.account_disabled }}" data-msg-expired="{{ m.ceremony_expired }}" data-msg-exists="{{ m.setup_passkey_exists }}">
-      {% call ui::field("label", m.setup_label, m.setup_label_hint) %}
-      <input id="label" name="label" type="text" maxlength="64" class="{{ ds::input() }}" autocomplete="off"
-             {{- ui::field_describedby("label", m.setup_label_hint) }}>
-      {% endcall %}
+          data-msg-disabled="{{ m.account_disabled }}" data-msg-busy="{{ m.busy }}" data-msg-expired="{{ m.ceremony_expired }}" data-msg-exists="{{ m.setup_passkey_exists }}">
       <button type="submit" class="{{ ds::button("primary", "lg") }} w-full">{{ icons::icon("Fingerprint") }}{{ m.setup_create }}</button>
     </form>
-    {{ upstream::buttons(providers, m) }}
+    <div id="alternatives" class="flex flex-col gap-5">
+      {{ ui::field_separator(m.upstream_or) }}
+      <div class="flex flex-col gap-3">
+        <button type="button" id="use-password" class="{{ ds::button("secondary", "lg") }} w-full">{{ icons::icon("Key") }}{{ m.setup_password_submit }}</button>
+        {{ upstream::buttons(providers, m) }}
+      </div>
+    </div>
+    <form id="setup-password" hidden class="flex flex-col gap-5" novalidate
+          data-msg-too-short="{{ m.weak_too_short }}" data-msg-too-long="{{ m.weak_too_long }}"
+          data-msg-common="{{ m.weak_common }}" data-msg-context="{{ m.weak_context }}">
+      {% call ui::field("new-password", m.setup_password, m.setup_password_hint) %}
+      <input id="new-password" name="password" type="password" minlength="15" maxlength="1024" class="{{ ds::input() }}"
+             autocomplete="new-password"
+             {{- ui::field_describedby("new-password", m.setup_password_hint) }}>
+      {% endcall %}
+      <button type="submit" class="{{ ds::button("primary", "lg") }} w-full">{{ m.setup_password_set }}</button>
+      <button type="button" id="other-ways" class="self-center rounded-md text-[0.8125rem] leading-5 text-secondary hover:text-main">{{ m.setup_other_ways }}</button>
+    </form>
   </div>
   {% endcall %}
 {% endcall %}

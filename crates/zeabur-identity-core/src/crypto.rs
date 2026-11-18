@@ -36,6 +36,15 @@ pub fn sha256(data: &[u8]) -> [u8; 32] {
     out
 }
 
+/// HMAC-SHA256 of `data` with `key`.
+#[must_use]
+pub fn hmac_sha256(key: &[u8], data: &[u8]) -> [u8; 32] {
+    let key = aws_lc_rs::hmac::Key::new(aws_lc_rs::hmac::HMAC_SHA256, key);
+    let mut out = [0_u8; 32];
+    out.copy_from_slice(aws_lc_rs::hmac::sign(&key, data).as_ref());
+    out
+}
+
 /// Lower-case hex.
 #[must_use]
 pub fn hex(bytes: &[u8]) -> String {

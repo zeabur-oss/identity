@@ -62,7 +62,7 @@ If the user already has a passkey or linked account, `invite` reports an error a
 
 ### Give the link to the user
 
-Send the link to Alice through a channel you trust. She can open the link to create a passkey. If you've [added an upstream sign-in](./upstream-sign-in.mdx), such as GitHub, she can link that account instead.
+Send the link to Alice through a channel you trust. She can open the link to create a passkey or set a password. If you've [added an upstream sign-in](./upstream-sign-in.mdx), such as GitHub, she can link that account instead.
 
 <Callout type="warn">
 
@@ -155,6 +155,16 @@ If the user has the label `identity.zeabur.com/source=directory`, directory sync
 `groups` doesn't accept the `admins` group. Only the account type determines membership in this group. See [Admin accounts and sessions](./admin-sessions.mdx).
 
 You can't change a username because RBAC bindings and audit records reference it. To change a username, create a new user, then [remove the old user](./offboarding.mdx).
+
+## Passwords
+
+On the setup page, regular users can set a password instead of a passkey. They sign in with their username and that password. Admin accounts must use a passkey.
+
+A password must have at least 15 characters. Zeabur Identity refuses common passwords and passwords that contain the username or the site name.
+
+Each browser where the user has signed in before keeps its own count of wrong passwords. All other browsers share one count. After 10 wrong passwords in 1 hour on a count, Zeabur Identity refuses passwords on that count for 1 hour. Wrong guesses from other places can't lock the user out of their own browsers.
+
+Users can't change or remove a password on the account page yet. To reset a password, delete its `Credential` and send a new setup link.
 
 ## Let users manage their accounts
 

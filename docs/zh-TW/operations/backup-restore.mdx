@@ -40,6 +40,7 @@ Zeabur Identity 用 `User` 物件的 UID 識別每個人。每個權杖的 `sub`
 | 叢集的資料存放區備份，以及發行版開啟備份所需的伺服器權杖、加密金鑰與叢集憑證 | 只有這種備份能保留 UID 與通行密鑰。快照如果無法解密，就無法用來還原。 |
 | `users`、`credentials`、`oauthclients`、`upstreamproviders`（`*.identity.zeabur.com`） | 儲存使用者與群組、通行密鑰紀錄、已連結的外部帳號、已註冊的用戶端，以及登入提供者。 |
 | Secret `zeabur-identity-signing-keys` | 儲存所有私密簽署金鑰，包含即將啟用與已退役的金鑰。其他資料無法重建這些金鑰。 |
+| Secret `zeabur-identity-password-key` | 儲存 Zeabur Identity 雜湊密碼時加入的金鑰。少了它，所有密碼都會失效，使用者必須透過設定連結重設密碼。 |
 | Secret `zeabur-identity-internal-ca` | 儲存根 CA 與私密金鑰。cert-manager 用它簽發憑證，供 kube-apiserver 連線到內部位址時驗證。這份 Secret 要與每台控制平面機器上的驗證檔案一起儲存。cert-manager 會用它重新簽發 `zeabur-identity-internal-tls`。 |
 | Deployment、Service、ServiceAccount、Role 與 RoleBinding `zeabur-identity`，以及 ClusterRoleBinding `zeabur-identity-cluster-admins` | 儲存 Zeabur Identity 的執行方式與管理員權限。也要備份你為其他應用程式建立的 RoleBinding。 |
 | ConfigMap `zeabur-identity-settings`，如果你有建立 | 儲存 `teams` 與 `admin-aal3` 設定。缺少它時，所有設定都會回到預設值。 |
@@ -105,7 +106,8 @@ for resource in users credentials oauthclients grants invitations; do
   kubectl -n "$NS" get "$resource.identity.zeabur.com" -o json \
     > "$BACKUP/$resource.json"
 done
-kubectl -n "$NS" get secret zeabur-identity-signing-keys zeabur-identity-internal-ca -o json \
+kubectl -n "$NS" get secret zeabur-identity-signing-keys zeabur-identity-internal-ca \
+  zeabur-identity-password-key -o json \
   > "$BACKUP/identity-secrets.json"
 kubectl -n "$NS" get svc zeabur-identity -o json > "$BACKUP/service.json"
 kubectl -n "$NS" get serviceaccount/zeabur-identity role/zeabur-identity rolebinding/zeabur-identity -o json \
@@ -379,7 +381,7 @@ done
 
 `identity-secrets.json` 包含清單，其他檔案各包含一份 Secret。這個篩選器能處理兩種格式。
 
-這裡使用 `apply`，因為安裝程式已建立空的簽署金鑰 Secret。如果套用時回報衝突，先查明欄位擁有者，再決定是否加入 `--force-conflicts`。
+這裡使用 `apply`，因為安裝程式已建立空的簽署金鑰與密碼金鑰 Secret。如果套用時回報衝突，先查明欄位擁有者，再決定是否加入 `--force-conflicts`。
 
 </Step>
 

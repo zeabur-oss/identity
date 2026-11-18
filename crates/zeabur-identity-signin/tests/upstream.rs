@@ -315,6 +315,7 @@ mod tests {
             setup,
             used_ceremonies: OneTimeIds::default(),
             providers: Arc::new(Providers::new(providers)),
+            passwords: zeabur_identity_signin::password::Passwords::with_iterations(&[9; 32], 1),
         });
         let fake = Arc::new(Fake {
             issuer: google_issuer.to_owned(),

@@ -40,6 +40,7 @@ Keep the following data together. Record the backup date, Zeabur Identity image 
 | The cluster's datastore backup, plus the server token, encryption keys, and cluster certificates that your distribution needs to open it | This is the only way to preserve UIDs and passkeys. You can't restore a snapshot that you can't decrypt. |
 | `users`, `credentials`, `oauthclients`, and `upstreamproviders` (`*.identity.zeabur.com`) | Preserve users and groups, passkey records, linked upstream accounts, registered clients, and sign-in providers. |
 | Secret `zeabur-identity-signing-keys` | Preserves all private signing keys, including keys scheduled for activation and retired keys. Other data can't reconstruct these keys. |
+| Secret `zeabur-identity-password-key` | Preserves the key that Zeabur Identity mixes into every password hash. Without it, no password works, and users must set a new one with a setup link. |
 | Secret `zeabur-identity-internal-ca` | Preserves the root CA and private key. cert-manager uses it to issue the certificate that kube-apiserver verifies when it connects to the internal address. Keep this Secret with the authentication files on every control plane machine. cert-manager uses it to reissue `zeabur-identity-internal-tls`. |
 | Deployment, Service, ServiceAccount, Role, and RoleBinding `zeabur-identity`, plus ClusterRoleBinding `zeabur-identity-cluster-admins` | Preserve how Zeabur Identity runs and its admin permissions. Also back up any RoleBindings you created for other applications. |
 | ConfigMap `zeabur-identity-settings`, if you created it | Preserves the `teams` and `admin-aal3` settings. Without it, all settings return to their defaults. |
@@ -105,7 +106,8 @@ for resource in users credentials oauthclients grants invitations; do
   kubectl -n "$NS" get "$resource.identity.zeabur.com" -o json \
     > "$BACKUP/$resource.json"
 done
-kubectl -n "$NS" get secret zeabur-identity-signing-keys zeabur-identity-internal-ca -o json \
+kubectl -n "$NS" get secret zeabur-identity-signing-keys zeabur-identity-internal-ca \
+  zeabur-identity-password-key -o json \
   > "$BACKUP/identity-secrets.json"
 kubectl -n "$NS" get svc zeabur-identity -o json > "$BACKUP/service.json"
 kubectl -n "$NS" get serviceaccount/zeabur-identity role/zeabur-identity rolebinding/zeabur-identity -o json \
@@ -379,7 +381,7 @@ done
 
 `identity-secrets.json` contains a list. Each of the other files contains a single Secret. This filter handles both formats.
 
-This step uses `apply` because the installer has already created an empty signing key Secret. If the apply reports a conflict, identify the field owner before deciding whether to add `--force-conflicts`.
+This step uses `apply` because the installer has already created empty signing key and password key Secrets. If the apply reports a conflict, identify the field owner before deciding whether to add `--force-conflicts`.
 
 </Step>
 

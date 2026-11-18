@@ -1,6 +1,6 @@
 //! Account types, and the install-wide settings that decide how each type signs in.
 //!
-//! An admin account signs in only with a passkey, never with a linked GitHub or Google account,
+//! An admin account signs in only with a passkey, never with a password or a linked account,
 //! and its tokens carry the admin group (`zeabur_identity_api::ADMIN_GROUP`). A regular account may
 //! use every sign-in method the server offers. With [`Settings::admin_aal3`], an admin account
 //! also needs a device-bound passkey: one whose authenticator reports the WebAuthn backup
@@ -98,6 +98,8 @@ pub enum Method {
     },
     /// A linked GitHub or Google account.
     Upstream,
+    /// A password.
+    Password,
 }
 
 /// Why an account cannot use a sign-in method.
@@ -120,8 +122,12 @@ pub const fn allows(
     method: Method,
 ) -> Result<(), Refusal> {
     match (account, method) {
-        (AccountType::Regular, Method::Passkey { .. } | Method::Upstream) => Ok(()),
-        (AccountType::Admin, Method::Upstream) => Err(Refusal::AdminNeedsPasskey),
+        (AccountType::Regular, Method::Passkey { .. } | Method::Upstream | Method::Password) => {
+            Ok(())
+        }
+        (AccountType::Admin, Method::Upstream | Method::Password) => {
+            Err(Refusal::AdminNeedsPasskey)
+        }
         (AccountType::Admin, Method::Passkey { device_bound }) => {
             if settings.admin_aal3 && !device_bound {
                 Err(Refusal::AdminNeedsDeviceBoundPasskey)
@@ -181,6 +187,11 @@ mod tests {
         );
         assert_eq!(allows(AccountType::Regular, aal3, SYNCED), Ok(()));
         assert_eq!(allows(AccountType::Regular, aal3, Method::Upstream), Ok(()));
+        assert_eq!(allows(AccountType::Regular, aal3, Method::Password), Ok(()));
+        assert_eq!(
+            allows(AccountType::Admin, Settings::default(), Method::Password),
+            Err(Refusal::AdminNeedsPasskey)
+        );
     }
 
     #[test]

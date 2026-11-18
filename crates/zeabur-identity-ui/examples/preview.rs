@@ -289,6 +289,45 @@ async fn setup_options() -> Response {
         .into_response()
 }
 
+fn problem(status: StatusCode, kind: &str, extra: &str) -> Response {
+    (
+        status,
+        [(header::CONTENT_TYPE, "application/problem+json")],
+        format!(
+            r#"{{"type":"urn:zeabur-identity:problem:{kind}","title":"","status":{}{extra}}}"#,
+            status.as_u16()
+        ),
+    )
+        .into_response()
+}
+
+/// The username `held` shows the held-back answer; any other, a wrong password.
+async fn login_password(body: String) -> Response {
+    if body.contains(r#""username":"held""#) {
+        problem(StatusCode::TOO_MANY_REQUESTS, "password-held", "")
+    } else {
+        problem(StatusCode::UNAUTHORIZED, "password-failed", "")
+    }
+}
+
+/// A password with the word `common` in it is refused as common; any other is set.
+async fn setup_password(body: String) -> Response {
+    if body.contains("common") {
+        problem(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "password-weak",
+            r#","weakness":"common""#,
+        )
+    } else {
+        (
+            StatusCode::CREATED,
+            [(header::CONTENT_TYPE, "application/json")],
+            r#"{"username":"alice"}"#,
+        )
+            .into_response()
+    }
+}
+
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     let app = Router::new()
@@ -301,6 +340,7 @@ async fn main() -> std::io::Result<()> {
         )
         .route("/login/{state}", get(login))
         .route("/login/options", post(login_options))
+        .route("/login/password", post(login_password))
         .route(
             "/setup",
             get(|RawQuery(q): RawQuery, h: HeaderMap| async move {
@@ -314,6 +354,7 @@ async fn main() -> std::io::Result<()> {
             }),
         )
         .route("/setup/options", post(setup_options))
+        .route("/setup/password", post(setup_password))
         .route(
             "/account",
             get(|q: RawQuery, h: HeaderMap| account(Path("all".to_owned()), q, h)),

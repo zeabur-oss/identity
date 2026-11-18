@@ -4,6 +4,7 @@ pub mod account;
 pub mod device;
 pub mod pages;
 pub mod passkeys;
+pub mod password;
 pub mod problem;
 pub mod upstream;
 
@@ -38,6 +39,7 @@ use zeabur_identity_store::{
 use crate::account::{Audit, record};
 use crate::device::Requester;
 use crate::passkeys::{Passkeys, authenticator, backup_flags, credential_name};
+use crate::password::Passwords;
 use crate::problem::Problem;
 use crate::upstream::provider::Providers;
 
@@ -75,9 +77,11 @@ pub struct SignIn<D, G, C, K, S> {
     pub used_ceremonies: OneTimeIds,
     /// The upstream providers, shared with the sign-in pages and the upstream routes.
     pub providers: Arc<Providers>,
+    /// Password hashing and device cookies.
+    pub passwords: Passwords,
 }
 
-type Shared<D, G, C, K, S> = Arc<SignIn<D, G, C, K, S>>;
+pub(crate) type Shared<D, G, C, K, S> = Arc<SignIn<D, G, C, K, S>>;
 
 /// The sign-in routes.
 pub fn router<D, G, C, K, S>(service: Shared<D, G, C, K, S>) -> Router
@@ -93,6 +97,8 @@ where
         .route("/setup", post(setup_finish::<D, G, C, K, S>))
         .route("/login/options", post(login_options::<D, G, C, K, S>))
         .route("/login", post(login_finish::<D, G, C, K, S>))
+        .route("/login/password", post(password::sign_in::<D, G, C, K, S>))
+        .route("/setup/password", post(password::set_up::<D, G, C, K, S>))
         .merge(account::routes::<D, G, C, K, S>())
         .with_state(service)
 }
@@ -841,6 +847,9 @@ where
                 accepted: accepted(&service, user).await,
             },
         );
+        service
+            .passwords
+            .remember(&mut response, &headers, &user.subject);
         clear_cookie(&mut response, CEREMONY_COOKIE, "Strict");
         clear_cookie(&mut response, FLOW_COOKIE, "Lax");
         Ok(response)

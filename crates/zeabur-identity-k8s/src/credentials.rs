@@ -15,12 +15,17 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
 use k8s_openapi::jiff::Timestamp;
 use kube::ResourceExt as _;
 use kube::api::{Api, ListParams, ObjectMeta, Patch, PatchParams, PostParams};
-use zeabur_identity_api::credential::{Credential, CredentialKind, CredentialSpec, Passkey};
+use zeabur_identity_api::credential::{
+    Credential, CredentialKind, CredentialSpec, GuessCount, Guesses, KnownGuessCount, Passkey,
+    Password,
+};
 use zeabur_identity_api::{GROUP, USER_LABEL};
 use zeabur_identity_core::clock::UnixTime;
+use zeabur_identity_core::guessing::{Count, Counts, Known};
 use zeabur_identity_store::{
     AccountEvent, CreateCredential, CredentialStore, LinkedAccount, LinkedSummary, NewExternal,
-    NewPasskey, PasskeySummary, Removal, Rename, StoreError, StoredPasskey, Unlink, User,
+    NewPasskey, PasskeySummary, Removal, Rename, Saved, StoreError, StoredPasskey, StoredPassword,
+    Unlink, User, password_credential_name,
 };
 
 use super::MANAGED_BY;
@@ -143,6 +148,83 @@ async fn delete_keeping(
     {
         DeleteOutcome::Deleted => Ok(true),
         DeleteOutcome::Changed | DeleteOutcome::NotFound => Ok(false),
+    }
+}
+
+/// The user's password `Credential`: named by the user's UID, for the user's name, owned by the
+/// user's UID.
+async fn owned_password(
+    api: &Api<Credential>,
+    user: &User,
+) -> Result<Option<Credential>, StoreError> {
+    let object = api
+        .get_opt(&password_credential_name(&user.subject))
+        .await
+        .map_err(|e| backend(&e))?;
+    Ok(object.filter(|object| {
+        object.spec.user == user.name
+            && matches!(object.spec.kind, CredentialKind::Password(_))
+            && user_owner_uid(&object.metadata) == Some(user.subject.as_str())
+    }))
+}
+
+/// [`StoredPassword::version`]: the object's UID and `resourceVersion`.
+fn version(object: &Credential) -> String {
+    format!(
+        "{}/{}",
+        object.metadata.uid.as_deref().unwrap_or_default(),
+        object
+            .metadata
+            .resource_version
+            .as_deref()
+            .unwrap_or_default()
+    )
+}
+
+fn count_from(count: &GuessCount) -> Count {
+    Count {
+        since: time(count.since),
+        failures: u32::try_from(count.failures).unwrap_or(u32::MAX),
+        held_until: (count.held_until > 0).then(|| time(count.held_until)),
+    }
+}
+
+fn count_to(count: &Count) -> GuessCount {
+    GuessCount {
+        since: secs(count.since),
+        failures: i64::from(count.failures),
+        held_until: count.held_until.map_or(0, secs),
+    }
+}
+
+fn counts_from(guesses: Option<&Guesses>) -> Counts {
+    let Some(guesses) = guesses else {
+        return Counts::default();
+    };
+    Counts {
+        unknown: count_from(&guesses.unknown),
+        known: guesses
+            .known
+            .iter()
+            .map(|k| Known {
+                device: k.device.clone(),
+                count: count_from(&k.count),
+            })
+            .collect(),
+    }
+}
+
+fn counts_to(counts: &Counts) -> Guesses {
+    Guesses {
+        unknown: count_to(&counts.unknown),
+        known: counts
+            .known
+            .iter()
+            .map(|k| KnownGuessCount {
+                device: k.device.clone(),
+                count: count_to(&k.count),
+            })
+            .collect(),
     }
 }
 
@@ -405,7 +487,8 @@ impl CredentialStore for KubeCredentialStore {
         }
     }
 
-    /// Deletes the linked account `name` if the user keeps a passkey or another linked account.
+    /// Deletes the linked account `name` if the user keeps a passkey, a password or another
+    /// linked account.
     /// It uses the same steps as [`KubeCredentialStore::remove`], and keeps every other
     /// credential of the user. Thus two unlinks cannot both succeed and leave nothing. A
     /// passkey removal never deletes the last passkey, so it cannot empty the user either.
@@ -422,8 +505,10 @@ impl CredentialStore for KubeCredentialStore {
                 return Ok(Unlink::NotFound);
             };
             let passkeys = owned_passkeys(&api, &user).await?;
+            let password = owned_password(&api, &user).await?;
             let keep: Vec<&Credential> = passkeys
                 .iter()
+                .chain(password.iter())
                 .chain(externals.iter().filter(|object| object.name_any() != name))
                 .collect();
             if keep.is_empty() {
@@ -501,6 +586,121 @@ impl CredentialStore for KubeCredentialStore {
                 .await
                 .map(|_| ())
                 .map_err(|e| backend(&e))
+        }
+    }
+
+    fn password(
+        &self,
+        user: &User,
+    ) -> impl Future<Output = Result<Option<StoredPassword>, StoreError>> + Send {
+        let api = self.api.clone();
+        let user = user.clone();
+        async move {
+            Ok(owned_password(&api, &user).await?.and_then(|object| {
+                let CredentialKind::Password(password) = &object.spec.kind else {
+                    return None;
+                };
+                Some(StoredPassword {
+                    name: object.name_any(),
+                    hash: password.hash.clone(),
+                    guesses: counts_from(object.status.as_ref().and_then(|s| s.guesses.as_ref())),
+                    version: version(&object),
+                })
+            }))
+        }
+    }
+
+    /// Replaces by deleting with preconditions on the read UID and `resourceVersion`, then
+    /// creating: the spec is immutable. Two replacements racing leave one; the other gets
+    /// [`Saved::Conflict`].
+    fn set_password(
+        &self,
+        user: &User,
+        hash: &str,
+        replacing: Option<&StoredPassword>,
+    ) -> impl Future<Output = Result<Saved, StoreError>> + Send {
+        let api = self.api.clone();
+        let user = user.clone();
+        let replacing = replacing.map(|p| p.version.clone());
+        let mut object = Credential {
+            metadata: ObjectMeta {
+                name: Some(password_credential_name(&user.subject)),
+                labels: Some(BTreeMap::from([
+                    (USER_LABEL.to_owned(), user.name.clone()),
+                    (MANAGED_BY.0.to_owned(), MANAGED_BY.1.to_owned()),
+                ])),
+                ..ObjectMeta::default()
+            },
+            spec: CredentialSpec {
+                user: user.name.clone(),
+                kind: CredentialKind::Password(Password {
+                    hash: hash.to_owned(),
+                }),
+            },
+            status: None,
+        };
+        async move {
+            let name = object.name_any();
+            let current = api.get_opt(&name).await.map_err(|e| backend(&e))?;
+            if let Some(current) = current {
+                let read = replacing.unwrap_or_else(|| version(&current));
+                let Some((uid, resource_version)) = read.split_once('/') else {
+                    return Ok(Saved::Conflict);
+                };
+                match delete_if_unchanged(&api, &name, uid, resource_version)
+                    .await
+                    .map_err(|e| backend(&e))?
+                {
+                    DeleteOutcome::Deleted => {}
+                    DeleteOutcome::Changed | DeleteOutcome::NotFound => {
+                        return Ok(Saved::Conflict);
+                    }
+                }
+            } else if replacing.is_some() {
+                return Ok(Saved::Conflict);
+            }
+            let owner = user_owner(&api, &user.name)
+                .await?
+                .filter(|owner| owner.uid == user.subject)
+                .ok_or_else(|| {
+                    StoreError("the user changed while setting a password".to_owned())
+                })?;
+            object.metadata.owner_references = Some(vec![owner]);
+            match create_once(&api, &object).await.map_err(|e| backend(&e))? {
+                CreateOutcome::Created(_) => Ok(Saved::Saved),
+                CreateOutcome::AlreadyExists => Ok(Saved::Conflict),
+            }
+        }
+    }
+
+    fn save_guesses(
+        &self,
+        stored: &StoredPassword,
+        guesses: &Counts,
+    ) -> impl Future<Output = Result<Saved, StoreError>> + Send {
+        let api = self.api.clone();
+        let name = stored.name.clone();
+        let resource_version = stored
+            .version
+            .split_once('/')
+            .map_or_default(|(_, v)| v.to_owned());
+        // A merge patch with a resourceVersion is a compare-and-swap: the API server refuses it
+        // with 409 if the object changed.
+        let patch = serde_json::json!({
+            "metadata": { "resourceVersion": resource_version },
+            "status": { "guesses": counts_to(guesses) },
+        });
+        async move {
+            match api
+                .patch_status(&name, &PatchParams::default(), &Patch::Merge(patch))
+                .await
+            {
+                Ok(_) => Ok(Saved::Saved),
+                Err(kube::Error::Api(status)) if matches!(status.code, 404 | 409) => {
+                    Ok(Saved::Conflict)
+                }
+                Err(error) => Err(backend(&error)),
+            }
         }
     }
 }

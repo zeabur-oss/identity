@@ -261,9 +261,7 @@ mod tests {
         assert!(page.body.contains("Cluster Dashboard"));
         assert!(page.body.contains("autocomplete=\"username webauthn\""));
         assert!(page.body.contains("value=\"alice\""));
-        // With a login hint the username stays in view: nothing to fold.
-        assert!(!page.body.contains("data-collapsible"));
-        assert!(!page.body.contains("id=\"use-username\""));
+        assert!(page.body.contains("autocomplete=\"current-password\""));
         assert!(page.body.contains("Lost all your passkeys?"));
         assert!(
             page.body
@@ -293,7 +291,7 @@ mod tests {
             .unwrap();
         assert!((590..=600).contains(&expires_in), "{expires_in}");
         assert!(page.body.contains("<noscript>"));
-        assert!(page.body.contains("id=\"unsupported\""));
+        assert!(page.body.contains("id=\"passkey\""));
         assert!(page.body.contains("type=\"module\""));
     }
 

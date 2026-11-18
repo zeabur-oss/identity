@@ -1,4 +1,5 @@
-// Sign-in page: passkey autofill (conditional mediation) plus an explicit button.
+// Sign-in page: username and password, passkey autofill (conditional mediation) on the username
+// field, and a passkey button.
 import {
   assertionJson,
   cancelled,
@@ -19,17 +20,6 @@ let autofill: AbortController | null = null
 // Set while an assertion is being checked or the page is on its way out, so autofill and the
 // button never send two: the second answer would reach the app after the first had used it up.
 let finishing = false
-const usernameField = document.getElementById("username-field")
-const useUsername = document.getElementById("use-username")
-
-// Without a login hint the field is only where the browser lists passkeys, so it stays folded
-// behind "Use a username" while the browser can offer them there.
-function fold(folded: boolean): void {
-  if (!usernameField?.hasAttribute("data-collapsible") || !useUsername) return
-  usernameField.hidden = folded
-  useUsername.hidden = !folded
-}
-
 // The request has ended (expired, or finished elsewhere): offer the apps instead of a form that
 // can only fail.
 function ended(): void {
@@ -44,6 +34,10 @@ function ended(): void {
 const failures: Record<string, string> = {
   "passkey-failed": "msgFailed",
   "device-passkey-needed": "msgDevicePasskey",
+  "admin-needs-passkey": "msgAdminPasskey",
+  "password-failed": "msgPasswordFailed",
+  "password-held": "msgPasswordHeld",
+  busy: "msgBusy",
 }
 
 async function finish(credential: Credential | null): Promise<void> {
@@ -89,31 +83,57 @@ async function options(): Promise<PublicKeyCredentialRequestOptions | null> {
 
 async function startAutofill(): Promise<void> {
   const available = await PublicKeyCredential.isConditionalMediationAvailable?.()
-  if (!available) {
-    fold(false)
-    return
-  }
+  if (!available) return
   const publicKey = await options()
   if (publicKey) await autofillWith(publicKey)
 }
 
 async function autofillWith(publicKey: PublicKeyCredentialRequestOptions): Promise<void> {
   autofill = new AbortController()
+  // Nothing was asked of the user yet, so a failed offer stays quiet; the button shows the cause.
+  const credential = await navigator.credentials
+    .get({ publicKey, mediation: "conditional", signal: autofill.signal })
+    .catch(() => null)
+  if (credential) await finish(credential).catch(() => say("error", text("msgError")))
+}
+
+function field(id: string): string {
+  return document.querySelector<HTMLInputElement>(`#${id}`)?.value ?? ""
+}
+
+function signInWithPassword(event: SubmitEvent): void {
+  event.preventDefault()
+  if (finishing) return
+  const username = field("username").trim()
+  const password = field("password")
+  say("status", "")
+  if (!username || !password) {
+    say("error", text("msgPasswordMissing"))
+    return
+  }
+  finishing = true
+  say("error", "")
+  void sendPassword(username, password)
+}
+
+async function sendPassword(username: string, password: string): Promise<void> {
   try {
-    const credential = await navigator.credentials.get({
-      publicKey,
-      mediation: "conditional",
-      signal: autofill.signal,
-    })
-    await finish(credential)
-  } catch (error) {
-    // Aborted when the user presses the button instead; other errors surface on the next attempt.
-    if (!cancelled(error)) say("error", text("msgError"))
+    const reply = await post("/login/password", { username, password })
+    const to = redirect(reply)
+    if (to) {
+      autofill?.abort()
+      window.location.assign(to)
+      return
+    }
+    finishing = false
+    failed(problem(reply))
+  } catch {
+    finishing = false
+    say("error", text("msgError"))
   }
 }
 
-function signIn(event: SubmitEvent): void {
-  event.preventDefault()
+function signInWithPasskey(): void {
   if (finishing) return
   autofill?.abort()
   void signInWithButton()
@@ -149,16 +169,14 @@ if (form) {
     text,
     { "no-request": ended },
   )
+  form.addEventListener("submit", signInWithPassword)
+  const passkey = document.getElementById("passkey")
   if (!supported()) {
-    document.getElementById("unsupported")?.removeAttribute("hidden")
-    form.hidden = true
+    passkey?.setAttribute("hidden", "")
+    if (!document.querySelector("[data-provider]"))
+      document.getElementById("alternatives")?.setAttribute("hidden", "")
   } else {
-    form.addEventListener("submit", signIn)
-    useUsername?.addEventListener("click", () => {
-      fold(false)
-      document.getElementById("username")?.focus()
-    })
-    fold(typeof PublicKeyCredential.isConditionalMediationAvailable === "function")
+    passkey?.addEventListener("click", signInWithPasskey)
     void startAutofill()
   }
 }
