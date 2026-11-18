@@ -10,8 +10,8 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
 use zeabur_identity_ui::pages::{
-    AccountView, AppLink, ErrorReason, LinkedRow, PasskeyRow, ProviderButton, SessionRow, Storage,
-    account_page, error_page, login_page, notice_page, page_lang, setup_page,
+    AccountView, AppLink, ErrorReason, LinkedRow, PasskeyRow, PasswordView, ProviderButton,
+    SessionRow, Storage, account_page, error_page, login_page, notice_page, page_lang, setup_page,
 };
 
 const GITHUB: ProviderButton<'static> = ProviderButton {
@@ -158,6 +158,7 @@ async fn index() -> Html<String> {
         "/account/one",
         "/account/linked",
         "/account/admin",
+        "/account/password",
         "/account/signed-out",
     ]
     .map(String::from);
@@ -259,6 +260,9 @@ async fn account(Path(state): Path<String>, RawQuery(q): RawQuery, h: HeaderMap)
         linked,
         providers: &MANY,
         admin,
+        password: admin.then_some(PasswordView {
+            authenticator: true,
+        }),
         sessions: &SESSIONS,
     };
     match state.as_str() {
@@ -266,6 +270,13 @@ async fn account(Path(state): Path<String>, RawQuery(q): RawQuery, h: HeaderMap)
         "one" => account_page(lang, Some(view(&PASSKEYS[..1], &[], false))),
         "linked" => account_page(lang, Some(view(&PASSKEYS[..1], &LINKED, false))),
         "admin" => account_page(lang, Some(view(&PASSKEYS[..1], &LINKED, true))),
+        "password" => {
+            let mut view = view(&PASSKEYS[..1], &[], false);
+            view.password = Some(PasswordView {
+                authenticator: false,
+            });
+            account_page(lang, Some(view))
+        }
         "signed-out" => account_page(lang, None),
         _ => StatusCode::NOT_FOUND.into_response(),
     }

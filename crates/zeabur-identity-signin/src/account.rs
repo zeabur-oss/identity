@@ -19,6 +19,10 @@
 //! [`crate::upstream`]). The start needs the same fresh confirmation as adding a passkey.
 //! Unlinking needs it too. It revokes every session and grant that signed in with the account,
 //! and the user's last credential cannot be unlinked (see `CredentialStore::unlink`).
+//!
+//! Changing or removing a password needs the current password instead of a fresh confirmation,
+//! checked as at sign-in (see [`crate::password`]). Both revoke every other session and grant of
+//! the user.
 
 use std::time::Duration;
 
@@ -46,8 +50,8 @@ use zeabur_identity_store::{
     Verification, classify,
 };
 use zeabur_identity_ui::pages::{
-    AccountView, ErrorReason, LinkedRow, PasskeyRow, ProviderButton, SessionRow, Storage,
-    account_page, error_page, page_lang,
+    AccountView, ErrorReason, LinkedRow, PasskeyRow, PasswordView, ProviderButton, SessionRow,
+    Storage, account_page, error_page, page_lang,
 };
 
 use crate::device::Requester;
@@ -106,10 +110,10 @@ const PASSKEY_EXISTS: Problem = Problem::new(
     "passkey-exists",
     "This passkey is already registered.",
 );
-const LAST_CREDENTIAL: Problem = Problem::new(
+pub(crate) const LAST_CREDENTIAL: Problem = Problem::new(
     StatusCode::CONFLICT,
     "last-credential",
-    "This is your only way to sign in. Add a passkey before unlinking it.",
+    "This is your only way to sign in. Add a passkey before you remove it.",
 );
 
 type Shared<D, G, C, K, S> = std::sync::Arc<SignIn<D, G, C, K, S>>;
@@ -153,6 +157,14 @@ where
             post(revoke_others::<D, G, C, K, S>),
         )
         .route("/account/links/remove", post(unlink::<D, G, C, K, S>))
+        .route(
+            "/account/password",
+            post(crate::password::change::<D, G, C, K, S>),
+        )
+        .route(
+            "/account/password/remove",
+            post(crate::password::remove::<D, G, C, K, S>),
+        )
 }
 
 /// The account session cookie: `s-<64 hex>.<256-bit secret, base64url>`.
@@ -430,7 +442,7 @@ struct Done {
     accepted: Option<Accepted>,
 }
 
-fn done(signed_out: bool, accepted: Option<Accepted>) -> Response {
+pub(crate) fn done(signed_out: bool, accepted: Option<Accepted>) -> Response {
     let mut response = json(
         StatusCode::OK,
         &Done {
@@ -539,6 +551,51 @@ fn issuer_label(issuer: &str) -> String {
         .unwrap_or_else(|| issuer.to_owned())
 }
 
+/// The user's live sessions, the current one first, then the newest; and the name of each app
+/// they signed in to.
+async fn live_sessions<D, G, C, K, S>(
+    service: &SignIn<D, G, C, K, S>,
+    user: &User,
+    current: &str,
+    now: UnixTime,
+) -> Result<(Vec<Grant>, Vec<(String, String)>), Problem>
+where
+    D: Directory,
+    G: GrantStore,
+    C: Clock,
+    K: CredentialStore,
+    S: SetupStore,
+{
+    let mut sessions: Vec<Grant> = service
+        .oauth
+        .grants
+        .list(user)
+        .await
+        .map_err(internal)?
+        .into_iter()
+        .filter(|grant| now < grant.spec.expires_at && now < grant.idle_expires_at)
+        .collect();
+    sessions.sort_by(|a, b| {
+        let other = |g: &Grant| g.spec.name != current;
+        other(a)
+            .cmp(&other(b))
+            .then(b.spec.auth_time.cmp(&a.spec.auth_time))
+    });
+    let mut apps: Vec<(String, String)> = Vec::new();
+    for client in sessions.iter().map(|g| g.spec.client.as_str()) {
+        if client == ACCOUNT_CLIENT || apps.iter().any(|(id, _)| id == client) {
+            continue;
+        }
+        let name = service
+            .oauth
+            .directory
+            .client_name(client)
+            .unwrap_or_else(|| client.to_owned());
+        apps.push((client.to_owned(), name));
+    }
+    Ok((sessions, apps))
+}
+
 async fn page<D, G, C, K, S>(
     State(service): State<Shared<D, G, C, K, S>>,
     RawQuery(query): RawQuery,
@@ -567,39 +624,19 @@ where
             .linked_accounts(&account.user)
             .await
             .map_err(internal)?;
-        let mut sessions: Vec<Grant> = service
-            .oauth
-            .grants
-            .list(&account.user)
+        let password = service
+            .credentials
+            .password(&account.user)
             .await
-            .map_err(internal)?
-            .into_iter()
-            .filter(|grant| now < grant.spec.expires_at && now < grant.idle_expires_at)
-            .collect();
-        sessions.sort_by(|a, b| {
-            let current = |g: &Grant| g.spec.name != account.session.spec.name;
-            current(a)
-                .cmp(&current(b))
-                .then(b.spec.auth_time.cmp(&a.spec.auth_time))
-        });
-        let mut apps = Vec::new();
-        for client in sessions.iter().map(|g| g.spec.client.as_str()) {
-            if client == ACCOUNT_CLIENT || apps.iter().any(|(id, _)| id == client) {
-                continue;
-            }
-            let name = service
-                .oauth
-                .directory
-                .client_name(client)
-                .unwrap_or_else(|| client.to_owned());
-            apps.push((client.to_owned(), name));
-        }
-        Ok(Some((account, passkeys, linked, sessions, apps)))
+            .map_err(internal)?;
+        let (sessions, apps) =
+            live_sessions(&service, &account.user, &account.session.spec.name, now).await?;
+        Ok(Some((account, passkeys, linked, password, sessions, apps)))
     }
     .await;
     match loaded {
         Ok(None) => account_page(lang, None),
-        Ok(Some((account, passkeys, linked, sessions, apps))) => {
+        Ok(Some((account, passkeys, linked, password, sessions, apps))) => {
             let this_device = account.session.verification().credential;
             let label = |name: &str| {
                 passkeys
@@ -640,6 +677,9 @@ where
                     linked: &linked_rows,
                     providers: &providers,
                     admin: account.user.account_type == AccountType::Admin,
+                    password: password.as_ref().map(|p| PasswordView {
+                        authenticator: p.totp.is_some(),
+                    }),
                     sessions: &session_rows,
                 }),
             )
@@ -1326,6 +1366,33 @@ where
     result.unwrap_or_else(IntoResponse::into_response)
 }
 
+/// Revokes every session and grant of `user` but the session `current`. Returns how many.
+pub(crate) async fn revoke_all_but<D, G, C, K, S>(
+    service: &SignIn<D, G, C, K, S>,
+    user: &User,
+    current: &str,
+) -> Result<usize, Problem>
+where
+    D: Directory,
+    G: GrantStore,
+    C: Clock,
+    K: CredentialStore,
+    S: SetupStore,
+{
+    let grants = service.oauth.grants.list(user).await.map_err(internal)?;
+    let mut revoked = 0;
+    for grant in grants.iter().filter(|g| g.spec.name != current) {
+        service
+            .oauth
+            .grants
+            .revoke(&grant.spec.name)
+            .await
+            .map_err(internal)?;
+        revoked += 1;
+    }
+    Ok(revoked)
+}
+
 async fn revoke_others<D, G, C, K, S>(
     State(service): State<Shared<D, G, C, K, S>>,
     requester: Requester,
@@ -1346,21 +1413,7 @@ where
     };
     let result: Result<Response, Problem> = async {
         let account = signed_in(&service, &headers, now).await?;
-        let grants = service
-            .oauth
-            .grants
-            .list(&account.user)
-            .await
-            .map_err(internal)?;
-        for grant in grants.iter().filter(|g| g.spec.name != account.token.name) {
-            service
-                .oauth
-                .grants
-                .revoke(&grant.spec.name)
-                .await
-                .map_err(internal)?;
-            audit.revoked += 1;
-        }
+        audit.revoked = revoke_all_but(&service, &account.user, &account.token.name).await?;
         record(&service, &account.user, "SessionRevoked", &audit, now).await;
         user = Some(account.user);
         Ok(done(false, None))

@@ -5,7 +5,8 @@
 //! accepts the account only for a `User` with that UID: see [`LinkedAccount::signs_in_as`].
 //! Removing a passkey must never leave a user with none, and unlinking an account must never
 //! leave a user with no credential, also when two changes race: see
-//! [`KubeCredentialStore::remove`] and [`KubeCredentialStore::unlink`].
+//! [`KubeCredentialStore::remove`], [`KubeCredentialStore::unlink`] and
+//! [`KubeCredentialStore::remove_password`].
 
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -24,8 +25,8 @@ use zeabur_identity_core::clock::UnixTime;
 use zeabur_identity_core::guessing::{Count, Counts, Known};
 use zeabur_identity_store::{
     AccountEvent, CreateCredential, CredentialStore, LinkedAccount, LinkedSummary, NewExternal,
-    NewPasskey, PasskeySummary, PasswordState, Removal, Rename, Saved, StoreError, StoredPasskey,
-    StoredPassword, StoredTotp, Unlink, User, password_credential_name,
+    NewPasskey, PasskeySummary, PasswordRemoval, PasswordState, Removal, Rename, Saved, StoreError,
+    StoredPasskey, StoredPassword, StoredTotp, Unlink, User, password_credential_name,
 };
 
 use super::MANAGED_BY;
@@ -730,6 +731,37 @@ impl CredentialStore for KubeCredentialStore {
                     Ok(Saved::Conflict)
                 }
                 Err(error) => Err(backend(&error)),
+            }
+        }
+    }
+
+    /// Deletes the password if it is still `stored` and the user keeps a passkey or a linked
+    /// account. It uses the same steps as [`KubeCredentialStore::unlink`] and keeps every other
+    /// credential of the user, so a removal and an unlink cannot both succeed and leave nothing.
+    fn remove_password(
+        &self,
+        user: &User,
+        stored: &StoredPassword,
+    ) -> impl Future<Output = Result<PasswordRemoval, StoreError>> + Send {
+        let api = self.api.clone();
+        let (user, read) = (user.clone(), stored.version.clone());
+        async move {
+            let Some(target) = owned_password(&api, &user)
+                .await?
+                .filter(|object| version(object) == read)
+            else {
+                return Ok(PasswordRemoval::Conflict);
+            };
+            let passkeys = owned_passkeys(&api, &user).await?;
+            let externals = owned_externals(&api, &user).await?;
+            let keep: Vec<&Credential> = passkeys.iter().chain(externals.iter()).collect();
+            if keep.is_empty() {
+                return Ok(PasswordRemoval::LastCredential);
+            }
+            if delete_keeping(&api, &target, &keep).await? {
+                Ok(PasswordRemoval::Removed)
+            } else {
+                Ok(PasswordRemoval::Conflict)
             }
         }
     }

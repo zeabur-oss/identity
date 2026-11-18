@@ -1,5 +1,5 @@
 // Account page: sign in, then rename, add and remove passkeys, link and unlink GitHub or Google
-// accounts, and end sessions. Adding, linking and removing need a passkey confirmation from the
+// accounts, change or remove a password, and end sessions. Adding, linking and removing need a passkey confirmation from the
 // last five minutes. The server says when one is due ("reauth-required"), and the page asks for
 // it, then retries once.
 import {
@@ -31,6 +31,17 @@ const errors: Record<string, string> = {
   "last-credential": "msgLastCredential",
   "admin-needs-passkey": "msgAdminPasskey",
   "ceremony-expired": "msgExpired",
+  "current-password-wrong": "msgPasswordWrong",
+  "password-held": "msgPasswordHeld",
+  "password-conflict": "msgPasswordConflict",
+  busy: "msgBusy",
+}
+
+const weaknesses: Record<string, string> = {
+  "too-short": "msgTooShort",
+  "too-long": "msgTooLong",
+  common: "msgCommon",
+  context: "msgContext",
 }
 
 /** The message for a problem code, or the generic one. */
@@ -45,7 +56,7 @@ const header: Place = {
 }
 
 /** Problems that mean the page shows a stale list: reload it from the server, then explain. */
-const stale = new Set(["last-passkey", "conflict", "not-found"])
+const stale = new Set(["last-passkey", "conflict", "not-found", "password-conflict"])
 
 function fail(place: Place, message: string): void {
   write(place.status, "")
@@ -73,11 +84,19 @@ function showNotice(): void {
   write((row ? rowPlace(row) : header).error, explain(code))
 }
 
-/** After the provider sends the person back with a new link. */
-function showLinked(): void {
-  if (window.location.hash !== "#notice=linked") return
+/** Notices for a change that worked, set in the hash before a reload. */
+const done: Record<string, string> = {
+  "#notice=linked": "msgLinked",
+  "#notice=password-changed": "msgPasswordChanged",
+  "#notice=password-removed": "msgPasswordRemoved",
+}
+
+/** After a reload that follows a change that worked, or after the provider sends the person back. */
+function showDone(): void {
+  const key = done[window.location.hash]
+  if (!key) return
   window.history.replaceState(null, "", window.location.pathname + window.location.search)
-  write(header.status, text("msgLinked"))
+  write(header.status, text(key))
 }
 
 function rowPlace(item: HTMLElement): Place {
@@ -146,6 +165,8 @@ async function settle(reply: Reply, place: Place, passkey: string): Promise<void
 function refused(reply: Reply, place: Place, passkey: string): void {
   const code = problem(reply)
   if (stale.has(code)) refresh(code, passkey)
+  else if (code === "password-weak")
+    fail(place, text(weaknesses[String(reply.body.weakness)] ?? "msgCommon"))
   else fail(place, explain(code))
 }
 
@@ -224,6 +245,36 @@ function link(provider: string): void {
   })
 }
 
+/** Sends a password change or removal; on success, the reload shows `notice`. */
+async function password(
+  path: string,
+  body: Record<string, string>,
+  notice: string,
+): Promise<Reply> {
+  const reply = await post(path, body)
+  if (reply.ok) window.location.hash = `notice=${notice}`
+  return reply
+}
+
+function wirePassword(section: HTMLElement): void {
+  const place = rowPlace(section)
+  const form = section.querySelector<HTMLFormElement>("#password-change")
+  form?.addEventListener("submit", (event) => {
+    event.preventDefault()
+    const field = (name: string) =>
+      form.querySelector<HTMLInputElement>(`[name=${name}]`)?.value ?? ""
+    const current = field("current")
+    const next = field("new")
+    if (next.length < 15) return fail(place, text("msgTooShort"))
+    run(() => password("/account/password", { current, new: next }, "password-changed"), place)
+  })
+  wireDialog(section, "confirm", (dialog) => {
+    const current = dialog.querySelector("input")?.value ?? ""
+    if (current)
+      run(() => password("/account/password/remove", { current }, "password-removed"), place)
+  })
+}
+
 function localizeDates(): void {
   const format = new Intl.DateTimeFormat(root?.dataset.lang, { dateStyle: "medium" })
   for (const time of document.querySelectorAll<HTMLTimeElement>("time[data-format]")) {
@@ -241,6 +292,8 @@ if (root) {
   document.getElementById("sign-out-others")?.addEventListener("click", () => {
     run(() => post("/account/sessions/revoke-others", {}))
   })
+  const passwordSection = document.getElementById("password")
+  if (passwordSection) wirePassword(passwordSection)
   for (const item of document.querySelectorAll<HTMLElement>("[data-session]")) {
     item.querySelector("[data-action=revoke]")?.addEventListener("click", () => {
       run(() => post("/account/sessions/revoke", { name: item.dataset.session ?? "" }))
@@ -263,5 +316,5 @@ if (root) {
     if (window.location.hash === "#add") document.getElementById("add-label")?.focus()
   }
   showNotice()
-  showLinked()
+  showDone()
 }

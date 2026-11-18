@@ -1,6 +1,6 @@
 //! The account page's stores against a Kubernetes API that enforces `resourceVersion`
-//! preconditions: filtering to the user, concurrent passkey removals and unlinks,
-//! re-authentication.
+//! preconditions: filtering to the user, concurrent passkey removals, unlinks and password
+//! removals, re-authentication.
 
 #[cfg(test)]
 mod tests {
@@ -21,8 +21,9 @@ mod tests {
     use zeabur_identity_k8s::grants::KubeGrantStore;
     use zeabur_identity_k8s::setup::KubeSetupStore;
     use zeabur_identity_store::{
-        AccountEvent, CredentialStore as _, GrantStore as _, NewExternal, Removal, Rename,
-        SetupStore as _, Unlink, User, Verification,
+        AccountEvent, CredentialStore as _, GrantStore as _, NewExternal, PasswordRemoval,
+        PasswordState, Removal, Rename, SetupStore as _, Unlink, User, Verification,
+        password_credential_name,
     };
 
     const ALICE_UID: &str = "uid-alice";
@@ -241,6 +242,17 @@ mod tests {
                 "ownerReferences":owners},
             "spec":{"user":"alice",
                 "external":{"issuer":"https://github.com","subject":name}}})
+    }
+
+    fn password() -> Value {
+        json!({"apiVersion":"identity.zeabur.com/v1alpha1","kind":"Credential",
+            "metadata":{"name":password_credential_name(ALICE_UID),
+                "labels":{"identity.zeabur.com/user":"alice"},
+                "ownerReferences":[{"apiVersion":"identity.zeabur.com/v1alpha1",
+                    "kind":"User","name":"alice","uid":ALICE_UID}]},
+            "spec":{"user":"alice",
+                "password":{"hash":"$pbkdf2-sha256$i=1$c2FsdA$aGFzaA",
+                    "totp":{"secret":"sealed","recovery":["00"],"enrolledStep":1}}}})
     }
 
     fn grant(name: &str, subject: Option<&str>) -> Value {
@@ -567,6 +579,70 @@ mod tests {
         assert!(
             !outcomes.iter().all(|o| matches!(o, Unlink::Unlinked)),
             "{outcomes:?}"
+        );
+        let left = mock.state.lock().await.names("credentials");
+        assert!(matches!(left.as_slice(), [_, ..]), "{left:?}");
+    }
+
+    #[tokio::test]
+    async fn a_password_is_removed_only_while_the_user_keeps_another_way_in() {
+        let mut backend = Backend::default();
+        backend.insert("credentials", password());
+        let mock = mock(backend).await;
+        let store = credentials(&mock);
+        let stored = store.password(&alice()).await.unwrap().unwrap();
+        assert!(matches!(
+            store.remove_password(&alice(), &stored).await.unwrap(),
+            PasswordRemoval::LastCredential
+        ));
+
+        mock.state
+            .lock()
+            .await
+            .insert("credentials", github("g", &[ALICE_UID]));
+        // A version read before a sign-in changed the password's state.
+        let state = PasswordState {
+            totp_last_step: Some(2),
+            ..PasswordState::default()
+        };
+        store.save_state(&stored, &state).await.unwrap();
+        assert!(matches!(
+            store.remove_password(&alice(), &stored).await.unwrap(),
+            PasswordRemoval::Conflict
+        ));
+        let stored = store.password(&alice()).await.unwrap().unwrap();
+        assert!(matches!(
+            store.remove_password(&alice(), &stored).await.unwrap(),
+            PasswordRemoval::Removed
+        ));
+        assert!(store.password(&alice()).await.unwrap().is_none());
+        assert_eq!(mock.state.lock().await.names("credentials"), ["g"]);
+    }
+
+    /// A password removal and an unlink that both list before either writes: neither may leave
+    /// the user with nothing.
+    #[tokio::test]
+    async fn a_password_removal_racing_an_unlink_keeps_a_credential() {
+        let mut backend = Backend::default();
+        backend.insert("credentials", password());
+        backend.insert("credentials", github("g", &[ALICE_UID]));
+        backend.held = 2;
+        backend.barrier = Some(Arc::new(Barrier::new(2)));
+        let mock = mock(backend).await;
+        let store = credentials(&mock);
+        let stored = store.password(&alice()).await.unwrap().unwrap();
+        let (user_a, user_b) = (alice(), alice());
+        let (removal, unlink) = tokio::join!(
+            store.remove_password(&user_a, &stored),
+            store.unlink(&user_b, "g")
+        );
+        let (removal, unlink) = (removal.unwrap(), unlink.unwrap());
+        assert!(
+            !matches!(
+                (removal, unlink),
+                (PasswordRemoval::Removed, Unlink::Unlinked)
+            ),
+            "{removal:?} {unlink:?}"
         );
         let left = mock.state.lock().await.names("credentials");
         assert!(matches!(left.as_slice(), [_, ..]), "{left:?}");
