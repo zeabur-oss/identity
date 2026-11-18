@@ -164,13 +164,25 @@ impl Passwords {
     }
 
     /// `secret` sealed for `subject` with new recovery codes, and the codes to show.
-    fn store(&self, subject: &str, secret: &Secret) -> Result<(StoredTotp, Vec<String>), Problem> {
+    fn store(
+        &self,
+        subject: &str,
+        secret: &Secret,
+        enrolled_step: u64,
+    ) -> Result<(StoredTotp, Vec<String>), Problem> {
         let (shown, recovery) = self.recovery.generate().map_err(internal)?;
         let secret = self
             .totp
             .seal(&stored_purpose(subject), secret.as_bytes())
             .map_err(internal)?;
-        Ok((StoredTotp { secret, recovery }, shown))
+        Ok((
+            StoredTotp {
+                secret,
+                recovery,
+                enrolled_step,
+            },
+            shown,
+        ))
     }
 
     /// Which second factor `code` is for `subject`, if it is one that was not used before.
@@ -186,7 +198,10 @@ impl Passwords {
             .totp
             .open(&stored_purpose(subject), &totp.secret)
             .and_then(|bytes| Secret::from_bytes(&bytes))
-            .and_then(|secret| secret.check(code, now, state.totp_last_step));
+            .and_then(|secret| {
+                let last = state.totp_last_step.max(Some(totp.enrolled_step));
+                secret.check(code, now, last)
+            });
         step.map(SecondFactor::Totp).or_else(|| {
             self.recovery
                 .check(code, &totp.recovery, &state.recovery_used)
@@ -885,8 +900,8 @@ where
         .await?
         .map_err(internal)?;
     let (totp, recovery_codes) = match &enrolled {
-        Some((secret, _)) => {
-            let (totp, shown) = passwords.store(&owner.subject, secret)?;
+        Some((secret, step)) => {
+            let (totp, shown) = passwords.store(&owner.subject, secret, *step)?;
             (Some(totp), Some(shown))
         }
         None => (None, None),
@@ -909,20 +924,6 @@ where
     }
     if saved == Saved::Conflict {
         return Err(internal("the password credential kept changing during setup").into());
-    }
-    // The code entered here does not work again for sign-in.
-    if let Some((_, step)) = enrolled
-        && let Some(stored) = service
-            .credentials
-            .password(&owner)
-            .await
-            .map_err(internal)?
-    {
-        update_state(&service.credentials, &owner, stored, |state| {
-            SecondFactor::Totp(step).spend(state);
-            true
-        })
-        .await;
     }
     let audit = Audit {
         credential: Some(zeabur_identity_store::password_credential_name(

@@ -621,6 +621,7 @@ impl CredentialStore for KubeCredentialStore {
                     totp: password.totp.as_ref().map(|totp| StoredTotp {
                         secret: totp.secret.clone(),
                         recovery: totp.recovery.iter().map(|h| h.0.clone()).collect(),
+                        enrolled_step: u64::try_from(totp.enrolled_step).unwrap_or(u64::MAX),
                     }),
                     state: state_from(object.status.as_ref()),
                     version: version(&object),
@@ -658,6 +659,7 @@ impl CredentialStore for KubeCredentialStore {
                     totp: totp.map(|totp| Totp {
                         secret: totp.secret.clone(),
                         recovery: totp.recovery.iter().cloned().map(RecoveryHash).collect(),
+                        enrolled_step: i64::try_from(totp.enrolled_step).unwrap_or(i64::MAX),
                     }),
                 }),
             },

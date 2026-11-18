@@ -85,6 +85,10 @@ pub struct Totp {
     /// Keyed hashes of the one-time recovery codes, hex.
     #[schemars(length(max = 16))]
     pub recovery: Vec<RecoveryHash>,
+    /// The TOTP time step of the code entered at setup. Codes of this step or before do not
+    /// sign in, so the setup code cannot be used again.
+    #[schemars(range(min = 0))]
+    pub enrolled_step: i64,
 }
 
 /// A keyed hash of one recovery code: HMAC-SHA256, hex.

@@ -262,6 +262,12 @@
                             "description": "The second factor asked for after the password, if the user enrolled one.",
                             "nullable": true,
                             "properties": {
+                              "enrolledStep": {
+                                "description": "The TOTP time step of the code entered at setup. Codes of this step or before do not\nsign in, so the setup code cannot be used again.",
+                                "format": "int64",
+                                "minimum": 0.0,
+                                "type": "integer"
+                              },
                               "recovery": {
                                 "description": "Keyed hashes of the one-time recovery codes, hex.",
                                 "items": {
@@ -280,6 +286,7 @@
                               }
                             },
                             "required": [
+                              "enrolledStep",
                               "recovery",
                               "secret"
                             ],

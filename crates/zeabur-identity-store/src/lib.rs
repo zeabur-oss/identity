@@ -786,6 +786,8 @@ pub struct StoredTotp {
     pub secret: String,
     /// Keyed hashes of the recovery codes.
     pub recovery: Vec<String>,
+    /// The time step of the code entered at setup: no code of this step or before signs in.
+    pub enrolled_step: u64,
 }
 
 impl std::fmt::Debug for StoredTotp {
