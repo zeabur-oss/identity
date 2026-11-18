@@ -1,0 +1,6 @@
+# Tests, the end-to-end crate, test support and build scripts take only input that we write.
+paths-ignore:
+  - "**/tests/**"
+  - "crates/zeabur-identity-e2e/**"
+  - "crates/zeabur-identity-test-support/**"
+  - "crates/*/build.rs"
