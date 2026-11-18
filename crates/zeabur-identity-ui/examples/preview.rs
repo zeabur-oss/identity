@@ -346,7 +346,8 @@ fn qr(text: &str) -> (usize, String) {
     let mut path = String::new();
     for (y, row) in code.to_colors().chunks(width).enumerate() {
         for (x, color) in row.iter().enumerate() {
-            if *color == qrcode::Color::Dark && write!(path, "M{} {}h1v1h-1z", x + 4, y + 4).is_err()
+            if *color == qrcode::Color::Dark
+                && write!(path, "M{} {}h1v1h-1z", x + 4, y + 4).is_err()
             {
                 path.clear();
             }
