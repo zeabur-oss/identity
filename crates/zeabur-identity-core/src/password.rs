@@ -153,10 +153,12 @@ const fn lines<const N: usize>(mut text: &str) -> [&str; N] {
     let mut slots: &mut [&str] = &mut out;
     while let [slot, more @ ..] = slots {
         let (line, rest) = text.split_at(line_len(text.as_bytes()));
+        assert!(!rest.is_empty(), "expected an LF after each line");
         *slot = line;
         text = rest.split_at(1).1;
         slots = more;
     }
+    assert!(text.is_empty(), "unexpected text after the last line");
     out
 }
 
