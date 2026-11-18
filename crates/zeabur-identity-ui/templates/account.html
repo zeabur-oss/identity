@@ -3,6 +3,21 @@
 {%- import "icons.html" as icons -%}
 {%- import "ds.html" as ds -%}
 {%- import "password.html" as password -%}
+{%- macro method_icon(name) -%}
+<div class="flex size-8 shrink-0 items-center justify-center rounded-md border border-v2-border bg-v2-surface-hover text-secondary">{{ icons::icon(name, "size-4") }}</div>
+{%- endmacro -%}
+{%- macro session_row(s, m) -%}
+<div class="flex min-w-0 flex-1 basis-40 flex-col gap-0.5">
+  <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+    <p class="min-w-0 text-sm leading-5 font-medium break-words text-main">{{ s.title }}</p>
+    {%- if s.current %}
+    <span data-slot="badge" class="{{ ds::badge() }}">{{ m.session_this }}</span>
+    {%- endif %}
+  </div>
+  <p class="text-[0.8125rem] leading-5 break-words text-secondary"><time datetime="{{ s.signed_in.iso }}" data-format="{{ m.session_signed_in }}">{{ m.session_signed_in.replace("%date%", s.signed_in.text) }}</time>
+    {%- if let Some(credential) = s.credential %} · {{ m.session_passkey.replace("%name%", credential) }}{% endif %}</p>
+</div>
+{%- endmacro -%}
 {%- block title %}{{ m.account_title }}{% endblock -%}
 {%- block head %}<script type="module" src="/assets/account.js?v={{ assets.account_js }}"></script>{% endblock -%}
 {%- block content %}
@@ -49,204 +64,213 @@
   {% endcall %}
 {% endcall %}
 {%- when Some(view) %}
-{% call ui::card() %}
-  {{ ui::card_header(m.account_title, m.signed_in_as.replace("%user%", view.username)) }}
-  {% call ui::card_content() %}
+{% call ui::card() %}{% call ui::card_content() %}
   <div class="flex flex-col gap-3">
+    <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
+      <div class="flex min-w-0 flex-1 flex-col gap-0.5">
+        <h1 class="text-base leading-6 font-semibold text-main">{{ m.account_title }}</h1>
+        <p class="text-[0.8125rem] leading-5 break-words text-secondary">{{ m.signed_in_as.replace("%user%", view.username) }}</p>
+      </div>
+      <button type="button" id="sign-out" class="{{ ds::button("secondary", "sm") }}">{{ m.sign_out }}</button>
+    </div>
     {#- Present and empty from first paint, so screen readers announce what the script writes. -#}
     <div id="status" role="status" aria-live="polite" class="empty:sr-only text-[0.8125rem] leading-5 text-secondary"></div>
     <div id="error" role="alert" class="empty:sr-only text-[0.8125rem] leading-5 text-pretty text-fail-strong"></div>
     <noscript>{% call ui::alert(m.noscript_title, "default", "Key", live = "") %}{{ m.noscript_body }}{% endcall %}</noscript>
-    <button type="button" id="sign-out" class="{{ ds::button("secondary", "lg") }} w-full">{{ m.sign_out }}</button>
   </div>
-  {% endcall %}
-{% endcall %}
+{% endcall %}{% endcall %}
 
 {% call ui::card() %}{% call ui::card_content() %}
-  <section aria-labelledby="passkeys-title" class="flex flex-col gap-4">
-    <h2 id="passkeys-title" class="text-base leading-6 font-semibold text-main">{{ m.passkeys_title }}</h2>
-    {%- if view.passkeys.len() == 1 %}
-    {% call ui::alert(m.backup_title, "warn", "Key", live = "") %}{{ m.backup_body }}{% endcall %}
-    {%- endif %}
-    {%- if !view.passkeys.is_empty() %}
+  <section aria-labelledby="methods-title" class="flex flex-col gap-4">
+    <div class="flex flex-col gap-1">
+      <h2 id="methods-title" class="text-base leading-6 font-semibold text-main">{{ m.methods_title }}</h2>
+      <p class="text-[0.8125rem] leading-5 text-pretty text-secondary">{{ m.methods_note }}</p>
+    </div>
     <ul class="flex flex-col divide-y divide-v2-border">
-      {%- for p in view.passkeys %}
-      <li data-passkey="{{ p.name }}" class="flex gap-3 py-3 first:pt-0">
-        <div class="flex size-8 shrink-0 items-center justify-center rounded-md border border-v2-border bg-v2-surface-hover text-secondary">
-          {{ icons::icon("Key", "size-4") }}
-        </div>
-        <div class="flex min-w-0 flex-1 flex-col gap-1">
-          <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-            <p class="min-w-0 text-sm leading-5 font-medium break-words text-main">
-              {%- if let Some(label) = p.label %}{{ label }}
-              {%- else if let Some(added) = p.added %}<time datetime="{{ added.iso }}" data-format="{{ m.passkey_unnamed_dated }}">{{ m.passkey_unnamed_dated.replace("%date%", added.text) }}</time>
-              {%- else %}{{ m.passkey_unnamed }}{% endif -%}
+      <li id="passkeys" class="flex flex-col gap-3 py-3 first:pt-0 last:pb-0">
+        <div class="flex items-start gap-3">
+          {{ method_icon("Key") }}
+          <div class="flex min-w-0 flex-1 flex-col gap-0.5">
+            <h3 id="passkeys-title" class="text-sm leading-5 font-medium text-main">{{ m.passkeys_title }}</h3>
+            <p class="text-[0.8125rem] leading-5 text-secondary">
+              {%- if view.passkeys.is_empty() %}{{ m.passkeys_none }}
+              {%- else if view.passkeys.len() == 1 %}{{ m.passkeys_one }}
+              {%- else %}{{ m.passkeys_many.replace("%count%", &view.passkeys.len().to_string()) }}{% endif -%}
             </p>
-            {%- if p.this_device %}
-            <span data-slot="badge" class="{{ ds::badge() }}">{{ m.passkey_this_device }}</span>
-            {%- endif %}
           </div>
-          <p class="text-[0.8125rem] leading-5 text-secondary">
-            {%- if !p.storage.is_empty() %}<span>{{ p.storage }}</span>{% endif -%}
-            {%- if let Some(added) = p.added %}{% if !p.storage.is_empty() %} · {% endif %}<time datetime="{{ added.iso }}" data-format="{{ m.passkey_added }}">{{ m.passkey_added.replace("%date%", added.text) }}</time>{% endif -%}
-            {%- if let Some(used) = p.last_used %}<br><time datetime="{{ used.iso }}" data-format="{{ m.passkey_last_used }}">{{ m.passkey_last_used.replace("%date%", used.text) }}</time>{% endif -%}
-          </p>
-          <div class="mt-1 flex flex-wrap gap-2">
-            <button type="button" data-opens="rename" class="{{ ds::button("secondary", "sm") }}">{{ m.rename }}</button>
-            {%- if view.passkeys.len() > 1 %}
-            <button type="button" data-opens="confirm" class="{{ ds::button("secondary-destructive", "sm") }}">{{ m.remove }}</button>
-            {%- endif %}
-          </div>
-          {%- if view.passkeys.len() == 1 %}
-          <p class="text-xs leading-4 text-secondary">{{ m.last_passkey_note }}</p>
+          {%- if view.passkey_confirms %}
+          <button type="button" id="add" data-opens="add" class="{{ ds::button("secondary", "sm") }}">{{ m.add }}</button>
           {%- endif %}
-          {% call ui::dialog("rename", "rename-title-" ~ loop.index, m.rename, m.save, m.cancel) %}
-          <label class="sr-only" for="label-{{ loop.index }}">{{ m.setup_label }}</label>
-          <input id="label-{{ loop.index }}" name="label" type="text" maxlength="64" required autofocus autocomplete="off" value="{{ p.label.unwrap_or_default() }}" class="{{ ds::input() }}">
-          {%- endcall %}
-          {%- if view.passkeys.len() > 1 %}
-          {% call ui::dialog("confirm", "remove-title-" ~ loop.index, m.remove_title, m.remove, m.cancel, "destructive", "Fingerprint") %}
-          <p data-slot="dialog-description" class="{{ ds::dialog_description() }} text-pretty">{{ m.remove_body }}</p>
-          {%- endcall %}
-          {%- endif %}
-          <p data-status role="status" aria-live="polite" class="empty:sr-only text-[0.8125rem] leading-5 text-secondary"></p>
-          <p data-error role="alert" class="empty:sr-only text-[0.8125rem] leading-5 text-pretty text-fail-strong"></p>
         </div>
+        <p data-status role="status" aria-live="polite" class="empty:sr-only text-[0.8125rem] leading-5 text-secondary"></p>
+        <p data-error role="alert" class="empty:sr-only text-[0.8125rem] leading-5 text-pretty text-fail-strong"></p>
+        {%- if view.passkeys.len() == 1 %}
+        {% call ui::alert(m.backup_title, "warn", "Key", live = "") %}{{ m.backup_body }}{% endcall %}
+        {%- endif %}
+        {%- if view.passkey_confirms %}
+        {% call ui::dialog("add", "add-title", m.add_passkey, m.add, m.cancel, "primary", "Fingerprint") %}
+        {% call ui::field("add-label", m.setup_label, m.setup_label_hint) %}
+        <input id="add-label" name="label" type="text" maxlength="64" autofocus autocomplete="off" class="{{ ds::input() }}"
+               {{- ui::field_describedby("add-label", m.setup_label_hint) }}>
+        {% endcall %}
+        {%- endcall %}
+        {%- endif %}
+        {%- if !view.passkeys.is_empty() %}
+        <ul aria-labelledby="passkeys-title" class="flex flex-col divide-y divide-v2-border rounded-md border border-v2-border">
+          {%- for p in view.passkeys %}
+          <li data-passkey="{{ p.name }}" class="flex flex-col gap-1 px-3 py-2.5">
+            <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
+              <div class="flex min-w-0 flex-1 basis-40 flex-col gap-0.5">
+                <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                  <p class="min-w-0 text-sm leading-5 font-medium break-words text-main">
+                    {%- if let Some(label) = p.label %}{{ label }}
+                    {%- else if let Some(added) = p.added %}<time datetime="{{ added.iso }}" data-format="{{ m.passkey_unnamed_dated }}">{{ m.passkey_unnamed_dated.replace("%date%", added.text) }}</time>
+                    {%- else %}{{ m.passkey_unnamed }}{% endif -%}
+                  </p>
+                  {%- if p.this_device %}
+                  <span data-slot="badge" class="{{ ds::badge() }}">{{ m.passkey_this_device }}</span>
+                  {%- endif %}
+                </div>
+                <p class="text-[0.8125rem] leading-5 text-secondary">
+                  {%- if !p.storage.is_empty() %}<span>{{ p.storage }}</span>{% endif -%}
+                  {%- if let Some(added) = p.added %}{% if !p.storage.is_empty() %} · {% endif %}<time datetime="{{ added.iso }}" data-format="{{ m.passkey_added }}">{{ m.passkey_added.replace("%date%", added.text) }}</time>{% endif -%}
+                  {%- if let Some(used) = p.last_used %}<br><time datetime="{{ used.iso }}" data-format="{{ m.passkey_last_used }}">{{ m.passkey_last_used.replace("%date%", used.text) }}</time>{% endif -%}
+                </p>
+              </div>
+              <div class="flex gap-2">
+                <button type="button" data-opens="rename" class="{{ ds::button("secondary", "sm") }}">{{ m.rename }}</button>
+                {%- if view.passkeys.len() > 1 %}
+                <button type="button" data-opens="confirm" class="{{ ds::button("secondary-destructive", "sm") }}">{{ m.remove }}</button>
+                {%- endif %}
+              </div>
+            </div>
+            {% call ui::dialog("rename", "rename-title-" ~ loop.index, m.rename, m.save, m.cancel) %}
+            <label class="sr-only" for="label-{{ loop.index }}">{{ m.setup_label }}</label>
+            <input id="label-{{ loop.index }}" name="label" type="text" maxlength="64" required autofocus autocomplete="off" value="{{ p.label.unwrap_or_default() }}" class="{{ ds::input() }}">
+            {%- endcall %}
+            {%- if view.passkeys.len() > 1 %}
+            {% call ui::dialog("confirm", "remove-title-" ~ loop.index, m.remove_title, m.remove, m.cancel, "destructive", "Fingerprint") %}
+            <p data-slot="dialog-description" class="{{ ds::dialog_description() }} text-pretty">{{ m.remove_body }}</p>
+            {%- endcall %}
+            {%- endif %}
+            <p data-status role="status" aria-live="polite" class="empty:sr-only text-[0.8125rem] leading-5 text-secondary"></p>
+            <p data-error role="alert" class="empty:sr-only text-[0.8125rem] leading-5 text-pretty text-fail-strong"></p>
+          </li>
+          {%- endfor %}
+        </ul>
+        {%- endif %}
+      </li>
+
+      {%- if let Some(password) = view.password %}
+      <li id="password" class="flex flex-col gap-1 py-3 first:pt-0 last:pb-0">
+        <div class="flex flex-wrap items-start gap-x-3 gap-y-2">
+          {{ method_icon("Password") }}
+          <div class="flex min-w-0 flex-1 basis-32 flex-col gap-0.5">
+            <h3 class="text-sm leading-5 font-medium text-main">{{ m.password_title }}</h3>
+            <p class="text-[0.8125rem] leading-5 text-secondary">{% if password.authenticator %}{{ m.password_on_authenticator }}{% else %}{{ m.password_on }}{% endif %}</p>
+          </div>
+          <div class="flex gap-2">
+            <button type="button" data-opens="change" class="{{ ds::button("secondary", "sm") }}">{{ m.change }}</button>
+            <button type="button" data-opens="confirm" class="{{ ds::button("secondary-destructive", "sm") }}">{{ m.remove }}</button>
+          </div>
+        </div>
+        {% call ui::dialog("change", "password-change-title", m.password_change, m.save, m.cancel, form_id = "password-change") %}
+        <div class="flex flex-col gap-4">
+        <p data-slot="dialog-description" class="{{ ds::dialog_description() }} text-pretty">{{ m.password_note }}
+          {%- if password.authenticator %} {{ m.password_authenticator_note }}{% endif %}</p>
+        <input type="text" name="username" autocomplete="username" value="{{ view.username }}" hidden>
+        {% call ui::field("current-password", m.password_current) %}
+        <input id="current-password" name="current" type="password" maxlength="1024" required autofocus class="{{ ds::input() }}" autocomplete="current-password">
+        {% endcall %}
+        {% call ui::field("new-password", m.password_new, m.setup_password_hint) %}
+        <input id="new-password" name="new" type="password" minlength="15" maxlength="1024" required class="{{ ds::input() }}" autocomplete="new-password"
+               {{- ui::field_describedby("new-password", m.setup_password_hint) }}>
+        {% endcall %}
+        </div>
+        {%- endcall %}
+        {% call ui::dialog("confirm", "password-remove-title", m.password_remove_title, m.remove, m.cancel, "destructive") %}
+        <p data-slot="dialog-description" class="{{ ds::dialog_description() }} text-pretty">{{ m.password_remove_body }}
+          {%- if password.authenticator %} {{ m.password_remove_authenticator }}{% endif %}</p>
+        <label class="sr-only" for="remove-current">{{ m.password_current }}</label>
+        <input id="remove-current" name="current" type="password" maxlength="1024" required autofocus autocomplete="current-password"
+               placeholder="{{ m.password_current }}" class="{{ ds::input() }}">
+        {%- endcall %}
+        <p data-status role="status" aria-live="polite" class="empty:sr-only text-[0.8125rem] leading-5 text-secondary"></p>
+        <p data-error role="alert" class="empty:sr-only text-[0.8125rem] leading-5 text-pretty text-fail-strong"></p>
+      </li>
+      {%- endif %}
+
+      {%- for l in view.linked %}
+      <li data-linked="{{ l.name }}" class="flex flex-col gap-1 py-3 first:pt-0 last:pb-0">
+        <div class="flex flex-wrap items-start gap-x-3 gap-y-2">
+          {{ method_icon(l.provider.icon) }}
+          <div class="flex min-w-0 flex-1 basis-32 flex-col gap-0.5">
+            <h3 class="text-sm leading-5 font-medium break-words text-main">{{ l.provider.label }}</h3>
+            <p class="text-[0.8125rem] leading-5 text-secondary">
+              {%- if let Some(linked) = l.linked %}<time datetime="{{ linked.iso }}" data-format="{{ m.linked_on }}">{{ m.linked_on.replace("%date%", linked.text) }}</time>
+              {%- else %}{{ m.linked }}{% endif -%}
+            </p>
+          </div>
+          {%- if view.passkey_confirms %}
+          <button type="button" data-opens="confirm" class="{{ ds::button("secondary-destructive", "sm") }}">{{ m.remove }}</button>
+          {%- endif %}
+        </div>
+        {%- if view.passkey_confirms %}
+        {% call ui::dialog("confirm", "unlink-title-" ~ loop.index, m.unlink_title, m.remove, m.cancel, "destructive", "Fingerprint") %}
+        <p data-slot="dialog-description" class="{{ ds::dialog_description() }} text-pretty">{{ m.unlink_body }}</p>
+        {%- endcall %}
+        {%- endif %}
+        <p data-status role="status" aria-live="polite" class="empty:sr-only text-[0.8125rem] leading-5 text-secondary"></p>
+        <p data-error role="alert" class="empty:sr-only text-[0.8125rem] leading-5 text-pretty text-fail-strong"></p>
+      </li>
+      {%- endfor %}
+
+      {%- for p in view.unlinked %}
+      <li class="flex flex-wrap items-start gap-x-3 gap-y-2 py-3 first:pt-0 last:pb-0">
+        {{ method_icon(p.icon) }}
+        <div class="flex min-w-0 flex-1 basis-32 flex-col gap-0.5">
+          <h3 class="text-sm leading-5 font-medium break-words text-main">{{ p.label }}</h3>
+          <p class="text-[0.8125rem] leading-5 text-secondary">{{ m.not_linked }}</p>
+        </div>
+        {%- if view.passkey_confirms %}
+        <button type="button" data-link="{{ p.id }}" aria-label="{{ m.link_with.replace("%provider%", p.label) }}" class="{{ ds::button("secondary", "sm") }}">{{ m.link }}</button>
+        {%- endif %}
       </li>
       {%- endfor %}
     </ul>
-    {%- endif %}
     {%- if !view.passkey_confirms %}
     <p class="text-[0.8125rem] leading-5 text-pretty text-secondary">{{ m.passkey_sign_in_needed }}</p>
-    {%- else %}
-    <form id="add" class="flex flex-col gap-3 border-t border-v2-border pt-4" novalidate>
-      {% call ui::field("add-label", m.setup_label, m.setup_label_hint) %}
-      <input id="add-label" name="label" type="text" maxlength="64" class="{{ ds::input() }}" autocomplete="off"
-             {{- ui::field_describedby("add-label", m.setup_label_hint) }}>
-      {% endcall %}
-      <button type="submit" class="{{ ds::button("primary", "lg") }} w-full">{{ icons::icon("Fingerprint") }}{{ m.add_passkey }}</button>
-    </form>
+    {%- else if view.admin && !view.providers.is_empty() %}
+    <p class="text-[0.8125rem] leading-5 text-pretty text-secondary">{{ m.admin_passkey_only }}</p>
     {%- endif %}
   </section>
 {% endcall %}{% endcall %}
-
-{%- if !view.linked.is_empty() || !view.providers.is_empty() %}
-{% call ui::card() %}{% call ui::card_content() %}
-  <section aria-labelledby="linked-title" class="flex flex-col gap-4">
-    <div class="flex flex-col gap-1">
-      <h2 id="linked-title" class="text-base leading-6 font-semibold text-main">{{ m.linked_title }}</h2>
-      <p class="text-[0.8125rem] leading-5 text-pretty text-secondary">{{ m.linked_note }}</p>
-    </div>
-    {%- if view.linked.is_empty() %}
-    <p class="text-[0.8125rem] leading-5 text-secondary">{{ m.linked_none }}</p>
-    {%- else %}
-    <ul class="flex flex-col divide-y divide-v2-border">
-      {%- for l in view.linked %}
-      <li data-linked="{{ l.name }}" class="flex gap-3 py-3 first:pt-0">
-        <div class="flex size-8 shrink-0 items-center justify-center rounded-md border border-v2-border bg-v2-surface-hover text-secondary">
-          {{ icons::icon(l.provider.icon, "size-4") }}
-        </div>
-        <div class="flex min-w-0 flex-1 flex-col gap-1">
-          <p class="min-w-0 text-sm leading-5 font-medium break-words text-main">{{ l.provider.label }}</p>
-          {%- if let Some(linked) = l.linked %}
-          <p class="text-[0.8125rem] leading-5 text-secondary"><time datetime="{{ linked.iso }}" data-format="{{ m.linked_on }}">{{ m.linked_on.replace("%date%", linked.text) }}</time></p>
-          {%- endif %}
-          {%- if view.passkey_confirms %}
-          <div class="mt-1 flex flex-wrap gap-2">
-            <button type="button" data-opens="confirm" class="{{ ds::button("secondary-destructive", "sm") }}">{{ m.remove }}</button>
-          </div>
-          {% call ui::dialog("confirm", "unlink-title-" ~ loop.index, m.unlink_title, m.remove, m.cancel, "destructive", "Fingerprint") %}
-          <p data-slot="dialog-description" class="{{ ds::dialog_description() }} text-pretty">{{ m.unlink_body }}</p>
-          {%- endcall %}
-          {%- endif %}
-          <p data-status role="status" aria-live="polite" class="empty:sr-only text-[0.8125rem] leading-5 text-secondary"></p>
-          <p data-error role="alert" class="empty:sr-only text-[0.8125rem] leading-5 text-pretty text-fail-strong"></p>
-        </div>
-      </li>
-      {%- endfor %}
-    </ul>
-    {%- endif %}
-    {%- if !view.providers.is_empty() %}
-    <div class="flex flex-col gap-3 border-t border-v2-border pt-4">
-      {%- if view.admin %}
-      <p class="text-[0.8125rem] leading-5 text-pretty text-secondary">{{ m.admin_passkey_only }}</p>
-      {%- else if !view.passkey_confirms %}
-      <p class="text-[0.8125rem] leading-5 text-pretty text-secondary">{{ m.passkey_sign_in_needed }}</p>
-      {%- else %}
-      {%- for p in view.providers %}
-      <button type="button" data-link="{{ p.id }}" class="{{ ds::button("secondary", "lg") }} w-full">{{ icons::icon(p.icon) }}<span class="truncate">{{ m.link_with.replace("%provider%", p.label) }}</span></button>
-      {%- endfor %}
-      {%- endif %}
-    </div>
-    {%- endif %}
-  </section>
-{% endcall %}{% endcall %}
-{%- endif %}
-
-{%- if let Some(password) = view.password %}
-{% call ui::card() %}{% call ui::card_content() %}
-  <section id="password" aria-labelledby="password-title" class="flex flex-col gap-4">
-    <div class="flex flex-col gap-1">
-      <h2 id="password-title" class="text-base leading-6 font-semibold text-main">{{ m.password_title }}</h2>
-      <p class="text-[0.8125rem] leading-5 text-pretty text-secondary">{{ m.password_note }}</p>
-      {%- if password.authenticator %}
-      <p class="text-[0.8125rem] leading-5 text-pretty text-secondary">{{ m.password_authenticator_note }}</p>
-      {%- endif %}
-    </div>
-    <form id="password-change" class="flex flex-col gap-3" novalidate>
-      <input type="text" name="username" autocomplete="username" value="{{ view.username }}" hidden>
-      {% call ui::field("current-password", m.password_current) %}
-      <input id="current-password" name="current" type="password" maxlength="1024" required class="{{ ds::input() }}" autocomplete="current-password">
-      {% endcall %}
-      {% call ui::field("new-password", m.password_new, m.setup_password_hint) %}
-      <input id="new-password" name="new" type="password" minlength="15" maxlength="1024" required class="{{ ds::input() }}" autocomplete="new-password"
-             {{- ui::field_describedby("new-password", m.setup_password_hint) }}>
-      {% endcall %}
-      <button type="submit" class="{{ ds::button("primary", "lg") }} w-full">{{ m.password_change }}</button>
-    </form>
-    <div class="flex flex-col gap-2 border-t border-v2-border pt-4">
-      <div class="flex flex-wrap gap-2">
-        <button type="button" data-opens="confirm" class="{{ ds::button("secondary-destructive", "sm") }}">{{ m.password_remove }}</button>
-      </div>
-      {% call ui::dialog("confirm", "password-remove-title", m.password_remove_title, m.remove, m.cancel, "destructive") %}
-      <p data-slot="dialog-description" class="{{ ds::dialog_description() }} text-pretty">{{ m.password_remove_body }}
-        {%- if password.authenticator %} {{ m.password_remove_authenticator }}{% endif %}</p>
-      <label class="sr-only" for="remove-current">{{ m.password_current }}</label>
-      <input id="remove-current" name="current" type="password" maxlength="1024" required autofocus autocomplete="current-password"
-             placeholder="{{ m.password_current }}" class="{{ ds::input() }}">
-      {%- endcall %}
-    </div>
-    <p data-status role="status" aria-live="polite" class="empty:sr-only text-[0.8125rem] leading-5 text-secondary"></p>
-    <p data-error role="alert" class="empty:sr-only text-[0.8125rem] leading-5 text-pretty text-fail-strong"></p>
-  </section>
-{% endcall %}{% endcall %}
-{%- endif %}
 
 {% call ui::card() %}{% call ui::card_content() %}
   <section aria-labelledby="sessions-title" class="flex flex-col gap-4">
-    <div class="flex flex-col gap-1">
-      <h2 id="sessions-title" class="text-base leading-6 font-semibold text-main">{{ m.sessions_title }}</h2>
-      <p class="text-[0.8125rem] leading-5 text-pretty text-secondary">{{ m.sessions_note }}</p>
+    <div class="flex flex-wrap items-start gap-x-3 gap-y-2">
+      <div class="flex min-w-0 flex-1 basis-48 flex-col gap-1">
+        <h2 id="sessions-title" class="text-base leading-6 font-semibold text-main">{{ m.sessions_title }}</h2>
+        <p class="text-[0.8125rem] leading-5 text-pretty text-secondary">{{ m.sessions_note }}</p>
+      </div>
+      {%- if !view.other_sessions.is_empty() %}
+      <button type="button" id="sign-out-others" class="{{ ds::button("secondary", "sm") }}">{{ m.sign_out_others }}</button>
+      {%- endif %}
     </div>
+    {%- if let Some(s) = view.this_session %}
+    <div class="flex">{{ session_row(s, m) }}</div>
+    {%- endif %}
+    {%- if !view.other_sessions.is_empty() %}
+    {% call ui::disclosure(m.sessions_others.replace("%count%", &view.other_sessions.len().to_string())) %}
     <ul class="flex flex-col divide-y divide-v2-border">
-      {%- for s in view.sessions %}
-      <li data-session="{{ s.name }}" class="flex items-center gap-3 py-3 first:pt-0">
-        <div class="flex min-w-0 flex-1 flex-col gap-0.5">
-          <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-            <p class="min-w-0 text-sm leading-5 font-medium break-words text-main">{{ s.title }}</p>
-            {%- if s.current %}
-            <span data-slot="badge" class="{{ ds::badge() }}">{{ m.session_this }}</span>
-            {%- endif %}
-          </div>
-          <p class="text-[0.8125rem] leading-5 break-words text-secondary"><time datetime="{{ s.signed_in.iso }}" data-format="{{ m.session_signed_in }}">{{ m.session_signed_in.replace("%date%", s.signed_in.text) }}</time>
-            {%- if let Some(credential) = s.credential %}<br>{{ m.session_passkey.replace("%name%", credential) }}{% endif %}</p>
-        </div>
+      {%- for s in view.other_sessions %}
+      <li data-session="{{ s.name }}" class="flex flex-wrap items-center gap-x-3 gap-y-2 py-3 first:pt-0 last:pb-0">
+        {{ session_row(s, m) }}
         <button type="button" data-action="revoke" class="{{ ds::button("secondary", "sm") }}">{{ m.sign_out }}</button>
       </li>
       {%- endfor %}
     </ul>
-    {%- if view.sessions.len() > 1 %}
-    <button type="button" id="sign-out-others" class="{{ ds::button("secondary", "lg") }} w-full">{{ m.sign_out_others }}</button>
+    {% endcall %}
     {%- endif %}
   </section>
 {% endcall %}{% endcall %}

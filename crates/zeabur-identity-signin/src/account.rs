@@ -672,8 +672,11 @@ where
                 .map(|account| shown_provider(account, &descriptors))
                 .collect();
             let linked_rows = linked_rows(&linked, &shown);
-            let providers: Vec<ProviderButton<'_>> =
-                descriptors.iter().map(Descriptor::button).collect();
+            let providers: Vec<ProviderButton<'_>> = descriptors
+                .iter()
+                .filter(|d| !linked.iter().any(|account| account.issuer == d.issuer))
+                .map(Descriptor::button)
+                .collect();
             account_page(
                 lang,
                 Some(AccountView {

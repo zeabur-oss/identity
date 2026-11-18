@@ -383,7 +383,7 @@ pub struct AccountView<'a> {
     pub passkeys: &'a [PasskeyRow<'a>],
     /// The user's linked upstream accounts.
     pub linked: &'a [LinkedRow<'a>],
-    /// The upstream providers the user may link.
+    /// The upstream providers the user may link: those with no account of the user linked yet.
     pub providers: &'a [ProviderButton<'a>],
     /// An admin account, which cannot link upstream accounts.
     pub admin: bool,
@@ -462,10 +462,23 @@ struct AccountItems<'a> {
     passkeys: Vec<PasskeyItem<'a>>,
     linked: Vec<LinkedItem<'a>>,
     providers: &'a [ProviderButton<'a>],
+    /// The providers offered for linking: none for an admin account.
+    unlinked: &'a [ProviderButton<'a>],
     admin: bool,
     password: Option<PasswordView>,
     passkey_confirms: bool,
-    sessions: Vec<SessionItem<'a>>,
+    this_session: Option<SessionItem<'a>>,
+    other_sessions: Vec<SessionItem<'a>>,
+}
+
+fn session_item<'a>(s: &SessionRow<'a>, m: &'static Messages) -> SessionItem<'a> {
+    SessionItem {
+        name: s.name,
+        title: s.app.unwrap_or(m.session_account),
+        signed_in: Date::new(s.signed_in),
+        credential: s.credential,
+        current: s.current,
+    }
 }
 
 #[derive(Template)]
@@ -479,9 +492,9 @@ struct AccountPage<'a> {
     reset_command: &'static str,
 }
 
-/// Renders the account page: a sign-in button without `view`, else the user's passkeys, linked
-/// accounts, password and sessions. The linked accounts show only if the user has one or
-/// `providers` offers one.
+/// Renders the account page: a sign-in form without `view`, else the user's sign-in methods
+/// (passkeys, password, linked accounts and the providers left to link) and sessions, this one
+/// first.
 #[must_use]
 pub fn account_page(lang: Lang, view: Option<AccountView<'_>>) -> Response {
     let m = lang.messages();
@@ -513,19 +526,20 @@ pub fn account_page(lang: Lang, view: Option<AccountView<'_>>) -> Response {
             })
             .collect(),
         providers: view.providers,
+        unlinked: if view.admin { &[] } else { view.providers },
         admin: view.admin,
         password: view.password,
         passkey_confirms: view.passkey_confirms,
-        sessions: view
+        this_session: view
             .sessions
             .iter()
-            .map(|s| SessionItem {
-                name: s.name,
-                title: s.app.unwrap_or(m.session_account),
-                signed_in: Date::new(s.signed_in),
-                credential: s.credential,
-                current: s.current,
-            })
+            .find(|s| s.current)
+            .map(|s| session_item(s, m)),
+        other_sessions: view
+            .sessions
+            .iter()
+            .filter(|s| !s.current)
+            .map(|s| session_item(s, m))
             .collect(),
     });
     let page = AccountPage {

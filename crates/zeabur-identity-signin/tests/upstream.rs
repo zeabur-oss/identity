@@ -1394,6 +1394,9 @@ mod tests {
         );
         let page = account_page(&h, &session).await;
         assert!(page.contains(&format!(r#"data-linked="{name}""#)));
+        // GitHub is linked now, so only Google is offered.
+        assert!(!page.contains(r#"data-link="github""#));
+        assert!(page.contains(r#"data-link="google""#));
         // The account now signs in as alice.
         let reply = sign_in(&h, "github", "code-2").await;
         assert_eq!(reply.status, StatusCode::SEE_OTHER, "{}", reply.body);
@@ -1407,14 +1410,14 @@ mod tests {
     }
 
     /// The link buttons on an account page: each one's provider ID and text, in page order.
+    /// Each link button's provider and accessible name.
     fn link_buttons(page: &str) -> Vec<(String, String)> {
         let mut buttons = Vec::new();
         for rest in page.split(r#"data-link=""#).skip(1) {
             let (id, rest) = rest.split_once('"').unwrap();
-            let (inside, _) = rest.split_once("</button>").unwrap();
-            let inside = inside.strip_suffix("</span>").unwrap_or(inside);
-            let text = inside.rsplit_once('>').unwrap().1;
-            buttons.push((id.to_owned(), text.to_owned()));
+            let (_, label) = rest.split_once(r#"aria-label=""#).unwrap();
+            let (label, _) = label.split_once('"').unwrap();
+            buttons.push((id.to_owned(), label.to_owned()));
         }
         buttons
     }
@@ -2146,7 +2149,7 @@ mod tests {
         let session = account_session(&h, "alice", 0).await;
         let page = account_page(&h, &session).await;
         // With no provider left, the row names Google by its issuer.
-        assert!(page.contains(">Google</p>"));
+        assert!(page.contains(">Google</h3>"));
 
         registry(&h).replace(vec![Arc::new(openid_provider(
             "workspace",

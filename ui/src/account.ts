@@ -194,9 +194,7 @@ function signIn(): void {
   })
 }
 
-function addPasskey(event: SubmitEvent): void {
-  event.preventDefault()
-  const label = document.querySelector<HTMLInputElement>("#add-label")?.value.trim()
+function addPasskey(label: string): void {
   run(async () => {
     const started = await fresh(header, () => post("/account/passkeys/options", {}))
     if (!started.ok) return started
@@ -275,13 +273,12 @@ async function password(
 
 function wirePassword(section: HTMLElement): void {
   const place = rowPlace(section)
-  const form = section.querySelector<HTMLFormElement>("#password-change")
-  form?.addEventListener("submit", (event) => {
-    event.preventDefault()
+  wireDialog(section, "change", (dialog) => {
     const field = (name: string) =>
-      form.querySelector<HTMLInputElement>(`[name=${name}]`)?.value ?? ""
+      dialog.querySelector<HTMLInputElement>(`[name=${name}]`)?.value ?? ""
     const current = field("current")
     const next = field("new")
+    if (!current) return
     if (next.length < 15) return fail(place, text("msgTooShort"))
     run(() => password("/account/password", { current, new: next }, "password-changed"), place)
   })
@@ -322,20 +319,23 @@ if (root) {
     codeStep(false)
   })
   const signInButton = document.getElementById("account-sign-in")
-  const add = document.getElementById("add") as HTMLFormElement | null
+  const passkeys = document.getElementById("passkeys")
   if (!supported()) {
     document.getElementById("unsupported")?.removeAttribute("hidden")
     document.getElementById("passkey-sign-in")?.setAttribute("hidden", "")
-    if (add) add.hidden = true
+    document.getElementById("add")?.setAttribute("hidden", "")
   } else {
     signInButton?.addEventListener("click", signIn)
-    add?.addEventListener("submit", addPasskey)
+    if (passkeys)
+      wireDialog(passkeys, "add", (dialog) => {
+        addPasskey(dialog.querySelector("input")?.value.trim() ?? "")
+      })
     for (const item of document.querySelectorAll<HTMLElement>("[data-passkey]")) wirePasskey(item)
     for (const item of document.querySelectorAll<HTMLElement>("[data-linked]"))
       wireRemove(item, "/account/links/remove", item.dataset.linked ?? "", "")
     for (const button of document.querySelectorAll<HTMLButtonElement>("button[data-link]"))
       button.addEventListener("click", () => link(button.dataset.link ?? ""))
-    if (window.location.hash === "#add") document.getElementById("add-label")?.focus()
+    if (window.location.hash === "#add") document.getElementById("add")?.click()
   }
   showNotice()
   showDone()
