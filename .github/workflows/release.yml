@@ -1,10 +1,10 @@
 name: Release
 
 # Tag vX.Y.Z or vX.Y.Z-<pre-release> on main: build and smoke the CLI and the image on both
-# architectures, push the image by digest, sign it and attest its SBOMs, add the assets to the draft
-# release that the Release pull request workflow left when it tagged, and verify the draft on both
-# architectures (docs/internal/releasing.md). A maintainer publishes the draft. Manual run:
-# rehearse, which builds and smokes and publishes nothing.
+# architectures, push the image by digest, sign it and attest its SBOMs, create the draft release
+# with the assets, and verify the draft on both architectures (docs/internal/releasing.md). A
+# maintainer publishes the draft. Manual run: rehearse, which builds and smokes and publishes
+# nothing.
 on:
   push:
     tags: ["v[0-9]*"]
@@ -38,7 +38,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: zeabur-oss/.github/actions/ci-setup@01d7c04f44028272077eaf4ab97f4de5257aad65 # main
+      - uses: zeabur-oss/.github/actions/ci-setup@f3ae87d7ef3c37447432e398200d200b546dfa46 # main
       - name: Install the packages
         run: bun install --frozen-lockfile
       - name: The version is the crates' and the UI's, with a CHANGELOG.md section, on main
@@ -72,7 +72,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: zeabur-oss/.github/actions/ci-setup@01d7c04f44028272077eaf4ab97f4de5257aad65 # main
+      - uses: zeabur-oss/.github/actions/ci-setup@f3ae87d7ef3c37447432e398200d200b546dfa46 # main
       - name: Build the CLI and the image, and smoke them on k3s
         run: scripts/release-build.sh "$VERSION" dist
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -97,7 +97,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: zeabur-oss/.github/actions/ci-setup@01d7c04f44028272077eaf4ab97f4de5257aad65 # main
+      - uses: zeabur-oss/.github/actions/ci-setup@f3ae87d7ef3c37447432e398200d200b546dfa46 # main
       - name: Install the packages
         run: bun install --frozen-lockfile
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -164,7 +164,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: zeabur-oss/.github/actions/ci-setup@01d7c04f44028272077eaf4ab97f4de5257aad65 # main
+      - uses: zeabur-oss/.github/actions/ci-setup@f3ae87d7ef3c37447432e398200d200b546dfa46 # main
       - name: Install the packages
         run: bun install --frozen-lockfile
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -188,10 +188,11 @@ jobs:
       - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-checksums: assets/SHA256SUMS
-      - name: Add the assets to the draft release
+      # The draft is created with its files, never before: a published release takes no more files.
+      - name: Create the draft release with the assets
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "$VERSION" assets/* --repo "$GITHUB_REPOSITORY" --clobber
+        run: bun x zeabur-oss-release draft CHANGELOG.md "$VERSION" assets --name "Zeabur Identity" --docs https://oss.zeabur.com/docs/identity/
 
   verify:
     name: verify (${{ matrix.arch }})
@@ -212,7 +213,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: zeabur-oss/.github/actions/ci-setup@01d7c04f44028272077eaf4ab97f4de5257aad65 # main
+      - uses: zeabur-oss/.github/actions/ci-setup@f3ae87d7ef3c37447432e398200d200b546dfa46 # main
       - name: Install the packages
         run: bun install --frozen-lockfile
       - name: Download the draft's assets and verify them, the image and its SBOM, and smoke them

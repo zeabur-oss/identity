@@ -11,7 +11,7 @@ by digest, signing, `SHA256SUMS` and most of verification) are `@zeabur-oss/rele
 | `check` | Every workspace crate (including `zeabur-identityctl`), `Cargo.lock` and `ui/package.json` carry the version, and `CHANGELOG.md` has its `## X.Y.Z (YYYY-MM-DD)` section. |
 | `build` | Per platform (Linux amd64 and arm64, each natively), `scripts/release-build.sh`: static musl binaries, the CLI archive, CycloneDX SBOMs and the image, then `scripts/release-smoke.sh` runs that archive and image on a disposable k3s cluster. |
 | `publish` | Pushes each smoked image to `ghcr.io/zeabur-oss/identity` by digest and the multi-platform index as the version tag, signs them and records them in `digests.txt`, then attests their SBOMs with cosign. `attest` adds build provenance. |
-| `release` | Adds the release files (including `resources.json`, the archive's `zeabur-identityctl resources`) and `SHA256SUMS` with its Sigstore bundle to the draft. |
+| `release` | Creates the draft release with the release files (including `resources.json`, the archive's `zeabur-identityctl resources`) and `SHA256SUMS` with its Sigstore bundle. |
 | `verify` | On fresh amd64 and arm64 runners: checks the draft's files, their signatures and provenance, then `scripts/release-verify.sh` checks the image's index, signatures and SBOM and runs the downloaded CLI and the image on k3s. |
 
 The signatures name this repository's `.github/workflows/release.yml`: see
