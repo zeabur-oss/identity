@@ -39,6 +39,10 @@ pub const DEVICE_COOKIE: &str = "__Host-zeabur-identity-device";
 /// (RFC 6265 §4.1.1), and each entry already uses `.` between its parts.
 const ENTRY_SEPARATOR: &str = "~";
 /// The most users a browser remembers. The oldest entry is dropped first.
+///
+/// Each entry protects one user, so a browser shared by a few accounts (a personal and an admin
+/// account, or a family computer) keeps all of them. Four is a judgement, not a limit of the
+/// cookie: four entries take about 540 bytes of the 4096 that RFC 6265 §6.1 asks browsers to keep.
 const DEVICE_ENTRIES: usize = 4;
 /// 400 days, the longest lifetime browsers keep (RFC 6265bis §5.5).
 const DEVICE_MAX_AGE: u64 = 400 * 24 * 60 * 60;
