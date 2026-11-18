@@ -76,10 +76,39 @@ function failed(kind: string): void {
   else say("error", text(failures[kind] ?? "msgError"))
 }
 
-/** The password was right: shows the code field, whose description says what to enter. */
+/** The password was right: the code step takes the place of the username and password. */
 function askForCode(): void {
-  document.getElementById("second-factor")?.removeAttribute("hidden")
+  secondStep(true)
   document.querySelector<HTMLInputElement>("#code")?.focus()
+}
+
+/** Shows the code step, or goes back to the first step with the password cleared. */
+function secondStep(shown: boolean): void {
+  const user = document.getElementById("second-factor-user")
+  if (user) user.textContent = field("username").trim()
+  document.getElementById("first-step")?.toggleAttribute("hidden", shown)
+  document.getElementById("second-factor")?.toggleAttribute("hidden", !shown)
+  document.getElementById("lost-passkey")?.toggleAttribute("hidden", shown)
+  for (const button of document.querySelectorAll("[data-provider]"))
+    button.toggleAttribute("hidden", shown)
+  alternatives()
+}
+
+/** Hides the other ways in when none of their buttons shows. */
+function alternatives(): void {
+  const view = document.getElementById("alternatives")
+  const shown = [...(view?.querySelectorAll("button") ?? [])].some((button) => !button.hidden)
+  view?.toggleAttribute("hidden", !shown)
+}
+
+function useAnotherAccount(): void {
+  for (const id of ["password", "code"]) {
+    const input = document.querySelector<HTMLInputElement>(`#${id}`)
+    if (input) input.value = ""
+  }
+  say("error", "")
+  secondStep(false)
+  document.querySelector<HTMLInputElement>("#username")?.focus()
 }
 
 async function options(): Promise<PublicKeyCredentialRequestOptions | null> {
@@ -188,11 +217,11 @@ if (form) {
     { "no-request": ended },
   )
   form.addEventListener("submit", signInWithPassword)
+  document.getElementById("other-account")?.addEventListener("click", useAnotherAccount)
   const passkey = document.getElementById("passkey")
   if (!supported()) {
     passkey?.setAttribute("hidden", "")
-    if (!document.querySelector("[data-provider]"))
-      document.getElementById("alternatives")?.setAttribute("hidden", "")
+    alternatives()
   } else {
     passkey?.addEventListener("click", signInWithPasskey)
     void startAutofill()

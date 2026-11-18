@@ -39,6 +39,7 @@
           data-msg-password-missing="{{ m.password_missing }}" data-msg-busy="{{ m.busy }}"
           data-msg-code-failed="{{ m.code_failed }}" data-msg-admin-two-factor="{{ m.admin_two_factor }}"
           {%- if let Some(seconds) = expires_in %} data-expires-in="{{ seconds }}"{% endif %}>
+      <div id="first-step" class="flex flex-col gap-5">
       {% call ui::field("username", m.login_username) %}
       <input id="username" name="username" type="text" class="{{ ds::input() }}"
              autocomplete="username webauthn" autocapitalize="none" spellcheck="false"
@@ -48,13 +49,18 @@
       <input id="password" name="password" type="password" maxlength="1024" class="{{ ds::input() }}"
              autocomplete="current-password">
       {% endcall %}
-      {#- Shown once the password is right and the account has an authenticator. -#}
-      <div id="second-factor" hidden>
-      {% call ui::field("code", m.login_code, m.login_code_hint) %}
-      <input id="code" name="code" type="text" maxlength="32" class="{{ ds::input() }}"
-             autocomplete="one-time-code" autocapitalize="none" spellcheck="false"
-             {{- ui::field_describedby("code", m.login_code_hint) }}>
-      {% endcall %}
+      </div>
+      {#- Takes the place of the first step once the password is right and the account has an authenticator. -#}
+      <div id="second-factor" hidden class="flex flex-col gap-5">
+        <div class="flex items-center justify-between gap-3 h-10 rounded-md border border-v2-border px-3 text-sm leading-5">
+          <span id="second-factor-user" class="truncate font-medium text-main"></span>
+          <button type="button" id="other-account" class="shrink-0 rounded-md text-[0.8125rem] text-secondary hover:text-main">{{ m.login_other_account }}</button>
+        </div>
+        {% call ui::field("code", m.login_code, m.login_code_hint) %}
+        <input id="code" name="code" type="text" maxlength="32" class="{{ ds::input() }}"
+               autocomplete="one-time-code" autocapitalize="none" spellcheck="false"
+               {{- ui::field_describedby("code", m.login_code_hint) }}>
+        {% endcall %}
       </div>
       <button type="submit" class="{{ ds::button("primary", "lg") }} w-full">{{ m.login_submit }}</button>
     </form>
@@ -65,7 +71,7 @@
         {{ upstream::buttons(providers, m) }}
       </div>
     </div>
-    {% call ui::disclosure(m.lost_passkey_title, center = true) %}
+    {% call ui::disclosure(m.lost_passkey_title, id = "lost-passkey", center = true) %}
     <p>{{ m.lost_passkey_body }}</p>
     {{ ui::command(reset_command) }}
     <p>{{ m.lost_passkey_note }}</p>
