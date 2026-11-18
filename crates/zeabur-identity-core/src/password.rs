@@ -15,7 +15,6 @@
 //! [owasp]: https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html
 
 use std::num::NonZeroU32;
-use std::sync::LazyLock;
 
 use aws_lc_rs::hmac;
 use aws_lc_rs::pbkdf2::{self, PBKDF2_HMAC_SHA256};
@@ -40,7 +39,9 @@ const SCHEME: &str = "zid-pbkdf2-sha256-hmac";
 
 /// Common passwords of 15 characters or more, lower-cased, sorted by bytes. From the
 /// `SecLists` file `Pwdb_top-1000000.txt` (MIT, see `data/common-passwords.LICENSE`).
-const COMMON: &str = include_str!("../data/common-passwords.txt");
+static COMMON: [&str; line_count(COMMON_TEXT)] = lines(COMMON_TEXT);
+
+const COMMON_TEXT: &str = include_str!("../data/common-passwords.txt");
 
 /// Why a new password is refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,10 +117,47 @@ pub fn check(password: &Normalized, context: &[&str]) -> Result<(), Weakness> {
     Ok(())
 }
 
-static COMMON_LIST: LazyLock<Vec<&'static str>> = LazyLock::new(|| COMMON.lines().collect());
-
 fn is_common(lower: &str) -> bool {
-    COMMON_LIST.binary_search(&lower).is_ok()
+    COMMON.binary_search(&lower).is_ok()
+}
+
+/// The number of lines in `text`, each ended by `\n`.
+const fn line_count(text: &str) -> usize {
+    let mut bytes = text.as_bytes();
+    let mut count = 0;
+    while let [byte, rest @ ..] = bytes {
+        if *byte == b'\n' {
+            count += 1;
+        }
+        bytes = rest;
+    }
+    count
+}
+
+/// The length of the first line of `bytes`, without its `\n`.
+const fn line_len(mut bytes: &[u8]) -> usize {
+    let mut len = 0;
+    while let [byte, rest @ ..] = bytes {
+        if *byte == b'\n' {
+            break;
+        }
+        len += 1;
+        bytes = rest;
+    }
+    len
+}
+
+/// Splits `text` into its `N` lines, each ended by `\n`, at compile time.
+const fn lines<const N: usize>(mut text: &str) -> [&str; N] {
+    let mut out = [""; N];
+    let mut slots: &mut [&str] = &mut out;
+    while let [slot, more @ ..] = slots {
+        let (line, rest) = text.split_at(line_len(text.as_bytes()));
+        *slot = line;
+        text = rest.split_at(1).1;
+        slots = more;
+    }
+    out
 }
 
 /// What a stored hash says about a submitted password.
@@ -259,9 +297,8 @@ mod tests {
 
     #[test]
     fn every_listed_password_is_long_and_sorted() {
-        let list: Vec<&str> = COMMON.lines().collect();
-        assert!(list.windows(2).all(|w| w[0] < w[1]));
-        assert!(list.iter().all(|p| p.chars().count() >= MIN_CHARS));
+        assert!(COMMON.windows(2).all(|w| w[0] < w[1]));
+        assert!(COMMON.iter().all(|p| p.chars().count() >= MIN_CHARS));
     }
 
     #[test]
