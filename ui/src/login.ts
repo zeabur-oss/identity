@@ -90,17 +90,11 @@ async function startAutofill(): Promise<void> {
 
 async function autofillWith(publicKey: PublicKeyCredentialRequestOptions): Promise<void> {
   autofill = new AbortController()
-  try {
-    const credential = await navigator.credentials.get({
-      publicKey,
-      mediation: "conditional",
-      signal: autofill.signal,
-    })
-    await finish(credential)
-  } catch (error) {
-    // Aborted when the user presses the button instead; other errors surface on the next attempt.
-    if (!cancelled(error)) say("error", text("msgError"))
-  }
+  // Nothing was asked of the user yet, so a failed offer stays quiet; the button shows the cause.
+  const credential = await navigator.credentials
+    .get({ publicKey, mediation: "conditional", signal: autofill.signal })
+    .catch(() => null)
+  if (credential) await finish(credential).catch(() => say("error", text("msgError")))
 }
 
 function field(id: string): string {
@@ -177,8 +171,11 @@ if (form) {
   )
   form.addEventListener("submit", signInWithPassword)
   const passkey = document.getElementById("passkey")
-  if (!supported()) passkey?.setAttribute("hidden", "")
-  else {
+  if (!supported()) {
+    passkey?.setAttribute("hidden", "")
+    if (!document.querySelector("[data-provider]"))
+      document.getElementById("alternatives")?.setAttribute("hidden", "")
+  } else {
     passkey?.addEventListener("click", signInWithPasskey)
     void startAutofill()
   }

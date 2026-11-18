@@ -15,7 +15,7 @@ import {
 
 const form = document.getElementById("setup") as HTMLFormElement | null
 const passwordForm = document.getElementById("setup-password") as HTMLFormElement | null
-const passwordSetup = document.getElementById("password-setup")
+const alternatives = document.getElementById("alternatives")
 const text = messages(form)
 const weakText = messages(passwordForm)
 const token = new URLSearchParams(window.location.hash.slice(1)).get("token")
@@ -30,8 +30,8 @@ function invalid(): void {
   say("error", text("msgInvalid"))
   document.getElementById("new-link")?.removeAttribute("hidden")
   if (form) form.hidden = true
-  passwordSetup?.setAttribute("hidden", "")
-  document.getElementById("upstream")?.setAttribute("hidden", "")
+  passwordForm?.setAttribute("hidden", "")
+  alternatives?.setAttribute("hidden", "")
 }
 
 const failures: Record<string, string> = {
@@ -100,10 +100,7 @@ async function enrol(token: string): Promise<void> {
   })
   if (!(credential instanceof PublicKeyCredential))
     throw new DOMException("no credential", "NotAllowedError")
-  const label = document.querySelector<HTMLInputElement>("#label")?.value.trim()
-  accepted(
-    await post("/setup", { token, credential: registrationJson(credential), label: label || null }),
-  )
+  accepted(await post("/setup", { token, credential: registrationJson(credential), label: null }))
 }
 
 /** The password typed, if it is long enough to send; otherwise says why not. */
@@ -144,12 +141,20 @@ function done(password: boolean): void {
   say("status", "")
   window.history.replaceState(null, "", window.location.pathname + window.location.search)
   if (form) form.hidden = true
-  passwordSetup?.setAttribute("hidden", "")
-  document.getElementById("upstream")?.setAttribute("hidden", "")
+  passwordForm?.setAttribute("hidden", "")
+  alternatives?.setAttribute("hidden", "")
   if (password) document.querySelector('[data-slot="backup"]')?.setAttribute("hidden", "")
   const view = document.getElementById("done")
   view?.removeAttribute("hidden")
   view?.focus()
+}
+
+/** Shows the password form alone, or the other ways back, with the passkey only if supported. */
+function choosePassword(chosen: boolean): void {
+  say("error", "")
+  passwordForm?.toggleAttribute("hidden", !chosen)
+  alternatives?.toggleAttribute("hidden", chosen)
+  form?.toggleAttribute("hidden", chosen || !supported())
 }
 
 if (form) {
@@ -165,13 +170,20 @@ if (form) {
     say("error", text("msgMissing"))
     document.getElementById("new-link")?.removeAttribute("hidden")
     form.hidden = true
-    passwordSetup?.setAttribute("hidden", "")
+    alternatives?.setAttribute("hidden", "")
   } else {
     passwordForm?.addEventListener("submit", setPassword)
+    document.getElementById("use-password")?.addEventListener("click", () => {
+      choosePassword(true)
+      document.querySelector<HTMLInputElement>("#new-password")?.focus()
+    })
+    document.getElementById("other-ways")?.addEventListener("click", () => choosePassword(false))
     if (supported()) form.addEventListener("submit", register)
     else {
+      // Nothing above the other ways to set them apart from.
       document.getElementById("unsupported")?.removeAttribute("hidden")
       form.hidden = true
+      alternatives?.querySelector('[data-slot="field-separator"]')?.setAttribute("hidden", "")
     }
   }
 }

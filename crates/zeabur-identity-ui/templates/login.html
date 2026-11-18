@@ -47,12 +47,15 @@
       <input id="password" name="password" type="password" maxlength="1024" class="{{ ds::input() }}"
              autocomplete="current-password">
       {% endcall %}
-      <div class="flex flex-col gap-3">
-        <button type="submit" class="{{ ds::button("primary", "lg") }} w-full">{{ m.login_submit }}</button>
-        <button type="button" id="passkey" class="{{ ds::button("secondary", "lg") }} w-full">{{ icons::icon("Fingerprint") }}{{ m.login_passkey }}</button>
-      </div>
+      <button type="submit" class="{{ ds::button("primary", "lg") }} w-full">{{ m.login_submit }}</button>
     </form>
-    {{ upstream::buttons(providers, m) }}
+    <div id="alternatives" class="flex flex-col gap-5">
+      {{ ui::field_separator(m.upstream_or) }}
+      <div class="flex flex-col gap-3">
+        <button type="button" id="passkey" class="{{ ds::button("secondary", "lg") }} w-full">{{ icons::icon("Fingerprint") }}{{ m.login_passkey }}</button>
+        {{ upstream::buttons(providers, m) }}
+      </div>
+    </div>
     {% call ui::disclosure(m.lost_passkey_title, center = true) %}
     <p>{{ m.lost_passkey_body }}</p>
     {{ ui::command(reset_command) }}
