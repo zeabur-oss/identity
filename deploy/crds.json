@@ -257,6 +257,40 @@
                             "maxLength": 256,
                             "minLength": 1,
                             "type": "string"
+                          },
+                          "totp": {
+                            "description": "The second factor asked for after the password, if the user enrolled one.",
+                            "nullable": true,
+                            "properties": {
+                              "enrolledStep": {
+                                "description": "The TOTP time step of the code entered at setup. Codes of this step or before do not\nsign in, so the setup code cannot be used again.",
+                                "format": "int64",
+                                "minimum": 0.0,
+                                "type": "integer"
+                              },
+                              "recovery": {
+                                "description": "Keyed hashes of the one-time recovery codes, hex.",
+                                "items": {
+                                  "description": "A keyed hash of one recovery code: HMAC-SHA256, hex.",
+                                  "pattern": "^[0-9a-f]{64}$",
+                                  "type": "string"
+                                },
+                                "maxItems": 16,
+                                "type": "array"
+                              },
+                              "secret": {
+                                "description": "The TOTP secret, sealed with a key derived from the password key and bound to the user.",
+                                "maxLength": 256,
+                                "minLength": 1,
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "enrolledStep",
+                              "recovery",
+                              "secret"
+                            ],
+                            "type": "object"
                           }
                         },
                         "required": [
@@ -379,11 +413,27 @@
                         "nullable": true,
                         "type": "integer"
                       },
+                      "recoveryUsed": {
+                        "description": "Indexes into `spec.password.totp.recovery` of the recovery codes already used.",
+                        "items": {
+                          "format": "int64",
+                          "type": "integer"
+                        },
+                        "maxItems": 16,
+                        "type": "array"
+                      },
                       "revision": {
                         "default": 0,
                         "description": "Bumped by every account change that must not race a removal (see\n`KubeCredentialStore::remove`).",
                         "format": "int64",
                         "minimum": 0.0,
+                        "type": "integer"
+                      },
+                      "totpLastStep": {
+                        "description": "The last TOTP step accepted, so each code works once.",
+                        "format": "int64",
+                        "minimum": 0.0,
+                        "nullable": true,
                         "type": "integer"
                       }
                     },

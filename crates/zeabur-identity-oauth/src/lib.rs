@@ -65,8 +65,8 @@ pub struct TokenLifetimes {
 impl Lifetimes {
     /// The defaults: codes and PAR request URIs 60 s, pending sign-ins 10 min. Regular accounts:
     /// tokens 10 min, refresh families 1 h idle. Admin accounts: tokens 5 min, refresh families
-    /// 15 min idle if several teams share the cluster or AAL3 is on, else 1 h. Every family
-    /// ends 12 h after sign-in.
+    /// 15 min idle if several teams share the cluster or admins need a device-bound passkey, else 1
+    /// h. Every family ends 12 h after sign-in.
     ///
     /// NIST SP 800-63B-4 sets the AAL2 reauthentication limits at 1 h idle and 24 h overall,
     /// and the AAL3 limits at 15 min idle and 12 h overall ([sp800-63b]).
@@ -174,7 +174,7 @@ impl OneTimeIds {
 
 #[cfg(test)]
 mod tests {
-    use zeabur_identity_core::account::Teams;
+    use zeabur_identity_core::account::{AdminSignIn, Teams};
 
     use super::*;
 
@@ -184,11 +184,11 @@ mod tests {
         let single = Settings::default();
         let multiple = Settings {
             teams: Teams::Multiple,
-            admin_aal3: false,
+            admin_sign_in: AdminSignIn::default(),
         };
-        let aal3 = Settings {
+        let device_bound = Settings {
             teams: Teams::Single,
-            admin_aal3: true,
+            admin_sign_in: AdminSignIn::DeviceBoundPasskey,
         };
         let cases = [
             ("regular", AccountType::Regular, single, mins(10), mins(60)),
@@ -200,9 +200,9 @@ mod tests {
                 mins(60),
             ),
             (
-                "regular, AAL3",
+                "regular, device-bound passkey",
                 AccountType::Regular,
-                aal3,
+                device_bound,
                 mins(10),
                 mins(60),
             ),
@@ -220,7 +220,13 @@ mod tests {
                 mins(5),
                 mins(15),
             ),
-            ("admin, AAL3", AccountType::Admin, aal3, mins(5), mins(15)),
+            (
+                "admin, device-bound passkey",
+                AccountType::Admin,
+                device_bound,
+                mins(5),
+                mins(15),
+            ),
         ];
         for (name, account, settings, access, idle) in cases {
             let got = Lifetimes::DEFAULT.for_account(account, settings);

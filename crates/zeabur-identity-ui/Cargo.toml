@@ -20,4 +20,5 @@ form_urlencoded.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+qrcode.workspace = true
 tokio.workspace = true

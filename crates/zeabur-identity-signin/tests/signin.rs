@@ -23,7 +23,7 @@ mod tests {
     use url::Url;
     use zeabur_identity_api::client::ClientType;
     use zeabur_identity_api::token_hash;
-    use zeabur_identity_core::account::{AccountType, Settings};
+    use zeabur_identity_core::account::{AccountType, AdminSignIn, Settings};
     use zeabur_identity_core::clock::{Clock, UnixTime};
     use zeabur_identity_core::config::BaseUrl;
     use zeabur_identity_core::crypto::Sealer;
@@ -178,7 +178,8 @@ mod tests {
             setup,
             used_ceremonies: OneTimeIds::default(),
             providers: Arc::default(),
-            passwords: zeabur_identity_signin::password::Passwords::with_iterations(&[9; 32], 1),
+            passwords: zeabur_identity_signin::password::Passwords::with_iterations(&[9; 32], 1)
+                .unwrap(),
         });
         let app =
             endpoints::router(oauth).merge(zeabur_identity_signin::router(Arc::clone(&service)));
@@ -1105,19 +1106,19 @@ mod tests {
         credential
     }
 
-    fn turn_on_aal3(h: &Harness) {
+    fn require_device_bound_passkeys(h: &Harness) {
         h.service.oauth.directory.put_settings(Settings {
-            admin_aal3: true,
+            admin_sign_in: AdminSignIn::DeviceBoundPasskey,
             ..Settings::default()
         });
     }
 
     #[tokio::test]
-    async fn with_aal3_an_admin_cannot_sign_in_with_a_synced_passkey() {
+    async fn with_device_bound_passkeys_an_admin_cannot_sign_in_with_a_synced_passkey() {
         let h = harness().await;
         let mut device = device();
         enrol(&h, &mut device).await;
-        turn_on_aal3(&h);
+        require_device_bound_passkeys(&h);
         let reply = sign_in(&h, &mut device).await;
         assert_eq!(reply.status, StatusCode::FORBIDDEN, "{}", reply.body);
         assert_eq!(
@@ -1128,9 +1129,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn with_aal3_an_admin_enrols_only_a_device_bound_passkey() {
+    async fn with_device_bound_passkeys_an_admin_enrols_only_a_device_bound_passkey() {
         let h = harness().await;
-        turn_on_aal3(&h);
+        require_device_bound_passkeys(&h);
         let mut device = device();
         let (credential, ceremony) = start_enrolment(&h, &mut device, SETUP_TOKEN).await;
         let refused = post(
@@ -1914,6 +1915,7 @@ mod tests {
 
     mod password {
         use zeabur_identity_core::guessing::{HOLD, LIMIT};
+        use zeabur_identity_core::totp::{RECOVERY_CODES, STEP, Secret};
         use zeabur_identity_signin::password::DEVICE_COOKIE;
 
         use super::*;
@@ -2007,11 +2009,170 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn admins_cannot_set_a_password() {
+        async fn an_admin_password_needs_an_authenticator() {
             let h = harness().await;
             let reply = set_password(&h, SETUP_TOKEN, GOOD).await;
             assert_eq!(reply.status, StatusCode::FORBIDDEN);
+            assert!(reply.kind().ends_with(":admin-needs-two-factor"));
+            // Where admins need a passkey, setup offers no authenticator either.
+            h.service.oauth.directory.put_settings(Settings {
+                admin_sign_in: AdminSignIn::Passkey,
+                ..Settings::default()
+            });
+            let reply = options(&h, SETUP_TOKEN).await;
             assert!(reply.kind().ends_with(":admin-needs-passkey"));
+            let reply = set_password(&h, SETUP_TOKEN, GOOD).await;
+            assert!(reply.kind().ends_with(":admin-needs-passkey"));
+        }
+
+        #[tokio::test]
+        async fn a_regular_password_needs_no_authenticator() {
+            let h = harness().await;
+            let reply = options(&h, INVITATION).await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+            assert_eq!(reply.body, json!({ "totp": null }));
+        }
+
+        async fn options(h: &Harness, token: &str) -> Reply {
+            post(
+                &h.app,
+                "/setup/password/options",
+                json!({ "token": token }),
+                &[],
+            )
+            .await
+        }
+
+        /// RFC 4648 base32 without padding.
+        fn base32(text: &str) -> Vec<u8> {
+            let alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+            let (mut out, mut buffer, mut bits) = (Vec::new(), 0_u32, 0);
+            for c in text.chars() {
+                let value = u32::try_from(alphabet.find(c).unwrap()).unwrap();
+                buffer = ((buffer << 5) | value) & 0xFFFF;
+                bits += 5;
+                if bits >= 8 {
+                    bits -= 8;
+                    out.push(u8::try_from((buffer >> bits) & 0xFF).unwrap());
+                }
+            }
+            out
+        }
+
+        fn now(h: &Harness) -> UnixTime {
+            UnixTime::from_secs(h.clock.0.load(Ordering::SeqCst))
+        }
+
+        fn next_step(h: &Harness) {
+            h.clock.0.fetch_add(STEP, Ordering::SeqCst);
+        }
+
+        /// Sets the admin's password with an authenticator; returns its secret, the recovery
+        /// codes and the device cookie.
+        async fn admin_with_authenticator(h: &Harness) -> (Secret, Vec<String>, String) {
+            let offered = options(h, SETUP_TOKEN).await;
+            assert_eq!(offered.status, StatusCode::OK, "{}", offered.body);
+            let totp = &offered.body["totp"];
+            assert!(totp["uri"].as_str().unwrap().starts_with("otpauth://totp/"));
+            assert!(totp["qr"]["path"].as_str().unwrap().starts_with('M'));
+            let secret = Secret::from_bytes(&base32(totp["secret"].as_str().unwrap())).unwrap();
+            let sealed = totp["sealed"].clone();
+            let setup = |code: String| {
+                let body = json!({
+                    "token": SETUP_TOKEN,
+                    "password": GOOD,
+                    "totp": { "sealed": sealed, "code": code },
+                });
+                async move { post(&h.app, "/setup/password", body, &[]).await }
+            };
+            // A wrong code leaves the link usable.
+            let wrong = setup("000000".to_owned()).await;
+            assert_eq!(
+                wrong.status,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "{}",
+                wrong.body
+            );
+            assert!(wrong.kind().ends_with(":code-failed"));
+            let reply = setup(secret.code_at(now(h))).await;
+            assert_eq!(reply.status, StatusCode::CREATED, "{}", reply.body);
+            let codes: Vec<String> =
+                serde_json::from_value(reply.body["recovery_codes"].clone()).unwrap();
+            assert_eq!(codes.len(), RECOVERY_CODES);
+            (secret, codes, reply.cookie(DEVICE_COOKIE).unwrap())
+        }
+
+        async fn sign_in_with_code(h: &Harness, code: Option<&str>, device: Option<&str>) -> Reply {
+            let flow = flow(h).await;
+            let mut cookies = vec![(FLOW_COOKIE, flow.as_str())];
+            cookies.extend(device.map(|d| (DEVICE_COOKIE, d)));
+            let body = json!({ "username": "admin", "password": GOOD, "code": code });
+            post(&h.app, "/login/password", body, &cookies).await
+        }
+
+        async fn amr(h: &Harness, reply: &Reply) -> Value {
+            let tokens = exchange(h, reply).await;
+            let payload = tokens["access_token"]
+                .as_str()
+                .unwrap()
+                .split('.')
+                .nth(1)
+                .unwrap();
+            let claims: Value =
+                serde_json::from_slice(&URL_SAFE_NO_PAD.decode(payload).unwrap()).unwrap();
+            claims["amr"].clone()
+        }
+
+        #[tokio::test]
+        async fn an_admin_signs_in_with_a_password_and_a_code_that_works_once() {
+            let h = harness().await;
+            let (secret, _, device) = admin_with_authenticator(&h).await;
+            let device = Some(device.as_str());
+            let reply = sign_in_with_code(&h, None, device).await;
+            assert_eq!(reply.status, StatusCode::UNAUTHORIZED);
+            assert!(reply.kind().ends_with(":code-needed"));
+            // The code entered at setup does not work again.
+            let used = secret.code_at(now(&h));
+            let reply = sign_in_with_code(&h, Some(&used), device).await;
+            assert!(reply.kind().ends_with(":code-failed"), "{}", reply.body);
+            next_step(&h);
+            let code = secret.code_at(now(&h));
+            let reply = sign_in_with_code(&h, Some(&code), device).await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+            assert_eq!(amr(&h, &reply).await, json!(["pwd", "otp", "mfa"]));
+            let reply = sign_in_with_code(&h, Some(&code), device).await;
+            assert!(reply.kind().ends_with(":code-failed"), "replayed");
+        }
+
+        #[tokio::test]
+        async fn a_recovery_code_works_once_in_place_of_a_code() {
+            let h = harness().await;
+            let (_, codes, device) = admin_with_authenticator(&h).await;
+            let device = Some(device.as_str());
+            let typed = codes[3].to_ascii_uppercase();
+            let reply = sign_in_with_code(&h, Some(&typed), device).await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+            assert_eq!(amr(&h, &reply).await, json!(["pwd", "mfa"]));
+            let reply = sign_in_with_code(&h, Some(&codes[3]), device).await;
+            assert!(reply.kind().ends_with(":code-failed"));
+            let reply = sign_in_with_code(&h, Some(&codes[4]), device).await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        }
+
+        #[tokio::test]
+        async fn wrong_codes_count_as_failed_sign_ins() {
+            let h = harness().await;
+            let (secret, _, device) = admin_with_authenticator(&h).await;
+            for _ in 0..=LIMIT {
+                let reply = sign_in_with_code(&h, Some("123456"), None).await;
+                assert_eq!(reply.status, StatusCode::UNAUTHORIZED);
+            }
+            next_step(&h);
+            let code = secret.code_at(now(&h));
+            let reply = sign_in_with_code(&h, Some(&code), None).await;
+            assert!(reply.kind().ends_with(":password-failed"), "held back");
+            let reply = sign_in_with_code(&h, Some(&code), Some(&device)).await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
         }
 
         #[tokio::test]

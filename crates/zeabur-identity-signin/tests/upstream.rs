@@ -315,7 +315,8 @@ mod tests {
             setup,
             used_ceremonies: OneTimeIds::default(),
             providers: Arc::new(Providers::new(providers)),
-            passwords: zeabur_identity_signin::password::Passwords::with_iterations(&[9; 32], 1),
+            passwords: zeabur_identity_signin::password::Passwords::with_iterations(&[9; 32], 1)
+                .unwrap(),
         });
         let fake = Arc::new(Fake {
             issuer: google_issuer.to_owned(),
@@ -893,7 +894,7 @@ mod tests {
         assert_eq!(started.status, StatusCode::FORBIDDEN, "{}", started.body);
         assert_eq!(
             started.json()["type"],
-            "urn:zeabur-identity:problem:admin-needs-passkey"
+            "urn:zeabur-identity:problem:admin-needs-two-factor"
         );
     }
 
@@ -1615,7 +1616,7 @@ mod tests {
         .await;
         assert_eq!(
             reply.json()["type"],
-            "urn:zeabur-identity:problem:admin-needs-passkey"
+            "urn:zeabur-identity:problem:admin-needs-two-factor"
         );
         assert!(!account_page(&h, &session).await.contains("data-link="));
 

@@ -158,7 +158,7 @@ You can't change a username because RBAC bindings and audit records reference it
 
 ## Passwords
 
-On the setup page, regular users can set a password instead of a passkey. They sign in with their username and that password. Admin accounts must use a passkey.
+On the setup page, users can set a password instead of a passkey. They sign in with their username and that password. By default, an admin who sets a password also sets up an authenticator app. See [Choose how admins sign in](./admin-sessions.mdx#choose-how-admins-sign-in).
 
 A password must have at least 15 characters. Zeabur Identity refuses common passwords and passwords that contain the username or the site name.
 
@@ -188,7 +188,7 @@ Account page sessions expire after 1 hour. Password managers find the account pa
 
 Most passkeys sync through platform accounts, such as iCloud Keychain or Google Password Manager, so switching to a new phone usually doesn't require extra setup. To use a separate security key, users can add it on the account page.
 
-Regular accounts can also link upstream accounts, such as GitHub, on the account page. The same external account can't link to different users at the same time. To link it to another user, unlink it on the original user's account page first. Admin accounts can't link external accounts.
+Regular accounts can also link upstream accounts, such as GitHub, on the account page. The same external account can't link to different users at the same time. To link it to another user, unlink it on the original user's account page first. By default, admin accounts can't link external accounts.
 
 Don't use `invite` to add passkeys or link accounts for users who can already sign in. If the link reaches the wrong person, that person can sign in as the user. If the user can no longer sign in, follow the recovery process in [Sign out, recover, and remove users](./offboarding.mdx).
 

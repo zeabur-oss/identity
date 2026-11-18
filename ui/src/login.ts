@@ -1,11 +1,12 @@
-// Sign-in page: username and password, passkey autofill (conditional mediation) on the username
-// field, and a passkey button.
+// Sign-in page: username and password, then an authenticator code if the account has one;
+// passkey autofill (conditional mediation) on the username field, and a passkey button.
 import {
   assertionJson,
   cancelled,
   messages,
   post,
   problem,
+  type Reply,
   redirect,
   requestOptions,
   say,
@@ -35,6 +36,8 @@ const failures: Record<string, string> = {
   "passkey-failed": "msgFailed",
   "device-passkey-needed": "msgDevicePasskey",
   "admin-needs-passkey": "msgAdminPasskey",
+  "admin-needs-two-factor": "msgAdminTwoFactor",
+  "code-failed": "msgCodeFailed",
   "password-failed": "msgPasswordFailed",
   "password-held": "msgPasswordHeld",
   busy: "msgBusy",
@@ -69,7 +72,43 @@ async function send(credential: PublicKeyCredential): Promise<boolean> {
 
 function failed(kind: string): void {
   if (kind === "no-request") ended()
+  else if (kind === "code-needed") askForCode()
   else say("error", text(failures[kind] ?? "msgError"))
+}
+
+/** The password was right: the code step takes the place of the username and password. */
+function askForCode(): void {
+  secondStep(true)
+  document.querySelector<HTMLInputElement>("#code")?.focus()
+}
+
+/** Shows the code step, or goes back to the first step with the password cleared. */
+function secondStep(shown: boolean): void {
+  const user = document.getElementById("second-factor-user")
+  if (user) user.textContent = field("username").trim()
+  document.getElementById("first-step")?.toggleAttribute("hidden", shown)
+  document.getElementById("second-factor")?.toggleAttribute("hidden", !shown)
+  document.getElementById("lost-passkey")?.toggleAttribute("hidden", shown)
+  for (const button of document.querySelectorAll("[data-provider]"))
+    button.toggleAttribute("hidden", shown)
+  alternatives()
+}
+
+/** Hides the other ways in when none of their buttons shows. */
+function alternatives(): void {
+  const view = document.getElementById("alternatives")
+  const shown = [...(view?.querySelectorAll("button") ?? [])].some((button) => !button.hidden)
+  view?.toggleAttribute("hidden", !shown)
+}
+
+function useAnotherAccount(): void {
+  for (const id of ["password", "code"]) {
+    const input = document.querySelector<HTMLInputElement>(`#${id}`)
+    if (input) input.value = ""
+  }
+  say("error", "")
+  secondStep(false)
+  document.querySelector<HTMLInputElement>("#username")?.focus()
 }
 
 async function options(): Promise<PublicKeyCredentialRequestOptions | null> {
@@ -118,19 +157,27 @@ function signInWithPassword(event: SubmitEvent): void {
 
 async function sendPassword(username: string, password: string): Promise<void> {
   try {
-    const reply = await post("/login/password", { username, password })
-    const to = redirect(reply)
-    if (to) {
-      autofill?.abort()
-      window.location.assign(to)
-      return
-    }
-    finishing = false
-    failed(problem(reply))
+    const reply = await post("/login/password", { username, password, code: typedCode() })
+    finishing = leave(reply)
+    if (!finishing) failed(problem(reply))
   } catch {
     finishing = false
     say("error", text("msgError"))
   }
+}
+
+/** The code typed, once the code field shows. */
+function typedCode(): string | null {
+  return document.getElementById("second-factor")?.hidden ? null : field("code").trim() || null
+}
+
+/** Goes to the app the reply names; true when the page is on its way out. */
+function leave(reply: Reply): boolean {
+  const to = redirect(reply)
+  if (!to) return false
+  autofill?.abort()
+  window.location.assign(to)
+  return true
 }
 
 function signInWithPasskey(): void {
@@ -170,11 +217,11 @@ if (form) {
     { "no-request": ended },
   )
   form.addEventListener("submit", signInWithPassword)
+  document.getElementById("other-account")?.addEventListener("click", useAnotherAccount)
   const passkey = document.getElementById("passkey")
   if (!supported()) {
     passkey?.setAttribute("hidden", "")
-    if (!document.querySelector("[data-provider]"))
-      document.getElementById("alternatives")?.setAttribute("hidden", "")
+    alternatives()
   } else {
     passkey?.addEventListener("click", signInWithPasskey)
     void startAutofill()

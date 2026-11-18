@@ -41,6 +41,8 @@ const failures: Record<string, string> = {
   "ceremony-expired": "msgExpired",
   "passkey-exists": "msgExists",
   "admin-needs-passkey": "msgAdminPasskey",
+  "admin-needs-two-factor": "msgAdminTwoFactor",
+  "code-failed": "msgCodeFailed",
   busy: "msgBusy",
 }
 
@@ -111,6 +113,43 @@ function typedPassword(): string | null {
   return null
 }
 
+/** The sealed secret of the authenticator offered, once the options asked for one. */
+let sealed: string | null = null
+
+/** Asks what a password needs; shows the authenticator step when it needs one. */
+async function passwordOptions(token: string): Promise<boolean> {
+  const reply = await post("/setup/password/options", { token })
+  if (!reply.ok) {
+    refused(problem(reply))
+    return false
+  }
+  const totp = reply.body.totp as {
+    secret: string
+    sealed: string
+    qr: { size: number; path: string }
+  } | null
+  if (totp) {
+    sealed = totp.sealed
+    drawQr(totp.qr.size, totp.qr.path)
+    const secret = document.getElementById("totp-secret")
+    if (secret) secret.textContent = totp.secret.replace(/(.{4})(?=.)/g, "$1 ")
+    document.getElementById("totp")?.removeAttribute("hidden")
+  }
+  return true
+}
+
+/** Draws the QR code as one SVG path; the page's CSP allows no image from elsewhere. */
+function drawQr(size: number, d: string): void {
+  const svg = document.getElementById("totp-qr")
+  if (!svg) return
+  const ns = "http://www.w3.org/2000/svg"
+  svg.setAttribute("viewBox", `0 0 ${size} ${size}`)
+  const path = document.createElementNS(ns, "path")
+  path.setAttribute("d", d)
+  path.setAttribute("fill", "currentColor")
+  svg.replaceChildren(path)
+}
+
 function setPassword(event: SubmitEvent): void {
   event.preventDefault()
   if (!token || registering) return
@@ -119,7 +158,7 @@ function setPassword(event: SubmitEvent): void {
   if (password === null) return
   registering = true
   say("error", "")
-  post("/setup/password", { token, password })
+  post("/setup/password", { token, password, totp: totpAnswer() })
     .then(answered)
     .catch(() => say("error", text("msgError")))
     .finally(() => {
@@ -127,12 +166,42 @@ function setPassword(event: SubmitEvent): void {
     })
 }
 
+/** The sealed secret with the code typed for it, when the account needs an authenticator. */
+function totpAnswer(): { sealed: string; code: string } | null {
+  if (!sealed) return null
+  const code = document.querySelector<HTMLInputElement>("#totp-code")?.value.trim() ?? ""
+  return { sealed, code }
+}
+
 function answered(reply: Reply): void {
-  if (reply.ok) return done(true)
+  if (reply.ok) return succeeded(reply)
   const kind = problem(reply)
-  if (kind !== "password-weak") return refused(kind)
-  const weakness = String(reply.body.weakness)
-  say("error", weakText(weaknesses[weakness] ?? "msgCommon"))
+  if (kind === "password-weak") say("error", weakText(weakness(reply)))
+  else refused(kind)
+}
+
+/** The message key for the weakness the server named. */
+function weakness(reply: Reply): string {
+  return weaknesses[String(reply.body.weakness)] ?? "msgCommon"
+}
+
+function succeeded(reply: Reply): void {
+  const codes = reply.body.recovery_codes
+  if (Array.isArray(codes)) showRecovery(codes.map(String))
+  done(true)
+}
+
+function showRecovery(codes: string[]): void {
+  const list = document.getElementById("recovery-codes")
+  if (!list) return
+  list.replaceChildren(
+    ...codes.map((code) => {
+      const line = document.createElement("span")
+      line.textContent = code
+      return line
+    }),
+  )
+  document.getElementById("recovery")?.removeAttribute("hidden")
 }
 
 // Done: forget the token in the address bar and history, show the result. The backup advice is
@@ -173,9 +242,20 @@ if (form) {
     alternatives?.setAttribute("hidden", "")
   } else {
     passwordForm?.addEventListener("submit", setPassword)
+    let asked: Promise<boolean> | null = null
     document.getElementById("use-password")?.addEventListener("click", () => {
-      choosePassword(true)
-      document.querySelector<HTMLInputElement>("#new-password")?.focus()
+      asked ??= passwordOptions(token).catch(() => {
+        say("error", text("msgError"))
+        return false
+      })
+      void asked.then((ok) => {
+        if (!ok) {
+          asked = null
+          return
+        }
+        choosePassword(true)
+        document.querySelector<HTMLInputElement>("#new-password")?.focus()
+      })
     })
     document.getElementById("other-ways")?.addEventListener("click", () => choosePassword(false))
     if (supported()) form.addEventListener("submit", register)

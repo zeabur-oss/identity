@@ -99,6 +99,10 @@ where
         .route("/login", post(login_finish::<D, G, C, K, S>))
         .route("/login/password", post(password::sign_in::<D, G, C, K, S>))
         .route("/setup/password", post(password::set_up::<D, G, C, K, S>))
+        .route(
+            "/setup/password/options",
+            post(password::set_up_options::<D, G, C, K, S>),
+        )
         .merge(account::routes::<D, G, C, K, S>())
         .with_state(service)
 }
@@ -147,6 +151,11 @@ pub(crate) const DEVICE_PASSKEY_NEEDED: Problem = Problem::new(
     StatusCode::FORBIDDEN,
     "device-passkey-needed",
     "Admin accounts need a security key or a passkey that stays on one device.",
+);
+pub(crate) const ADMIN_NEEDS_TWO_FACTOR: Problem = Problem::new(
+    StatusCode::FORBIDDEN,
+    "admin-needs-two-factor",
+    "Admin accounts sign in with a passkey, or a password and an authenticator code.",
 );
 pub(crate) const NO_REQUEST: Problem = Problem::new(
     StatusCode::BAD_REQUEST,
@@ -320,13 +329,17 @@ pub(crate) async fn check_account<D: Directory>(
     method: Method,
 ) -> Result<(), Problem> {
     let settings = directory.settings().await.map_err(internal)?;
-    allows(user.account_type, settings, method).map_err(|refusal| {
-        tracing::warn!(reason = ?refusal, user = %user.name, "the account type does not allow this sign-in method");
-        match refusal {
-            Refusal::AdminNeedsPasskey => ADMIN_NEEDS_PASSKEY,
-            Refusal::AdminNeedsDeviceBoundPasskey => DEVICE_PASSKEY_NEEDED,
-        }
-    })
+    allows(user.account_type, settings, method).map_err(|refusal| refused(user, refusal))
+}
+
+/// The answer to a sign-in method the account type does not allow.
+pub(crate) fn refused(user: &User, refusal: Refusal) -> Problem {
+    tracing::warn!(reason = ?refusal, user = %user.name, "the account type does not allow this sign-in method");
+    match refusal {
+        Refusal::Passkey => ADMIN_NEEDS_PASSKEY,
+        Refusal::DeviceBoundPasskey => DEVICE_PASSKEY_NEEDED,
+        Refusal::TwoFactor => ADMIN_NEEDS_TWO_FACTOR,
+    }
 }
 
 /// A verified assertion.

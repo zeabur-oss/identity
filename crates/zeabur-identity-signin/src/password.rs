@@ -4,6 +4,10 @@
 //! hashing time, so answers do not tell which usernames exist. Failures are limited per browser
 //! with device cookies (see [`zeabur_identity_core::guessing`]): a browser that signed in as the
 //! user before keeps its own count, so guesses from elsewhere cannot lock the owner out.
+//!
+//! A user with a TOTP authenticator also enters a code, or a recovery code, after the password
+//! (see [`zeabur_identity_core::totp`]). A wrong code counts as a failed sign-in. The setup link
+//! asks for an authenticator when the account settings need a second factor for the user.
 
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -14,15 +18,17 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Semaphore;
-use zeabur_identity_core::account::Method;
-use zeabur_identity_core::clock::Clock;
-use zeabur_identity_core::crypto::hmac_sha256;
-use zeabur_identity_core::guessing::{Counts, DeviceKey};
+use zeabur_identity_core::account::{Method, allows};
+use zeabur_identity_core::clock::{Clock, UnixTime};
+use zeabur_identity_core::crypto::{CryptoError, Sealer, hmac_sha256};
+use zeabur_identity_core::guessing::DeviceKey;
 use zeabur_identity_core::password::{self, Hasher, ITERATIONS, Normalized, Verdict, Weakness};
+use zeabur_identity_core::totp::{RecoveryKey, Secret};
 use zeabur_identity_oauth::authorize::Authentication;
 use zeabur_identity_oauth::endpoints::{FLOW_COOKIE, complete_authorization};
 use zeabur_identity_store::{
-    Consume, CredentialStore, Directory, GrantStore, Saved, SetupStore, StoredPassword, User,
+    Consume, CredentialStore, Directory, GrantStore, PasswordState, Saved, SetupStore,
+    StoredPassword, StoredTotp, User,
 };
 
 use crate::account::{Audit, record};
@@ -30,7 +36,7 @@ use crate::device::Requester;
 use crate::problem::Problem;
 use crate::{
     NO_REQUEST, SETUP_INVALID, Shared, SignIn, check_account, check_request, cookie, internal,
-    json, parse, redeemed, set_cookie_with, valid_setup_token,
+    json, parse, redeemed, refused, set_cookie_with, valid_setup_token,
 };
 
 /// Cookie holding the browser's device entries, one per user who signed in here.
@@ -48,6 +54,10 @@ const DEVICE_ENTRIES: usize = 4;
 const DEVICE_MAX_AGE: u64 = 400 * 24 * 60 * 60;
 /// Authentication methods asserted by a password sign-in (RFC 8176).
 pub const PASSWORD_AMR: [&str; 1] = ["pwd"];
+/// A password, then a TOTP code.
+pub const TOTP_AMR: [&str; 3] = ["pwd", "otp", "mfa"];
+/// A password, then a recovery code.
+pub const RECOVERY_AMR: [&str; 2] = ["pwd", "mfa"];
 /// How many times a guess count is read again when another sign-in changed it first.
 const SAVE_ATTEMPTS: usize = 5;
 
@@ -66,16 +76,33 @@ const PASSWORD_WEAK: Problem = Problem::new(
     "password-weak",
     "Choose another password.",
 );
+const CODE_NEEDED: Problem = Problem::new(
+    StatusCode::UNAUTHORIZED,
+    "code-needed",
+    "Enter the code from your authenticator app.",
+);
+const CODE_FAILED: Problem = Problem::new(
+    StatusCode::UNAUTHORIZED,
+    "code-failed",
+    "This code does not work. Enter the current code, or a recovery code.",
+);
+const ENROL_CODE_FAILED: Problem = Problem::new(
+    StatusCode::UNPROCESSABLE_ENTITY,
+    "code-failed",
+    "This code does not match. Enter the current code from your authenticator app.",
+);
 const BUSY: Problem = Problem::new(
     StatusCode::SERVICE_UNAVAILABLE,
     "busy",
     "Too many sign-ins at once. Try again in a moment.",
 );
 
-/// The password hasher, the device key, and a cap on hashes running at once.
+/// The password hasher, the device key, the TOTP keys, and a cap on hashes running at once.
 pub struct Passwords {
     hasher: Arc<Hasher>,
     devices: DeviceKey,
+    totp: Sealer,
+    recovery: RecoveryKey,
     permits: Arc<Semaphore>,
 }
 
@@ -89,23 +116,97 @@ impl std::fmt::Debug for Passwords {
 
 impl Passwords {
     /// Passwords keyed by the server's password key.
-    #[must_use]
-    pub fn new(secret: &[u8; 32]) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CryptoError`] if the TOTP key is rejected.
+    pub fn new(secret: &[u8; 32]) -> Result<Self, CryptoError> {
         Self::with_iterations(secret, ITERATIONS)
     }
 
     /// Passwords with a chosen PBKDF2 iteration count, for tests.
-    #[must_use]
-    pub fn with_iterations(secret: &[u8; 32], iterations: u32) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CryptoError`] if the TOTP key is rejected.
+    pub fn with_iterations(secret: &[u8; 32], iterations: u32) -> Result<Self, CryptoError> {
         let pepper = hmac_sha256(secret, b"zeabur-identity/password/pepper/v1");
         let device = hmac_sha256(secret, b"zeabur-identity/device/v1");
+        let totp = hmac_sha256(secret, b"zeabur-identity/totp/v1");
+        let recovery = hmac_sha256(secret, b"zeabur-identity/recovery/v1");
         // One hash at a time per core: more only queues work and slows every sign-in.
         let cores = std::thread::available_parallelism().map_or(2, NonZeroUsize::get);
-        Self {
+        Ok(Self {
             hasher: Arc::new(Hasher::with_iterations(&pepper, iterations)),
             devices: DeviceKey::new(device),
+            totp: Sealer::from_key(&totp)?,
+            recovery: RecoveryKey::new(recovery),
             permits: Arc::new(Semaphore::new(cores)),
-        }
+        })
+    }
+
+    /// The secret offered for setup token `token`, and the step of its code, if the code is right.
+    fn enrol(
+        &self,
+        token: &str,
+        request: &TotpRequest,
+        now: UnixTime,
+    ) -> Result<(Secret, u64), Problem> {
+        let secret = self
+            .totp
+            .open(&enrol_purpose(token), &request.sealed)
+            .and_then(|bytes| Secret::from_bytes(&bytes))
+            .ok_or(NO_REQUEST)?;
+        let step = secret
+            .check(&request.code, now, None)
+            .ok_or(ENROL_CODE_FAILED)?;
+        Ok((secret, step))
+    }
+
+    /// `secret` sealed for `subject` with new recovery codes, and the codes to show.
+    fn store(
+        &self,
+        subject: &str,
+        secret: &Secret,
+        enrolled_step: u64,
+    ) -> Result<(StoredTotp, Vec<String>), Problem> {
+        let (shown, recovery) = self.recovery.generate().map_err(internal)?;
+        let secret = self
+            .totp
+            .seal(&stored_purpose(subject), secret.as_bytes())
+            .map_err(internal)?;
+        Ok((
+            StoredTotp {
+                secret,
+                recovery,
+                enrolled_step,
+            },
+            shown,
+        ))
+    }
+
+    /// Which second factor `code` is for `subject`, if it is one that was not used before.
+    fn second_factor(
+        &self,
+        subject: &str,
+        totp: &StoredTotp,
+        state: &PasswordState,
+        code: &str,
+        now: UnixTime,
+    ) -> Option<SecondFactor> {
+        let step = self
+            .totp
+            .open(&stored_purpose(subject), &totp.secret)
+            .and_then(|bytes| Secret::from_bytes(&bytes))
+            .and_then(|secret| {
+                let last = state.totp_last_step.max(Some(totp.enrolled_step));
+                secret.check(code, now, last)
+            });
+        step.map(SecondFactor::Totp).or_else(|| {
+            self.recovery
+                .check(code, &totp.recovery, &state.recovery_used)
+                .map(SecondFactor::Recovery)
+        })
     }
 
     /// Runs `work` on the blocking pool, or refuses when every core is already hashing.
@@ -169,6 +270,54 @@ impl Passwords {
     }
 }
 
+/// What the purpose of a sealed TOTP secret binds it to: the user it is stored for.
+fn stored_purpose(subject: &str) -> String {
+    format!("totp\0{subject}")
+}
+
+/// The purpose of a TOTP secret offered during setup: the setup token it was offered for.
+fn enrol_purpose(token: &str) -> String {
+    format!("totp-enrol\0{token}")
+}
+
+/// A second factor that was accepted.
+#[derive(Clone, Copy)]
+enum SecondFactor {
+    /// A TOTP code of this step.
+    Totp(u64),
+    /// The recovery code at this index.
+    Recovery(usize),
+}
+
+impl SecondFactor {
+    /// Marks it used in `state`, unless another sign-in used it first.
+    fn spend(self, state: &mut PasswordState) -> bool {
+        match self {
+            Self::Totp(step) => {
+                let fresh = state.totp_last_step.is_none_or(|last| step > last);
+                if fresh {
+                    state.totp_last_step = Some(step);
+                }
+                fresh
+            }
+            Self::Recovery(index) => {
+                let fresh = !state.recovery_used.contains(&index);
+                if fresh {
+                    state.recovery_used.push(index);
+                }
+                fresh
+            }
+        }
+    }
+
+    const fn amr(self) -> &'static [&'static str] {
+        match self {
+            Self::Totp(_) => &TOTP_AMR,
+            Self::Recovery(_) => &RECOVERY_AMR,
+        }
+    }
+}
+
 /// Why a request was refused.
 enum Failure {
     Problem(Problem),
@@ -214,47 +363,67 @@ impl Failure {
     }
 }
 
-/// Reads the guess counts again and applies `change` until the write is not beaten by another
-/// sign-in. Failures are logged: the answer to the browser does not depend on them.
-async fn update_guesses<K: CredentialStore>(
+/// The result of [`update_state`].
+#[derive(PartialEq, Eq)]
+enum Update {
+    Saved,
+    /// `change` refused the current state, or the password was replaced.
+    Refused,
+    /// The store failed; it is logged.
+    Failed,
+}
+
+/// Reads the password state again and applies `change` until the write is not beaten by another
+/// sign-in. `change` returns false to refuse the state it is given.
+async fn update_state<K: CredentialStore>(
     credentials: &K,
     user: &User,
     mut stored: StoredPassword,
-    change: impl Fn(&mut Counts),
-) {
+    change: impl Fn(&mut PasswordState) -> bool,
+) -> Update {
+    let (hash, totp) = (stored.hash.clone(), stored.totp.clone());
     for _ in 0..SAVE_ATTEMPTS {
-        let mut counts = stored.guesses.clone();
-        change(&mut counts);
-        if counts == stored.guesses {
-            return;
+        if stored.hash != hash || stored.totp != totp {
+            return Update::Refused;
         }
-        match credentials.save_guesses(&stored, &counts).await {
-            Ok(Saved::Saved) => return,
+        let mut state = stored.state.clone();
+        if !change(&mut state) {
+            return Update::Refused;
+        }
+        if state == stored.state {
+            return Update::Saved;
+        }
+        match credentials.save_state(&stored, &state).await {
+            Ok(Saved::Saved) => return Update::Saved,
             Ok(Saved::Conflict) => {}
             Err(error) => {
-                tracing::warn!(reason = "guesses_unsaved", %error, "saving password guesses failed");
-                return;
+                tracing::warn!(reason = "password_state_unsaved", %error, "saving the password state failed");
+                return Update::Failed;
             }
         }
         match credentials.password(user).await {
             Ok(Some(again)) => stored = again,
-            Ok(None) => return,
+            Ok(None) => return Update::Refused,
             Err(error) => {
-                tracing::warn!(reason = "guesses_unsaved", %error, "reading password guesses failed");
-                return;
+                tracing::warn!(reason = "password_state_unsaved", %error, "reading the password state failed");
+                return Update::Failed;
             }
         }
     }
     tracing::warn!(
-        reason = "guesses_unsaved",
-        "saving password guesses kept conflicting"
+        reason = "password_state_unsaved",
+        "saving the password state kept conflicting"
     );
+    Update::Failed
 }
 
 #[derive(Deserialize)]
 pub(crate) struct SignInRequest {
     username: String,
     password: String,
+    /// A TOTP or recovery code, after a `code-needed` answer.
+    #[serde(default)]
+    code: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -331,7 +500,7 @@ where
     };
     let user = identity.insert(user);
     let device = passwords.device(headers, &user.subject);
-    if let Some(until) = stored.guesses.held(device.as_deref(), now) {
+    if let Some(until) = stored.state.guesses.held(device.as_deref(), now) {
         if device.is_none() {
             // A browser this user never signed in with gets the answer of a wrong password, so a
             // hold does not show that the account exists.
@@ -353,33 +522,30 @@ where
             (verdict, rehashed)
         })
         .await?;
+    let device = device.as_deref();
     if verdict == Verdict::Mismatch {
-        update_guesses(&service.credentials, user, stored, |counts| {
-            counts.fail(device.as_deref(), now);
+        update_state(&service.credentials, user, stored, |state| {
+            state.guesses.fail(device, now);
+            true
         })
         .await;
         return Err(PASSWORD_FAILED.into());
     }
+    let code = request.code.as_deref();
+    let second = check_second_factor(service, user, &stored, code, device, now).await?;
     // Checked after the password matches, so the answer says nothing about unproven guesses.
-    check_account(&service.oauth.directory, user, Method::Password).await?;
+    let method = Method::Password {
+        second_factor: second.is_some(),
+    };
+    check_account(&service.oauth.directory, user, method).await?;
     let name = stored.name.clone();
-    if let Some(hash) = rehashed
-        && let Err(error) = service
-            .credentials
-            .set_password(user, &hash, Some(&stored))
-            .await
-    {
-        tracing::warn!(reason = "rehash_failed", %error, "storing a stronger password hash failed");
-    }
-    update_guesses(&service.credentials, user, stored, |counts| {
-        counts.succeed(device.as_deref());
-    })
-    .await;
+    record_success(service, user, stored, rehashed, device, second).await?;
+    let amr = second.map_or(&PASSWORD_AMR[..], SecondFactor::amr);
     let authentication = Authentication {
         user: user.name.clone(),
         subject: user.subject.clone(),
         auth_time: now,
-        amr: PASSWORD_AMR.iter().map(|m| (*m).to_owned()).collect(),
+        amr: amr.iter().map(|m| (*m).to_owned()).collect(),
         credential: Some(name),
         user_verified: false,
         device_bound: false,
@@ -404,15 +570,262 @@ where
     Ok(response)
 }
 
+/// Clears this browser's count, marks the second factor used, and stores a stronger hash.
+async fn record_success<D, G, C, K, S>(
+    service: &SignIn<D, G, C, K, S>,
+    user: &User,
+    stored: StoredPassword,
+    rehashed: Option<String>,
+    device: Option<&str>,
+    second: Option<SecondFactor>,
+) -> Result<(), Failure>
+where
+    D: Directory,
+    G: GrantStore,
+    C: Clock,
+    K: CredentialStore,
+    S: SetupStore,
+{
+    // Replacing the credential starts a new state, which would let used codes work again. A user
+    // with an authenticator keeps the old hash until the password is set again.
+    if let Some(hash) = rehashed
+        && stored.totp.is_none()
+        && let Err(error) = service
+            .credentials
+            .set_password(user, &hash, None, Some(&stored))
+            .await
+    {
+        tracing::warn!(reason = "rehash_failed", %error, "storing a stronger password hash failed");
+    }
+    let succeed = |state: &mut PasswordState| {
+        state.guesses.succeed(device);
+        second.is_none_or(|second| second.spend(state))
+    };
+    match (
+        update_state(&service.credentials, user, stored, succeed).await,
+        second,
+    ) {
+        (Update::Saved, _) | (_, None) => {}
+        // Another sign-in used the code first.
+        (Update::Refused, Some(_)) => return Err(CODE_FAILED.into()),
+        (Update::Failed, Some(_)) => {
+            return Err(internal("the use of a second factor could not be recorded").into());
+        }
+    }
+    Ok(())
+}
+
+/// The second factor `code` gives, for a user with an authenticator. A missing code is asked
+/// for and changes no count, since the password was right; a wrong one counts as a failure.
+async fn check_second_factor<D, G, C, K, S>(
+    service: &SignIn<D, G, C, K, S>,
+    user: &User,
+    stored: &StoredPassword,
+    code: Option<&str>,
+    device: Option<&str>,
+    now: UnixTime,
+) -> Result<Option<SecondFactor>, Failure>
+where
+    D: Directory,
+    G: GrantStore,
+    C: Clock,
+    K: CredentialStore,
+    S: SetupStore,
+{
+    let Some(totp) = &stored.totp else {
+        return Ok(None);
+    };
+    let code = code
+        .filter(|code| !code.trim().is_empty())
+        .ok_or(CODE_NEEDED)?;
+    let second = service
+        .passwords
+        .second_factor(&user.subject, totp, &stored.state, code, now);
+    if second.is_none() {
+        update_state(&service.credentials, user, stored.clone(), |state| {
+            state.guesses.fail(device, now);
+            true
+        })
+        .await;
+        return Err(CODE_FAILED.into());
+    }
+    Ok(second)
+}
+
 #[derive(Deserialize)]
 pub(crate) struct SetupRequest {
     token: String,
     password: String,
+    /// The authenticator, when the options asked for one.
+    #[serde(default)]
+    totp: Option<TotpRequest>,
+}
+
+#[derive(Deserialize)]
+struct TotpRequest {
+    /// `sealed` from the options.
+    sealed: String,
+    /// The current code from the authenticator app.
+    code: String,
 }
 
 #[derive(Serialize)]
 struct SetUp<'a> {
     username: &'a str,
+    /// Shown once; only their hashes are stored.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recovery_codes: Option<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct OptionsRequest {
+    token: String,
+}
+
+#[derive(Serialize)]
+struct SetupOptions {
+    /// An authenticator to add, when the settings need a second factor for this user.
+    totp: Option<Enrolment>,
+}
+
+#[derive(Serialize)]
+struct Enrolment {
+    /// The secret in base32, for typing into the app.
+    secret: String,
+    /// The `otpauth://` URI the QR code holds.
+    uri: String,
+    qr: Qr,
+    /// The secret sealed to the setup token, sent back with the password.
+    sealed: String,
+}
+
+/// A QR code as one SVG path in a `size` × `size` box, quiet zone included.
+#[derive(Serialize)]
+struct Qr {
+    size: usize,
+    path: String,
+}
+
+/// The QR code of `text`: each run of dark modules in a row is one `h` segment.
+fn qr(text: &str) -> Result<Qr, Problem> {
+    use std::fmt::Write as _;
+    const QUIET: usize = 4;
+    let code = qrcode::QrCode::new(text.as_bytes()).map_err(internal)?;
+    let width = code.width();
+    let colors = code.to_colors();
+    let mut path = String::new();
+    for (y, row) in colors.chunks(width).enumerate() {
+        let mut x = 0;
+        while x < width {
+            let run = row
+                .iter()
+                .skip(x)
+                .take_while(|c| **c == qrcode::Color::Dark)
+                .count();
+            if run > 0 {
+                // Writing to a String cannot fail.
+                if write!(path, "M{} {}h{run}v1h-{run}z", x + QUIET, y + QUIET).is_err() {
+                    path.clear();
+                }
+                x += run;
+            } else {
+                x += 1;
+            }
+        }
+    }
+    Ok(Qr {
+        size: width + 2 * QUIET,
+        path,
+    })
+}
+
+/// Whether the settings need a second factor after a password for `owner`.
+async fn needs_second_factor<D: Directory>(directory: &D, owner: &User) -> Result<bool, Problem> {
+    let settings = directory.settings().await.map_err(internal)?;
+    let without = Method::Password {
+        second_factor: false,
+    };
+    let with = Method::Password {
+        second_factor: true,
+    };
+    if allows(owner.account_type, settings, without).is_ok() {
+        return Ok(false);
+    }
+    allows(owner.account_type, settings, with)
+        .map(|()| true)
+        .map_err(|refusal| refused(owner, refusal))
+}
+
+/// The host of the issuer, for password context and the authenticator's label.
+fn issuer_host(issuer: &str) -> String {
+    url::Url::parse(issuer)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .unwrap_or_default()
+}
+
+/// `POST /setup/password/options`: what setting a password with this setup link asks for.
+pub(crate) async fn set_up_options<D, G, C, K, S>(
+    State(service): State<Shared<D, G, C, K, S>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response
+where
+    D: Directory,
+    G: GrantStore,
+    C: Clock,
+    K: CredentialStore,
+    S: SetupStore,
+{
+    options_with(&service, &headers, &body)
+        .await
+        .unwrap_or_else(IntoResponse::into_response)
+}
+
+async fn options_with<D, G, C, K, S>(
+    service: &SignIn<D, G, C, K, S>,
+    headers: &HeaderMap,
+    body: &[u8],
+) -> Result<Response, Problem>
+where
+    D: Directory,
+    G: GrantStore,
+    C: Clock,
+    K: CredentialStore,
+    S: SetupStore,
+{
+    check_request(headers, service.oauth.issuer.as_str())?;
+    let request: OptionsRequest = parse(body)?;
+    let now = service.oauth.now();
+    let directory = &service.oauth.directory;
+    let (_, owner) = valid_setup_token(&service.setup, directory, &request.token, now).await?;
+    if !needs_second_factor(directory, &owner).await? {
+        return Ok(json(StatusCode::OK, &SetupOptions { totp: None }));
+    }
+    let secret = Secret::generate().map_err(internal)?;
+    let host = issuer_host(service.oauth.issuer.as_str());
+    let uri = secret.uri(&host, &owner.username);
+    let sealed = service
+        .passwords
+        .totp
+        .seal(&enrol_purpose(&request.token), secret.as_bytes())
+        .map_err(internal)?;
+    let enrolment = Enrolment {
+        secret: secret.base32(),
+        qr: qr(&uri)?,
+        uri,
+        sealed,
+    };
+    let mut response = json(
+        StatusCode::OK,
+        &SetupOptions {
+            totp: Some(enrolment),
+        },
+    );
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
 }
 
 /// `POST /setup/password`: sets the password of the user a setup link is for.
@@ -467,21 +880,32 @@ where
     )
     .await?;
     *user = Some(token.user.clone());
-    check_account(&service.oauth.directory, &owner, Method::Password).await?;
+    let passwords = &service.passwords;
+    let enrolled = match &request.totp {
+        Some(totp) => Some(passwords.enrol(&request.token, totp, now)?),
+        None => None,
+    };
+    let method = Method::Password {
+        second_factor: enrolled.is_some(),
+    };
+    check_account(&service.oauth.directory, &owner, method).await?;
     let entered = Normalized::new(&request.password).ok_or(Failure::Weak(Weakness::TooLong))?;
-    let host = url::Url::parse(service.oauth.issuer.as_str())
-        .ok()
-        .and_then(|url| url.host_str().map(str::to_owned))
-        .unwrap_or_default();
+    let host = issuer_host(service.oauth.issuer.as_str());
     let mut context: Vec<&str> = vec![&owner.username, "zeabur"];
     context.extend(owner.display_name.as_deref());
     context.extend(host.split('.'));
     password::check(&entered, &context).map_err(Failure::Weak)?;
-    let hash = service
-        .passwords
+    let hash = passwords
         .run(move |hasher| hasher.hash(&entered))
         .await?
         .map_err(internal)?;
+    let (totp, recovery_codes) = match &enrolled {
+        Some((secret, step)) => {
+            let (totp, shown) = passwords.store(&owner.subject, secret, *step)?;
+            (Some(totp), Some(shown))
+        }
+        None => (None, None),
+    };
     // Consume the token before storing the password, as for a passkey.
     if service.setup.consume(&token).await.map_err(internal)? == Consume::AlreadyUsed {
         return Err(SETUP_INVALID.into());
@@ -491,7 +915,7 @@ where
     for _ in 0..3 {
         saved = service
             .credentials
-            .set_password(&owner, &hash, None)
+            .set_password(&owner, &hash, totp.as_ref(), None)
             .await
             .map_err(internal)?;
         if saved == Saved::Saved {
@@ -513,11 +937,15 @@ where
         StatusCode::CREATED,
         &SetUp {
             username: &token.user,
+            recovery_codes,
         },
     );
-    service
-        .passwords
-        .remember(&mut response, headers, &owner.subject);
+    if enrolled.is_some() {
+        response
+            .headers_mut()
+            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    }
+    passwords.remember(&mut response, headers, &owner.subject);
     Ok(response)
 }
 
@@ -540,7 +968,7 @@ mod tests {
 
     #[test]
     fn a_browser_keeps_one_entry_per_user_and_the_newest_four() {
-        let passwords = Passwords::with_iterations(&[1; 32], 1);
+        let passwords = Passwords::with_iterations(&[1; 32], 1).unwrap();
         let mut value = String::new();
         for subject in ["a", "b", "c", "d", "e", "b"] {
             let mut response = Response::default();
@@ -561,8 +989,8 @@ mod tests {
 
     #[test]
     fn entries_from_another_key_are_dropped() {
-        let ours = Passwords::with_iterations(&[1; 32], 1);
-        let theirs = Passwords::with_iterations(&[2; 32], 1);
+        let ours = Passwords::with_iterations(&[1; 32], 1).unwrap();
+        let theirs = Passwords::with_iterations(&[2; 32], 1).unwrap();
         let mut response = Response::default();
         theirs.remember(&mut response, &HeaderMap::new(), "a");
         let foreign = set_value(&response);

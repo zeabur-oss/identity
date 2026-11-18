@@ -2804,6 +2804,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "51315bca45305dd8aa64b831b33e71abac528ca8058c0651346a39b8d3009498"
 
 [[package]]
+name = "qrcode"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d68782463e408eb1e668cf6152704bd856c78c5b6417adaee3203d8f4c1fc9ec"
+
+[[package]]
 name = "quick-error"
 version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4659,6 +4665,7 @@ dependencies = [
  "passkey",
  "passkey-types",
  "public-suffix",
+ "qrcode",
  "rustls",
  "serde",
  "serde_json",
@@ -4722,6 +4729,7 @@ dependencies = [
  "axum",
  "brotli-decompressor",
  "form_urlencoded",
+ "qrcode",
  "tokio",
  "tracing",
  "zeabur-identity-core",

@@ -20,7 +20,7 @@ mod tests {
     use tracing::instrument::WithSubscriber as _;
     use zeabur_identity_api::client::ClientType;
     use zeabur_identity_api::{ADMIN_GROUP, token_hash};
-    use zeabur_identity_core::account::{AccountType, Settings, Teams};
+    use zeabur_identity_core::account::{AccountType, AdminSignIn, Settings, Teams};
     use zeabur_identity_core::clock::{Clock, UnixTime};
     use zeabur_identity_core::config::BaseUrl;
     use zeabur_identity_core::crypto::Sealer;
@@ -1426,14 +1426,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn admin_accounts_need_a_passkey_and_with_aal3_a_device_bound_one() {
+    async fn admin_accounts_follow_the_admin_sign_in_level() {
         let h = harness().await;
-        // A regular account may use GitHub or Google; an admin account may not.
+        // A regular account may use GitHub or Google; by default an admin account may not.
         let upstream = sign_in_tokens(&h, "alice", &[], false).await;
         let code = sign_in_with(&h, "carol", &kubectl_authorize(&[]), &[]).await;
         assert_eq!(exchange(&h, &code).await.error(), "invalid_grant");
         let events = audit_outcomes(&h, "oauth.account_policy", &["failure"]);
-        assert_eq!(events[0]["fields"]["reason"], "AdminNeedsPasskey");
+        assert_eq!(events[0]["fields"]["reason"], "TwoFactor");
 
         // An upstream session ends when its account becomes an admin account.
         set_account_type(&h, "alice", AccountType::Admin).await;
@@ -1448,11 +1448,12 @@ mod tests {
             "the family was revoked"
         );
 
-        // A synced passkey is enough until AAL3 is on. Then only a device-bound one is.
+        // A synced passkey is enough until the level is `device-bound-passkey`. Then only a
+        // device-bound one is.
         let synced = sign_in_tokens(&h, "carol", PASSKEY, false).await;
         let bound = sign_in_tokens(&h, "carol", PASSKEY, true).await;
         h.server.directory.put_settings(Settings {
-            admin_aal3: true,
+            admin_sign_in: AdminSignIn::DeviceBoundPasskey,
             ..Settings::default()
         });
         let code = sign_in_with(&h, "carol", &kubectl_authorize(&[]), PASSKEY).await;
@@ -1463,7 +1464,7 @@ mod tests {
         );
         tokens_of(&refresh(&h, refresh_token(&bound)).await);
         sign_in_tokens(&h, "carol", PASSKEY, true).await;
-        // AAL3 does not change regular accounts.
+        // The level does not change regular accounts.
         sign_in_tokens(&h, "alice", PASSKEY, false).await;
     }
 
@@ -1471,18 +1472,18 @@ mod tests {
     async fn refresh_idle_follows_the_account_type_and_the_settings() {
         let multiple = Settings {
             teams: Teams::Multiple,
-            admin_aal3: false,
+            admin_sign_in: AdminSignIn::default(),
         };
-        let aal3 = Settings {
+        let device_bound = Settings {
             teams: Teams::Single,
-            admin_aal3: true,
+            admin_sign_in: AdminSignIn::DeviceBoundPasskey,
         };
         for (name, user, settings, idle) in [
             ("regular", "alice", Settings::default(), 3600),
             ("regular, several teams", "alice", multiple, 3600),
             ("admin, one team", "carol", Settings::default(), 3600),
             ("admin, several teams", "carol", multiple, 900),
-            ("admin, AAL3", "carol", aal3, 900),
+            ("admin, device-bound passkey", "carol", device_bound, 900),
         ] {
             let h = harness().await;
             h.server.directory.put_settings(settings);

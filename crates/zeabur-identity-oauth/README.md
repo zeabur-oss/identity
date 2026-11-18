@@ -40,7 +40,7 @@ page). Used by `zeabur-identity` (the server), `zeabur-identity-signin` (which c
   remain usable without refresh.
 - Token and session lifetimes follow the account type and the install-wide settings
   (`Lifetimes::for_account`). Regular: access token 10 min, refresh idle 1 h. Admin: access
-  token 5 min, refresh idle 1 h, or 15 min with several teams or AAL3. Every refresh family ends
+  token 5 min, refresh idle 1 h, or 15 min with several teams or `admin-sign-in: device-bound-passkey`. Every refresh family ends
   12 h after the sign-in. Only admin accounts' tokens carry the `admins` group. The account type
   and settings are read again at every refresh.
 - `auth_time` is the passkey or upstream sign-in and survives refresh. There is no single

@@ -59,7 +59,7 @@ Nothing depends on it.
 - **Sessions end.** A refresh-token family ends after `--refresh-idle` (1 hour) without use and
   `--refresh-absolute` (12 hours) after the sign-in. An admin family idles out after
   `--admin-refresh-idle` (15 minutes, `ZEABUR_IDENTITY_ADMIN_REFRESH_IDLE`) when the `ConfigMap`
-  `zeabur-identity-settings` says `teams: multiple` or `admin-aal3: "true"`. Idle limits cannot
+  `zeabur-identity-settings` says `teams: multiple` or `admin-sign-in: device-bound-passkey`. Idle limits cannot
   exceed the absolute limit. The `ConfigMap` is read at every sign-in and refresh.
   Signing keys stay published longer than the longest token, and the JWK set's `max-age` is
   shorter than the publish-ahead time.

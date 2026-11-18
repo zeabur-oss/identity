@@ -195,8 +195,8 @@ const FLAG_AT: u8 = 0x40;
 ///
 /// webauthn-rs drops the AAGUID under attestation `none`, so this reads it directly. The AAGUID
 /// is only shown. BE
-/// decides whether an admin may register the passkey when AAL3 is on. The authenticator reports
-/// BE itself: attestation is `none`, so nothing verifies it.
+/// decides whether an admin may register the passkey when admins need a device-bound passkey. The
+/// authenticator reports BE itself: attestation is `none`, so nothing verifies it.
 #[must_use]
 pub fn authenticator(response: &RegisterPublicKeyCredential) -> Authenticator {
     auth_data(&response.response.attestation_object).map_or_else(Authenticator::default, |data| {

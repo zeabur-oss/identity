@@ -69,12 +69,16 @@ tests; `zeabur-identity-test-support` provides the software authenticator for th
   verifier ([RFC 7636][rfc7636]) travel in a sealed `__Host-` cookie with `SameSite=Lax`, the
   strictest setting that survives the provider's redirect back. Google ID tokens are validated
   as [OpenID Connect Core 1.0 §3.1.3.7][oidc] requires.
-- **Admin accounts are passkey-only.** Upstream sign-ins carry no `amr` value and give no
-  evidence of user verification, so an admin account can neither sign in with GitHub or Google
-  nor link either; the page says "Use a passkey for this account". With the install-wide
-  `admin-aal3` setting, an admin account also needs a device-bound passkey (WebAuthn BE flag
-  unset) at sign-in and at enrolment. The authenticator reports BE itself; attestation is
-  `none`, so nothing verifies it.
+- **Admin accounts follow the `admin-sign-in` level.** The default, `two-factor`, allows a
+  passkey, or a password followed by a TOTP code or a recovery code. Upstream sign-ins carry no
+  `amr` value and give no evidence of user verification, so under every level but `any` an admin
+  account can neither sign in with GitHub or Google nor link either. `passkey` allows passkeys
+  only. `device-bound-passkey` allows only a device-bound passkey (WebAuthn BE flag unset), at
+  sign-in and at enrolment. The authenticator reports BE itself; attestation is `none`, so
+  nothing verifies it.
+- **TOTP codes** follow RFC 6238 (HMAC-SHA-1, 6 digits, 30 s) and work once each. The secret is
+  sealed with a key derived from the password key, and recovery codes are stored as keyed
+  hashes. A wrong code counts as a failed password sign-in.
 
 ## References
 

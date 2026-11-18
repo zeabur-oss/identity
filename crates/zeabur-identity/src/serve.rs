@@ -286,7 +286,8 @@ async fn run<S: KeyStore, D: Directory, G: GrantStore, K: CredentialStore, T: Se
         setup,
         used_ceremonies: OneTimeIds::default(),
         providers: Arc::clone(&providers),
-        passwords: Passwords::new(&password_key),
+        passwords: Passwords::new(&password_key)
+            .map_err(|error| ServeError::Config(error.to_string()))?,
     });
     let app = router(AppState::new(
         metadata,

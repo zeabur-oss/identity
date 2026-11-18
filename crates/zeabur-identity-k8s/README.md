@@ -62,7 +62,7 @@ server, the `zeabur-identityctl` admin CLI and the `zeabur-identity-e2e` tests.
 - **Admin rights come from the account type.** Installation binds `zeabur:admins` to
   `cluster-admin` (`ClusterRoleBinding` `zeabur-identity-cluster-admins`) and binds nothing for
   other groups. Only `User`s with `accountType: Admin` get the `admins` group; the CRD refuses
-  `admins` in `spec.groups`. Install-wide settings (`teams`, `admin-aal3`) live in the `ConfigMap`
+  `admins` in `spec.groups`. Install-wide settings (`teams`, `admin-sign-in`) live in the `ConfigMap`
   `zeabur-identity-settings`, which Zeabur Identity reads by name and admins write.
 - **Hashes only.** Grants, invitations, the setup token and client secrets are stored as
   SHA-256 hashes of high-entropy values; credentials hold public keys. Client secrets are
