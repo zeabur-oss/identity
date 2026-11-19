@@ -42,7 +42,8 @@ description: Change Zeabur Identity's sign-in pages (askama templates, the desig
   page tests enforce this.
 - **Text.** Every string is a field of `Messages` in `crates/zeabur-identity-ui/src/i18n.rs` with English,
   Traditional Chinese (Taiwan usage, 通行密鑰) and Simplified Chinese (mainland usage, 通行密钥)
-  values; scripts get their messages from `data-msg-*` attributes. A missing translation is a
+  values; scripts get their own messages from `data-msg-*` attributes, and show the `detail` of a
+  refusal, which the server writes in the page language. A missing translation is a
   compile error. Use the terms in zeabur-oss/zeabur's `docs/internal/wording.md`.
 - **Contrast.** After changing a token, a colour class or the design-system pin, run
   `python3 .claude/skills/zeabur-identity-ui/contrast.py` (inside `nix develop`; exits 1 on any

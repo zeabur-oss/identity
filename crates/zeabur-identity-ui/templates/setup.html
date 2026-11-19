@@ -40,29 +40,25 @@
         {{ ui::command(invite_command) }}
       </div>
     </div>
-    <form id="setup" class="flex flex-col gap-5" novalidate
+    <form id="setup" class="flex flex-col gap-5" novalidate data-options="/setup/options" data-post="/setup"
           data-msg-failed="{{ m.passkey_failed }}" data-msg-cancelled="{{ m.passkey_cancelled }}"
           data-msg-working="{{ m.working }}" data-msg-error="{{ m.generic_error }}"
-          data-msg-invalid="{{ m.setup_invalid }}" data-msg-missing="{{ m.setup_missing_token }}"
-          data-msg-device-passkey="{{ m.device_passkey_needed }}" data-msg-admin-passkey="{{ m.admin_passkey_only }}"
-          data-msg-admin-two-factor="{{ m.admin_two_factor }}" data-msg-code-failed="{{ m.setup_code_failed }}"
-          data-msg-disabled="{{ m.account_disabled }}" data-msg-busy="{{ m.busy }}" data-msg-expired="{{ m.ceremony_expired }}" data-msg-exists="{{ m.setup_passkey_exists }}">
+          data-msg-missing="{{ m.setup_missing_token }}">
       <button type="submit" class="{{ ds::button("primary", "lg") }} w-full">{{ icons::icon("Fingerprint") }}{{ m.setup_create }}</button>
     </form>
     <div id="alternatives" class="flex flex-col gap-5">
       {{ ui::field_separator(m.upstream_or) }}
       <div class="flex flex-col gap-3">
-        <button type="button" id="use-password" class="{{ ds::button("secondary", "lg") }} w-full">{{ icons::icon("Key") }}{{ m.setup_password_submit }}</button>
+        <button type="button" id="use-password" data-post="/setup/password/options" class="{{ ds::button("secondary", "lg") }} w-full">{{ icons::icon("Key") }}{{ m.setup_password_submit }}</button>
         {{ upstream::buttons(providers, m) }}
       </div>
     </div>
-    <form id="setup-password" hidden class="flex flex-col gap-5" novalidate
-          data-msg-too-short="{{ m.weak_too_short }}" data-msg-too-long="{{ m.weak_too_long }}"
-          data-msg-common="{{ m.weak_common }}" data-msg-context="{{ m.weak_context }}">
-      {% call ui::field("new-password", m.setup_password, m.setup_password_hint) %}
-      <input id="new-password" name="password" type="password" minlength="15" maxlength="1024" class="{{ ds::input() }}"
+    <form id="setup-password" hidden class="flex flex-col gap-5" novalidate data-post="/setup/password"
+          data-msg-too-short="{{ m.too_short() }}">
+      {% call ui::field("new-password", m.setup_password, m.password_hint()) %}
+      <input id="new-password" name="password" type="password" minlength="{{ zeabur_identity_core::password::MIN_CHARS }}" maxlength="1024" class="{{ ds::input() }}"
              autocomplete="new-password"
-             {{- ui::field_describedby("new-password", m.setup_password_hint) }}>
+             {{- ui::field_describedby("new-password", m.password_hint()) }}>
       {% endcall %}
       {#- Filled by the script when the account needs a second factor. -#}
       <div id="totp" hidden class="flex flex-col gap-4">

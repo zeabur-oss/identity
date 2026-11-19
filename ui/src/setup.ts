@@ -3,16 +3,19 @@
 import {
   cancelled,
   creationOptions,
+  endpoint,
+  explain,
   messages,
+  next,
   post,
-  problem,
   type Reply,
   registrationJson,
   say,
   supported,
   upstreamButtons,
 } from "./webauthn"
-import type { PasswordSetUp, PasswordSetupOptions, Problem } from "./contract"
+import { longEnough } from "./password"
+import type { PasswordSetUp, PasswordSetupOptions } from "./contract"
 
 const form = document.getElementById("setup") as HTMLFormElement | null
 const passwordForm = document.getElementById("setup-password") as HTMLFormElement | null
@@ -27,46 +30,27 @@ for (const link of document.querySelectorAll<HTMLAnchorElement>("a[data-lang-lin
 }
 
 // The link can no longer be used, so getting a new one is the only way on.
-function invalid(): void {
-  say("error", text("msgInvalid"))
+function invalid(message: string): void {
+  say("error", message)
   document.getElementById("new-link")?.removeAttribute("hidden")
   if (form) form.hidden = true
   passwordForm?.setAttribute("hidden", "")
   alternatives?.setAttribute("hidden", "")
 }
 
-const failures: Record<string, string> = {
-  "passkey-failed": "msgFailed",
-  "device-passkey-needed": "msgDevicePasskey",
-  "account-disabled": "msgDisabled",
-  "ceremony-expired": "msgExpired",
-  "passkey-exists": "msgExists",
-  "admin-needs-passkey": "msgAdminPasskey",
-  "admin-needs-two-factor": "msgAdminTwoFactor",
-  "code-failed": "msgCodeFailed",
-  busy: "msgBusy",
-}
-
-const weaknesses: Record<string, string> = {
-  "too-short": "msgTooShort",
-  "too-long": "msgTooLong",
-  common: "msgCommon",
-  context: "msgContext",
-}
-
-/** A request the server refused, with the problem it named. */
+/** A request the server refused. */
 class Refused extends Error {
-  readonly kind: string
-  constructor(kind: string) {
-    super(kind)
-    this.kind = kind
+  readonly reply: Reply
+  constructor(reply: Reply) {
+    super(reply.status.toString())
+    this.reply = reply
   }
 }
 
-/** Shows the message for a refused request, or the generic one. */
-function refused(kind: string): void {
-  if (kind === "setup-invalid") invalid()
-  else say("error", text(failures[kind] ?? "msgError"))
+/** Shows the server's message for a refused request, or the new-link step it names. */
+function refused(reply: Reply): void {
+  if (next(reply) === "new-link") invalid(explain(reply, text))
+  else say("error", explain(reply, text))
 }
 
 /** Set while a passkey is registered or a password is set: the link works only once. */
@@ -82,7 +66,7 @@ function register(event: SubmitEvent): void {
     .then(() => done(false))
     .catch((error: unknown) => {
       say("status", "")
-      if (error instanceof Refused) refused(error.kind)
+      if (error instanceof Refused) refused(error.reply)
       else say("error", text(cancelled(error) ? "msgCancelled" : "msgFailed"))
     })
     .finally(() => {
@@ -92,24 +76,26 @@ function register(event: SubmitEvent): void {
 
 /** `reply` if the server accepted the request; otherwise throws what it refused. */
 function accepted(reply: Reply): Reply {
-  if (!reply.ok) throw new Refused(problem(reply))
+  if (!reply.ok) throw new Refused(reply)
   return reply
 }
 
 async function enrol(token: string): Promise<void> {
-  const started = accepted(await post("/setup/options", { token }))
+  const started = accepted(await post(endpoint(form, "options"), { token }))
   const credential = await navigator.credentials.create({
     publicKey: creationOptions(started.body),
   })
   if (!(credential instanceof PublicKeyCredential))
     throw new DOMException("no credential", "NotAllowedError")
-  accepted(await post("/setup", { token, credential: registrationJson(credential), label: null }))
+  accepted(
+    await post(endpoint(form), { token, credential: registrationJson(credential), label: null }),
+  )
 }
 
 /** The password typed, if it is long enough to send; otherwise says why not. */
 function typedPassword(): string | null {
-  const password = document.querySelector<HTMLInputElement>("#new-password")?.value ?? ""
-  if ([...password].length >= 15) return password
+  const input = document.querySelector<HTMLInputElement>("#new-password")
+  if (longEnough(input)) return input.value
   say("error", weakText("msgTooShort"))
   return null
 }
@@ -119,9 +105,9 @@ let sealed: string | null = null
 
 /** Asks what a password needs; shows the authenticator step when it needs one. */
 async function passwordOptions(token: string): Promise<boolean> {
-  const reply = await post("/setup/password/options", { token })
+  const reply = await post(endpoint(document.getElementById("use-password")), { token })
   if (!reply.ok) {
-    refused(problem(reply))
+    refused(reply)
     return false
   }
   const { totp } = reply.body as PasswordSetupOptions
@@ -155,7 +141,7 @@ function setPassword(event: SubmitEvent): void {
   if (password === null) return
   registering = true
   say("error", "")
-  post("/setup/password", { token, password, totp: totpAnswer() })
+  post(endpoint(passwordForm), { token, password, totp: totpAnswer() })
     .then(answered)
     .catch(() => say("error", text("msgError")))
     .finally(() => {
@@ -171,15 +157,8 @@ function totpAnswer(): { sealed: string; code: string } | null {
 }
 
 function answered(reply: Reply): void {
-  if (reply.ok) return succeeded(reply)
-  const kind = problem(reply)
-  if (kind === "password-weak") say("error", weakText(weakness(reply)))
-  else refused(kind)
-}
-
-/** The message key for the weakness the server named. */
-function weakness(reply: Reply): string {
-  return weaknesses[(reply.body as Problem).weakness ?? ""] ?? "msgCommon"
+  if (reply.ok) succeeded(reply)
+  else refused(reply)
 }
 
 function succeeded(reply: Reply): void {
@@ -227,9 +206,7 @@ if (form) {
   // Linking an upstream account works without passkey support.
   if (token)
     upstreamButtons(() => ({ token }), text, {
-      "setup-invalid": invalid,
-      "admin-needs-passkey": () => say("error", text("msgAdminPasskey")),
-      "account-disabled": () => say("error", text("msgDisabled")),
+      "new-link": (reply) => invalid(explain(reply, text)),
     })
   else document.getElementById("upstream")?.setAttribute("hidden", "")
   if (!token) {

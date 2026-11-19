@@ -35,3 +35,11 @@ export function wireOtherAccount(back: () => void): void {
     document.querySelector<HTMLInputElement>("#username")?.focus()
   })
 }
+
+/**
+ * Whether a new password reaches the field's `minlength`, which the server renders from its own
+ * minimum. Counts code points, as the server does.
+ */
+export function longEnough(input: HTMLInputElement | null): input is HTMLInputElement {
+  return input !== null && [...input.value].length >= input.minLength
+}

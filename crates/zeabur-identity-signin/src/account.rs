@@ -58,7 +58,7 @@ use zeabur_identity_ui::pages::{
 
 use crate::device::Requester;
 use crate::passkeys::{BackupFlags, backup_flags};
-use crate::problem::Problem;
+use crate::problem::{Problem, Step};
 use crate::upstream::provider::{Descriptor, GITHUB_ISSUER, GOOGLE_ISSUER};
 use crate::{
     Accepted, BAD_REQUEST, CEREMONY_COOKIE, CEREMONY_EXPIRED, CEREMONY_LIFETIME, Ceremony,
@@ -86,37 +86,47 @@ const SIGNED_OUT: Problem = Problem::new(
     StatusCode::UNAUTHORIZED,
     "signed-out",
     "Your session ended. Sign in again.",
-);
+)
+.detail(|m| m.signed_out_error);
 const REAUTH_REQUIRED: Problem = Problem::new(
     StatusCode::FORBIDDEN,
     "reauth-required",
     "Confirm with a passkey first.",
-);
+)
+.next(Step::Reauth);
 const NOT_FOUND: Problem = Problem::new(
     StatusCode::NOT_FOUND,
     "not-found",
     "No such passkey or session.",
-);
+)
+.detail(|m| m.passkey_gone_error)
+.refresh();
 const LAST_PASSKEY: Problem = Problem::new(
     StatusCode::CONFLICT,
     "last-passkey",
     "This is your only passkey. Add another before removing it.",
-);
+)
+.detail(|m| m.last_passkey_error)
+.refresh();
 const CONFLICT: Problem = Problem::new(
     StatusCode::CONFLICT,
     "conflict",
     "Your passkeys changed meanwhile. Reload and try again.",
-);
+)
+.detail(|m| m.changed_error)
+.refresh();
 const PASSKEY_EXISTS: Problem = Problem::new(
     StatusCode::CONFLICT,
     "passkey-exists",
     "This passkey is already registered.",
-);
+)
+.detail(|m| m.passkey_exists);
 pub(crate) const LAST_CREDENTIAL: Problem = Problem::new(
     StatusCode::CONFLICT,
     "last-credential",
     "This is your only way to sign in. Add a passkey before you remove it.",
-);
+)
+.detail(|m| m.last_credential_error);
 
 type Shared<D, G, C, K, S> = std::sync::Arc<SignIn<D, G, C, K, S>>;
 
