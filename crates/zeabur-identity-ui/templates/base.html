@@ -8,7 +8,7 @@
 <meta name="color-scheme" content="light dark">
 <meta name="referrer" content="no-referrer">
 <title>{% block title %}{% endblock %} · Zeabur Identity</title>
-<link rel="stylesheet" href="/assets/app.css?v={{ assets.css }}">
+<link rel="stylesheet" href="{{ crate::assets::url("app.css") }}">
 <link rel="preload" href="/assets/Geist-Variable.woff2" as="font" type="font/woff2" crossorigin>
 {% block head %}{% endblock %}
 </head>

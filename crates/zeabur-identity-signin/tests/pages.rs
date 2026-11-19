@@ -443,8 +443,8 @@ mod tests {
         }
     }
 
-    /// Whether the build embeds the built pages. Without `ZEABUR_IDENTITY_UI_DIST` it embeds empty
-    /// placeholders, so the tests that read styles and scripts return early; CI's `ui` job runs
+    /// Whether the build embeds the built pages. Without `ZEABUR_IDENTITY_UI_DIST` it embeds no
+    /// assets, so the tests that read styles and scripts return early; CI's `ui` job runs
     /// them with the built pages.
     fn built() -> bool {
         option_env!("ZEABUR_IDENTITY_UI_DIST").is_some_and(|dist| !dist.is_empty())
@@ -569,6 +569,9 @@ mod tests {
 
     #[tokio::test]
     async fn assets_are_embedded_versioned_and_immutable() {
+        if !built() {
+            return;
+        }
         let app = app().await;
         let page = get(&app, "/login", &[]).await;
         let start = page.body.find("/assets/app.css?v=").unwrap();

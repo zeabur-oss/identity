@@ -1,7 +1,13 @@
 {
   "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/v3.33.1/schema.json",
-  // The pages that scripts/build-ui.sh builds.
-  "entry": ["src/login.ts", "src/setup.ts", "src/account.ts", "styles/app.css"],
+  // The pages that scripts/build-ui.sh builds, and the script that lists them in the manifest.
+  "entry": [
+    "src/login.ts",
+    "src/setup.ts",
+    "src/account.ts",
+    "styles/app.css",
+    "scripts/manifest.ts"
+  ],
   // A page imports only webauthn.ts, password.ts and the generated contract.ts, never another page.
   "boundaries": {
     "zones": [

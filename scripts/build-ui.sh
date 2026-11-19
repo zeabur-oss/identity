@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Builds the sign-in page assets into ui/dist, styles and scripts as brotli only, and the design
+# Builds the sign-in page assets into ui/dist, styles and scripts as brotli only, with a
+# manifest.json that lists them, and the design
 # system's classes into crates/zeabur-identity-ui/templates/ds.html. ui/dist is not committed; cargo
 # embeds it when ZEABUR_IDENTITY_UI_DIST points at it (crates/zeabur-identity-ui/build.rs). ds.html
 # is committed, as askama reads templates from the crate; CI fails if it differs. Run inside
@@ -25,3 +26,4 @@ for file in app.css login.js setup.js account.js; do
   rm "$out/$file"
 done
 cp "$geist/Geist-Variable.woff2" "$out/Geist-Variable.woff2"
+(cd "$ui" && bun scripts/manifest.ts "$out")

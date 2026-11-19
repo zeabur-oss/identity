@@ -8,7 +8,6 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
 use time::OffsetDateTime;
 
-use super::assets::{VERSIONS, Versions};
 use super::harden;
 use super::i18n::{ErrorText, Lang, Messages};
 
@@ -136,7 +135,6 @@ struct LoginPage<'a> {
     lang: Lang,
     langs: &'static [Lang],
     m: &'static Messages,
-    assets: &'a Versions,
     client: Option<&'a str>,
     /// Seconds left on the pending request.
     expires_in: Option<u64>,
@@ -153,7 +151,6 @@ struct SetupPage<'a> {
     lang: Lang,
     langs: &'static [Lang],
     m: &'static Messages,
-    assets: &'a Versions,
     client: Option<&'a str>,
     providers: &'a [ProviderButton<'a>],
     apps: &'a [AppLink<'a>],
@@ -167,7 +164,6 @@ struct NoticePage<'a> {
     lang: Lang,
     langs: &'static [Lang],
     m: &'static Messages,
-    assets: &'a Versions,
     title: &'a str,
     body: &'a str,
     apps: &'a [AppLink<'a>],
@@ -180,7 +176,6 @@ pub fn notice_page(lang: Lang, title: &str, body: &str, apps: &[AppLink<'_>]) ->
         lang,
         langs: &Lang::ALL,
         m: lang.messages(),
-        assets: &VERSIONS,
         title,
         body,
         apps,
@@ -194,7 +189,6 @@ struct ErrorPage<'a> {
     lang: Lang,
     langs: &'static [Lang],
     m: &'static Messages,
-    assets: &'a Versions,
     text: ErrorText,
     command: Option<&'static str>,
     new_link: bool,
@@ -243,7 +237,6 @@ pub fn error_page(lang: Lang, reason: ErrorReason, detail: &str) -> Response {
         lang,
         langs: &Lang::ALL,
         m,
-        assets: &VERSIONS,
         text: reason.text(m),
         command: reason.command(),
         new_link: reason == ErrorReason::SetupLinkInvalid,
@@ -276,7 +269,6 @@ pub fn login_page(
         lang,
         langs: &Lang::ALL,
         m,
-        assets: &VERSIONS,
         client,
         expires_in: request.map(|(_, left)| left.as_secs()),
         subtitle,
@@ -304,7 +296,6 @@ pub fn setup_page(
         lang,
         langs: &Lang::ALL,
         m: lang.messages(),
-        assets: &VERSIONS,
         client,
         providers,
         apps,
@@ -486,7 +477,6 @@ struct AccountPage<'a> {
     lang: Lang,
     langs: &'static [Lang],
     m: &'static Messages,
-    assets: &'a Versions,
     view: Option<AccountItems<'a>>,
     reset_command: &'static str,
 }
@@ -544,7 +534,6 @@ pub fn account_page(lang: Lang, view: Option<AccountView<'_>>) -> Response {
         lang,
         langs: &Lang::ALL,
         m,
-        assets: &VERSIONS,
         view,
         reset_command: RESET_COMMAND,
     };

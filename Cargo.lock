@@ -4734,6 +4734,8 @@ dependencies = [
  "brotli-decompressor",
  "form_urlencoded",
  "qrcode",
+ "serde",
+ "serde_json",
  "time",
  "tokio",
  "tracing",

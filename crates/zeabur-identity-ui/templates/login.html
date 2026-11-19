@@ -5,7 +5,7 @@
 {%- import "upstream.html" as upstream -%}
 {%- import "password.html" as password -%}
 {%- block title %}{{ m.login_title }}{% endblock -%}
-{%- block head %}<script type="module" src="/assets/login.js?v={{ assets.login_js }}"></script>{% endblock -%}
+{%- block head %}<script type="module" src="{{ crate::assets::url("login.js") }}"></script>{% endblock -%}
 {%- block content %}
 {% call ui::card() %}
   {{ ui::card_header(m.login_title, subtitle) }}
