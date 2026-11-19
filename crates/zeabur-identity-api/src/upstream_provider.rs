@@ -9,6 +9,8 @@ use kube::{CustomResource, KubeSchema};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::upstream::MAX_ISSUER;
+
 /// The Secret that holds the client secret of every provider, one key for each provider.
 ///
 /// It is in the namespace of Zeabur Identity. The name is fixed, so Zeabur Identity's Role can
@@ -91,7 +93,7 @@ pub enum UpstreamKind {
 pub struct OpenID {
     /// The issuer, exactly as in the `iss` claim of its ID tokens. Zeabur Identity reads
     /// `<issuer>/.well-known/openid-configuration`.
-    #[schemars(length(min = 1, max = 256))]
+    #[schemars(length(min = 1, max = MAX_ISSUER))]
     #[x_kube(validation = Rule::new(ISSUER_RULE).message(
         "the issuer must be https:// with a host; visible ASCII, no user information, query or fragment"
     ))]

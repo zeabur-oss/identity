@@ -8,6 +8,7 @@ use std::sync::{Mutex, PoisonError};
 use zeabur_identity_api::ADMIN_GROUP;
 use zeabur_identity_api::client::ClientType;
 use zeabur_identity_api::upstream::{ExternalId, Issuer};
+use zeabur_identity_api::user::MAX_USERNAME;
 use zeabur_identity_core::account::{AccountType, Settings};
 use zeabur_identity_core::clock::UnixTime;
 use zeabur_identity_core::crypto::ct_eq;
@@ -1371,7 +1372,7 @@ impl CredentialStore for MemoryCredentialStore {
 pub fn invitation_name(presented: &str) -> Option<&str> {
     let (name, secret) = presented.split_once('.')?;
     let label = !name.is_empty()
-        && name.len() <= 63
+        && name.len() <= MAX_USERNAME
         && name
             .bytes()
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');

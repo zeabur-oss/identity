@@ -56,7 +56,7 @@
     <form id="setup-password" hidden class="flex flex-col gap-5" novalidate data-post="/setup/password"
           data-msg-too-short="{{ m.too_short() }}">
       {% call ui::field("new-password", m.setup_password, m.password_hint()) %}
-      <input id="new-password" name="password" type="password" minlength="{{ zeabur_identity_core::password::MIN_CHARS }}" maxlength="1024" class="{{ ds::input() }}"
+      <input id="new-password" name="password" type="password" minlength="{{ zeabur_identity_core::password::MIN_CHARS }}" maxlength="{{ zeabur_identity_core::password::MAX_CHARS }}" class="{{ ds::input() }}"
              autocomplete="new-password"
              {{- ui::field_describedby("new-password", m.password_hint()) }}>
       {% endcall %}
@@ -72,7 +72,7 @@
         <pre id="totp-secret" class="type-mono rounded-md border border-v2-border bg-v2-surface-hover px-3 py-2 break-all whitespace-pre-wrap text-main select-all"></pre>
         {% endcall %}
         {% call ui::field("totp-code", m.setup_totp_code) %}
-        <input id="totp-code" name="code" type="text" inputmode="numeric" maxlength="6" class="{{ ds::input() }}"
+        <input id="totp-code" name="code" type="text" inputmode="numeric" maxlength="{{ zeabur_identity_core::totp::DIGITS }}" class="{{ ds::input() }}"
                autocomplete="one-time-code" spellcheck="false">
         {% endcall %}
       </div>

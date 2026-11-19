@@ -181,10 +181,10 @@ impl From<Subject> for String {
 #[serde(rename_all = "camelCase")]
 pub struct ExternalId {
     /// Upstream issuer.
-    #[schemars(with = "String", length(min = 1, max = 256))]
+    #[schemars(with = "String", length(min = 1, max = MAX_ISSUER))]
     pub issuer: Issuer,
     /// Upstream subject: the stable account ID, never an email address.
-    #[schemars(with = "String", length(min = 1, max = 256))]
+    #[schemars(with = "String", length(min = 1, max = MAX_SUBJECT))]
     pub subject: Subject,
 }
 

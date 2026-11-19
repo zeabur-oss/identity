@@ -11,6 +11,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::upstream::ExternalId;
 
+/// Longest passkey label, in characters.
+pub const MAX_LABEL: usize = 64;
+
 /// A way for a `User` to sign in.
 ///
 /// The object name is derived from the credential's unique key (`c-` + hex SHA-256 of the
@@ -136,7 +139,7 @@ pub struct Passkey {
     pub aaguid: Option<String>,
     /// User-chosen label, for example "MacBook".
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(length(max = 64))]
+    #[schemars(length(max = MAX_LABEL))]
     pub label: Option<String>,
 }
 
@@ -146,7 +149,7 @@ pub struct Passkey {
 pub struct CredentialStatus {
     /// The label the user gave it last; takes the place of `spec.passkey.label`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(length(max = 64))]
+    #[schemars(length(max = MAX_LABEL))]
     pub label: Option<String>,
     /// When it last signed in, in Unix seconds. Updated at most once a minute.
     #[serde(default, skip_serializing_if = "Option::is_none")]

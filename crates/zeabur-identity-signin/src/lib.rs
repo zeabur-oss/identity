@@ -28,6 +28,7 @@ use webauthn_rs::prelude::{
     DiscoverableAuthentication, Passkey, PasskeyRegistration, PublicKeyCredential,
     RegisterPublicKeyCredential, Uuid,
 };
+use zeabur_identity_api::credential::MAX_LABEL;
 use zeabur_identity_api::token_hash;
 use zeabur_identity_core::account::{Method, Refusal, allows};
 use zeabur_identity_core::clock::{Clock, UnixTime};
@@ -294,12 +295,9 @@ pub(crate) fn open<T: DeserializeOwned, D, G, C>(
     }
 }
 
-/// The longest passkey label.
-pub(crate) const LABEL_MAX: usize = 64;
-
 /// A label as given, trimmed and shortened, or `None` if empty.
 pub(crate) fn clean_label(label: Option<&str>) -> Option<String> {
-    let label: String = label?.trim().chars().take(LABEL_MAX).collect();
+    let label: String = label?.trim().chars().take(MAX_LABEL).collect();
     let label = label.trim_end().to_owned();
     (!label.is_empty()).then_some(label)
 }

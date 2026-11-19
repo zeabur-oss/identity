@@ -198,7 +198,7 @@
                           },
                           "subject": {
                             "description": "Upstream subject: the stable account ID, never an email address.",
-                            "maxLength": 256,
+                            "maxLength": 255,
                             "minLength": 1,
                             "type": "string"
                           }

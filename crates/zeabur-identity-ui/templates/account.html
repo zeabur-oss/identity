@@ -104,7 +104,7 @@
         {%- if view.passkey_confirms %}
         {% call ui::dialog("add", "add-title", m.add_passkey, m.add, m.cancel, "primary", "Fingerprint") %}
         {% call ui::field("add-label", m.setup_label, m.setup_label_hint) %}
-        <input id="add-label" name="label" type="text" maxlength="64" autofocus autocomplete="off" class="{{ ds::input() }}"
+        <input id="add-label" name="label" type="text" maxlength="{{ zeabur_identity_api::credential::MAX_LABEL }}" autofocus autocomplete="off" class="{{ ds::input() }}"
                {{- ui::field_describedby("add-label", m.setup_label_hint) }}>
         {% endcall %}
         {%- endcall %}
@@ -140,7 +140,7 @@
             </div>
             {% call ui::dialog("rename", "rename-title-" ~ p.name, m.rename, m.save, m.cancel) %}
             <label class="sr-only" for="label-{{ p.name }}">{{ m.setup_label }}</label>
-            <input id="label-{{ p.name }}" name="label" type="text" maxlength="64" required autofocus autocomplete="off" value="{{ p.label.unwrap_or_default() }}" class="{{ ds::input() }}">
+            <input id="label-{{ p.name }}" name="label" type="text" maxlength="{{ zeabur_identity_api::credential::MAX_LABEL }}" required autofocus autocomplete="off" value="{{ p.label.unwrap_or_default() }}" class="{{ ds::input() }}">
             {%- endcall %}
             {%- if view.passkeys.len() > 1 %}
             {% call ui::dialog("confirm", "remove-title-" ~ p.name, m.remove_title, m.remove, m.cancel, "destructive", "Fingerprint") %}
@@ -174,10 +174,10 @@
           {%- if password.authenticator %} {{ m.password_authenticator_note }}{% endif %}</p>
         <input type="text" name="username" autocomplete="username" value="{{ view.username }}" hidden>
         {% call ui::field("current-password", m.password_current) %}
-        <input id="current-password" name="current" type="password" maxlength="1024" required autofocus class="{{ ds::input() }}" autocomplete="current-password">
+        <input id="current-password" name="current" type="password" maxlength="{{ zeabur_identity_core::password::MAX_CHARS }}" required autofocus class="{{ ds::input() }}" autocomplete="current-password">
         {% endcall %}
         {% call ui::field("new-password", m.password_new, m.password_hint()) %}
-        <input id="new-password" name="new" type="password" minlength="{{ zeabur_identity_core::password::MIN_CHARS }}" maxlength="1024" required class="{{ ds::input() }}" autocomplete="new-password"
+        <input id="new-password" name="new" type="password" minlength="{{ zeabur_identity_core::password::MIN_CHARS }}" maxlength="{{ zeabur_identity_core::password::MAX_CHARS }}" required class="{{ ds::input() }}" autocomplete="new-password"
                {{- ui::field_describedby("new-password", m.password_hint()) }}>
         {% endcall %}
         </div>
@@ -186,7 +186,7 @@
         <p data-slot="dialog-description" class="{{ ds::dialog_description() }} text-pretty">{{ m.password_remove_body }}
           {%- if password.authenticator %} {{ m.password_remove_authenticator }}{% endif %}</p>
         <label class="sr-only" for="remove-current">{{ m.password_current }}</label>
-        <input id="remove-current" name="current" type="password" maxlength="1024" required autofocus autocomplete="current-password"
+        <input id="remove-current" name="current" type="password" maxlength="{{ zeabur_identity_core::password::MAX_CHARS }}" required autofocus autocomplete="current-password"
                placeholder="{{ m.password_current }}" class="{{ ds::input() }}">
         {%- endcall %}
         <p data-status role="status" aria-live="polite" class="empty:sr-only text-[0.8125rem] leading-5 text-secondary"></p>
