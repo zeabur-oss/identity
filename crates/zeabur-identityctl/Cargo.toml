@@ -17,5 +17,6 @@ zeabur-identity-k8s.workspace = true
 zeabur-identity-keys.workspace = true
 clap.workspace = true
 kube.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

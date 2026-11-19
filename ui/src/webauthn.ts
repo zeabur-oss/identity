@@ -1,6 +1,17 @@
 // Shared helpers for the sign-in pages: WebAuthn JSON conversion (webauthn-rs wire format), JSON
 // requests, and accessible status messages. No HTML is ever written (Trusted Types: 'none').
 
+import type {
+  Accepted,
+  AccountChanged,
+  AccountSignedIn,
+  PasskeySignedIn,
+  PasswordSignedIn,
+  Problem,
+  UnknownCredential,
+  UpstreamStarted,
+} from "./contract"
+
 type Json = Record<string, unknown>
 
 /** A page's messages, from the `data-msg-*` attributes on `element`; a missing one is empty. */
@@ -124,7 +135,7 @@ const unreachable = (): Reply => ({ ok: false, status: 0, body: {} })
 
 /** The problem type suffix from an RFC 9457 response, for example "setup-invalid". */
 export function problem(reply: Reply): string {
-  const type = typeof reply.body.type === "string" ? reply.body.type : ""
+  const type = (reply.body as Problem).type ?? ""
   return type.replace("urn:zeabur-identity:problem:", "")
 }
 
@@ -147,7 +158,8 @@ export function say(id: "status" | "error", text: string): void {
 
 /** The URL in a reply that sends the browser elsewhere, if it has one. */
 export function redirect(reply: Reply): string | null {
-  return reply.ok && typeof reply.body.redirect_to === "string" ? reply.body.redirect_to : null
+  const body = reply.body as PasskeySignedIn | PasswordSignedIn | UpstreamStarted
+  return (reply.ok && body.redirect_to) || null
 }
 
 /**
@@ -192,8 +204,8 @@ export function cancelled(error: unknown): boolean {
 }
 
 type Signals = {
-  signalAllAcceptedCredentials?: (options: Json) => Promise<void>
-  signalUnknownCredential?: (options: Json) => Promise<void>
+  signalAllAcceptedCredentials?: (options: Accepted) => Promise<void>
+  signalUnknownCredential?: (options: UnknownCredential) => Promise<void>
 }
 
 /**
@@ -204,14 +216,20 @@ type Signals = {
  */
 export async function signal(body: Json): Promise<void> {
   const sent = [
-    send("signalAllAcceptedCredentials", body.accepted),
-    send("signalUnknownCredential", body.unknownCredential),
+    send(
+      "signalAllAcceptedCredentials",
+      (body as AccountChanged | AccountSignedIn | PasskeySignedIn).accepted,
+    ),
+    send("signalUnknownCredential", (body as Problem).unknownCredential),
   ]
   await Promise.race([Promise.allSettled(sent), new Promise((resolve) => setTimeout(resolve, 500))])
 }
 
-async function send(name: keyof Signals, options: unknown): Promise<void> {
+async function send<K extends keyof Signals>(
+  name: K,
+  options: Parameters<NonNullable<Signals[K]>>[0] | undefined,
+): Promise<void> {
   const api = window.PublicKeyCredential as unknown as Signals | undefined
-  const method = api?.[name]
-  if (options && typeof method === "function") await method.call(api, options as Json)
+  const method = api?.[name] as ((options: object) => Promise<void>) | undefined
+  if (options && typeof method === "function") await method.call(api, options)
 }

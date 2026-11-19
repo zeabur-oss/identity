@@ -42,17 +42,22 @@
 //! [cert-manager SelfSigned]: https://cert-manager.io/docs/configuration/selfsigned/#bootstrapping-ca-issuers
 //! [cert-manager CA]: https://cert-manager.io/docs/configuration/ca/
 
+use std::collections::BTreeMap;
 use std::net::IpAddr;
 use std::sync::Arc;
 
 use k8s_openapi::api::core::v1::Secret;
+use kube::api::ObjectMeta;
 use rustls::sign::CertifiedKey;
-use serde_json::{Value, json};
 use thiserror::Error;
 use zeabur_identity_core::config::{BaseUrl, ConfigError};
 use zeabur_identity_tls::certificate::{CertificateError, certified_key};
 
 use super::MANAGED_BY;
+use crate::cert_manager::{
+    CaIssuer, Certificate, CertificateSpec, Issuer, IssuerRef, IssuerSpec, PrivateKey,
+    SecretTemplate, SelfSignedIssuer,
+};
 
 /// Name of the Certificate and the Secret holding the serving certificate.
 pub const SECRET: &str = "zeabur-identity-internal-tls";
@@ -84,59 +89,92 @@ pub enum TlsError {
     Url(#[from] ConfigError),
 }
 
+/// The cert-manager objects that issue the root CA and the serving certificate.
+#[derive(Debug, Clone)]
+pub struct Objects {
+    /// The `SelfSigned` Issuer of the root CA.
+    pub root_issuer: Issuer,
+    /// The root CA.
+    pub ca: Certificate,
+    /// The `CA` Issuer that signs with the root CA.
+    pub ca_issuer: Issuer,
+    /// The serving certificate.
+    pub serving: Certificate,
+}
+
 /// The cert-manager objects that issue the root CA and the serving certificate for `ip` and
-/// `dns_names`, in the order to apply them.
+/// `dns_names`.
 #[must_use]
-pub fn objects(namespace: &str, ip: IpAddr, dns_names: &[String]) -> Vec<Value> {
-    let url = internal_url(ip).map(|url| url.as_str().to_owned()).ok();
-    let labels = json!({ (MANAGED_BY.0): MANAGED_BY.1 });
-    let metadata = |name: &str| json!({"name": name, "namespace": namespace, "labels": labels});
-    let issuer_ref =
-        |name: &str| json!({"name": name, "kind": "Issuer", "group": "cert-manager.io"});
-    vec![
-        json!({
-            "apiVersion": "cert-manager.io/v1",
-            "kind": "Issuer",
-            "metadata": metadata(ROOT_ISSUER),
-            "spec": {"selfSigned": {}},
-        }),
-        json!({
-            "apiVersion": "cert-manager.io/v1",
-            "kind": "Certificate",
-            "metadata": metadata(CA_SECRET),
-            "spec": {
-                "isCA": true,
-                "commonName": "Zeabur Identity internal CA",
-                "secretName": CA_SECRET,
-                "duration": CA_DURATION,
-                "privateKey": {"algorithm": "ECDSA", "size": 256, "rotationPolicy": "Never"},
-                "issuerRef": issuer_ref(ROOT_ISSUER),
+pub fn objects(namespace: &str, ip: IpAddr, dns_names: &[String]) -> Objects {
+    let labels = BTreeMap::from([(MANAGED_BY.0.to_owned(), MANAGED_BY.1.to_owned())]);
+    let metadata = |name: &str| ObjectMeta {
+        name: Some(name.to_owned()),
+        namespace: Some(namespace.to_owned()),
+        labels: Some(labels.clone()),
+        ..ObjectMeta::default()
+    };
+    let issuer_ref = |name: &str| IssuerRef {
+        name: name.to_owned(),
+        kind: "Issuer".to_owned(),
+        group: "cert-manager.io".to_owned(),
+    };
+    let ecdsa = |rotation_policy: Option<&str>| PrivateKey {
+        algorithm: "ECDSA".to_owned(),
+        size: 256,
+        rotation_policy: rotation_policy.map(str::to_owned),
+    };
+    let annotations = internal_url(ip).map_or_else(
+        |_never| BTreeMap::new(),
+        |url| BTreeMap::from([(URL_ANNOTATION.to_owned(), url.as_str().to_owned())]),
+    );
+    Objects {
+        root_issuer: Issuer {
+            metadata: metadata(ROOT_ISSUER),
+            spec: IssuerSpec {
+                self_signed: Some(SelfSignedIssuer {}),
+                ca: None,
             },
-        }),
-        json!({
-            "apiVersion": "cert-manager.io/v1",
-            "kind": "Issuer",
-            "metadata": metadata(CA_ISSUER),
-            "spec": {"ca": {"secretName": CA_SECRET}},
-        }),
-        json!({
-            "apiVersion": "cert-manager.io/v1",
-            "kind": "Certificate",
-            "metadata": metadata(SECRET),
-            "spec": {
-                "secretName": SECRET,
-                "secretTemplate": {
-                    "labels": labels,
-                    "annotations": {URL_ANNOTATION: url},
-                },
-                "ipAddresses": [ip.to_string()],
-                "dnsNames": dns_names,
-                "usages": ["server auth", "digital signature"],
-                "privateKey": {"algorithm": "ECDSA", "size": 256},
-                "issuerRef": issuer_ref(CA_ISSUER),
+        },
+        ca: Certificate {
+            metadata: metadata(CA_SECRET),
+            spec: CertificateSpec {
+                is_ca: Some(true),
+                common_name: Some("Zeabur Identity internal CA".to_owned()),
+                secret_name: CA_SECRET.to_owned(),
+                duration: Some(CA_DURATION.to_owned()),
+                private_key: Some(ecdsa(Some("Never"))),
+                issuer_ref: issuer_ref(ROOT_ISSUER),
+                ..CertificateSpec::default()
             },
-        }),
-    ]
+            status: None,
+        },
+        ca_issuer: Issuer {
+            metadata: metadata(CA_ISSUER),
+            spec: IssuerSpec {
+                self_signed: None,
+                ca: Some(CaIssuer {
+                    secret_name: CA_SECRET.to_owned(),
+                }),
+            },
+        },
+        serving: Certificate {
+            metadata: metadata(SECRET),
+            spec: CertificateSpec {
+                secret_name: SECRET.to_owned(),
+                secret_template: Some(SecretTemplate {
+                    labels: labels.clone(),
+                    annotations,
+                }),
+                ip_addresses: vec![ip.to_string()],
+                dns_names: dns_names.to_vec(),
+                usages: vec!["server auth".to_owned(), "digital signature".to_owned()],
+                private_key: Some(ecdsa(None)),
+                issuer_ref: issuer_ref(CA_ISSUER),
+                ..CertificateSpec::default()
+            },
+            status: None,
+        },
+    }
 }
 
 /// The `https` base URL for an address inside the cluster.
@@ -194,27 +232,22 @@ pub fn parse(secret: &Secret) -> Result<Material, TlsError> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
     use std::net::Ipv4Addr;
 
     use k8s_openapi::ByteString;
-    use kube::api::ObjectMeta;
     use zeabur_identity_test_support::certificate::Ca;
 
     use super::*;
 
     /// A Secret as cert-manager writes it for `certificate`: the issued pair, plus the labels and
     /// annotations of `secretTemplate`.
-    fn issued_secret(certificate: &Value, cert_pem: &str, key_pem: &str) -> Secret {
-        let template = &certificate["spec"]["secretTemplate"];
-        let strings = |value: &Value| serde_json::from_value(value.clone()).unwrap();
+    fn issued_secret(certificate: &Certificate, cert_pem: &str, key_pem: &str) -> Secret {
+        let template = certificate.spec.secret_template.clone().unwrap();
         Secret {
             metadata: ObjectMeta {
-                name: certificate["spec"]["secretName"]
-                    .as_str()
-                    .map(str::to_owned),
-                labels: Some(strings(&template["labels"])),
-                annotations: Some(strings(&template["annotations"])),
+                name: Some(certificate.spec.secret_name.clone()),
+                labels: Some(template.labels),
+                annotations: Some(template.annotations),
                 ..ObjectMeta::default()
             },
             type_: Some("kubernetes.io/tls".to_owned()),
@@ -235,49 +268,80 @@ mod tests {
     #[test]
     fn issued_secret_tells_the_listener_where_kube_apiserver_reaches_it() {
         let ip = IpAddr::V4(Ipv4Addr::new(10, 43, 0, 53));
-        let objects = objects(
+        let serving = objects(
             "zeabur-identity",
             ip,
             &["zeabur-identity.zeabur-identity.svc".to_owned()],
-        );
-        let serving = objects
-            .iter()
-            .find(|o| o["kind"] == "Certificate" && o["spec"]["secretName"] == SECRET)
-            .unwrap();
-        assert_eq!(serving["spec"]["ipAddresses"], json!(["10.43.0.53"]));
+        )
+        .serving;
+        assert_eq!(serving.spec.secret_name, SECRET);
+        assert_eq!(serving.spec.ip_addresses, ["10.43.0.53"]);
         let issued = Ca::new().unwrap().issue(&["10.43.0.53"]).unwrap();
 
-        let material = parse(&issued_secret(serving, &issued.cert_pem, &issued.key_pem)).unwrap();
+        let material = parse(&issued_secret(&serving, &issued.cert_pem, &issued.key_pem)).unwrap();
         assert_eq!(material.url, Some(internal_url(ip).unwrap()));
     }
 
     #[test]
     fn serving_certificate_chains_to_the_root_that_kube_apiserver_trusts() {
         let objects = objects("ns", IpAddr::V4(Ipv4Addr::LOCALHOST), &[]);
-        let by_name = |kind: &str, name: &str| {
-            objects
-                .iter()
-                .find(|o| o["kind"] == kind && o["metadata"]["name"] == name)
-                .unwrap()
-        };
-        let serving = by_name("Certificate", SECRET);
-        let ca_issuer = by_name(
-            "Issuer",
-            serving["spec"]["issuerRef"]["name"].as_str().unwrap(),
-        );
-        let root = by_name("Certificate", CA_SECRET);
         assert_eq!(
-            ca_issuer["spec"]["ca"]["secretName"],
-            root["spec"]["secretName"]
+            objects.serving.spec.issuer_ref.name,
+            objects.ca_issuer.metadata.name.unwrap()
         );
-        assert_eq!(root["spec"]["isCA"], true);
+        assert_eq!(
+            objects.ca_issuer.spec.ca.unwrap().secret_name,
+            objects.ca.spec.secret_name
+        );
+        assert_eq!(objects.ca.spec.is_ca, Some(true));
         // A new root key would invalidate the CA in kube-apiserver's configuration.
-        assert_eq!(root["spec"]["privateKey"]["rotationPolicy"], "Never");
-        let root_issuer = by_name(
-            "Issuer",
-            root["spec"]["issuerRef"]["name"].as_str().unwrap(),
+        assert_eq!(
+            objects
+                .ca
+                .spec
+                .private_key
+                .unwrap()
+                .rotation_policy
+                .as_deref(),
+            Some("Never")
         );
-        assert!(root_issuer["spec"]["selfSigned"].is_object());
+        assert_eq!(
+            objects.ca.spec.issuer_ref.name,
+            objects.root_issuer.metadata.name.unwrap()
+        );
+        assert!(objects.root_issuer.spec.self_signed.is_some());
+    }
+
+    #[test]
+    fn objects_serialise_as_cert_manager_reads_them() {
+        let objects = objects("ns", IpAddr::V4(Ipv4Addr::LOCALHOST), &[]);
+        let root = serde_json::to_value(&objects.root_issuer).unwrap();
+        assert_eq!(
+            root,
+            serde_json::json!({
+                "apiVersion": "cert-manager.io/v1",
+                "kind": "Issuer",
+                "metadata": {
+                    "name": ROOT_ISSUER,
+                    "namespace": "ns",
+                    "labels": {"app.kubernetes.io/managed-by": "zeabur-identity"},
+                },
+                "spec": {"selfSigned": {}},
+            })
+        );
+        let ca = serde_json::to_value(&objects.ca).unwrap();
+        assert_eq!(
+            ca["spec"],
+            serde_json::json!({
+                "isCA": true,
+                "commonName": "Zeabur Identity internal CA",
+                "secretName": CA_SECRET,
+                "duration": CA_DURATION,
+                "privateKey": {"algorithm": "ECDSA", "size": 256, "rotationPolicy": "Never"},
+                "issuerRef": {"name": ROOT_ISSUER, "kind": "Issuer", "group": "cert-manager.io"},
+            })
+        );
+        assert!(ca.get("status").is_none());
     }
 
     #[test]

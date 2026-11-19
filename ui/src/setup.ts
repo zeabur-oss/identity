@@ -12,6 +12,7 @@ import {
   supported,
   upstreamButtons,
 } from "./webauthn"
+import type { PasswordSetUp, PasswordSetupOptions, Problem } from "./contract"
 
 const form = document.getElementById("setup") as HTMLFormElement | null
 const passwordForm = document.getElementById("setup-password") as HTMLFormElement | null
@@ -123,11 +124,7 @@ async function passwordOptions(token: string): Promise<boolean> {
     refused(problem(reply))
     return false
   }
-  const totp = reply.body.totp as {
-    secret: string
-    sealed: string
-    qr: { size: number; path: string }
-  } | null
+  const { totp } = reply.body as PasswordSetupOptions
   if (totp) {
     sealed = totp.sealed
     drawQr(totp.qr.size, totp.qr.path)
@@ -182,12 +179,12 @@ function answered(reply: Reply): void {
 
 /** The message key for the weakness the server named. */
 function weakness(reply: Reply): string {
-  return weaknesses[String(reply.body.weakness)] ?? "msgCommon"
+  return weaknesses[(reply.body as Problem).weakness ?? ""] ?? "msgCommon"
 }
 
 function succeeded(reply: Reply): void {
-  const codes = reply.body.recovery_codes
-  if (Array.isArray(codes)) showRecovery(codes.map(String))
+  const codes = (reply.body as PasswordSetUp).recovery_codes
+  if (codes) showRecovery(codes)
   done(true)
 }
 

@@ -3,7 +3,9 @@
 
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
+use schemars::JsonSchema;
 use serde::Serialize;
+use zeabur_identity_core::password::Weakness;
 
 /// A problem. `kind` is a short stable code the UI can switch on; `detail` is for people.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -16,14 +18,41 @@ pub struct Problem {
     pub title: &'static str,
 }
 
-#[derive(Serialize)]
-struct Body {
+/// The JSON body of a problem (RFC 9457 §3), with every extension member (§3.2) any problem
+/// carries. Each member is present only on the problems that set it.
+#[derive(Debug, Serialize, JsonSchema)]
+#[schemars(rename = "Problem")]
+pub(crate) struct ProblemBody {
+    /// `urn:zeabur-identity:problem:<kind>`.
     #[serde(rename = "type")]
     kind: String,
     title: &'static str,
     status: u16,
     #[serde(flatten)]
-    extensions: serde_json::Map<String, serde_json::Value>,
+    extensions: Extensions,
+}
+
+/// Extension members of a problem.
+#[derive(Debug, Default, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Extensions {
+    /// Why a new password was refused (`password-weak`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub weakness: Option<Weakness>,
+    /// The credential the relying party does not know (`passkey-failed`), for
+    /// `signalUnknownCredential` (WebAuthn Level 3 §5.1.10.1).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unknown_credential: Option<UnknownCredential>,
+}
+
+/// The argument of `PublicKeyCredential.signalUnknownCredential()`.
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct UnknownCredential {
+    /// The relying party ID.
+    pub rp_id: String,
+    /// The credential ID, base64url.
+    pub credential_id: String,
 }
 
 impl Problem {
@@ -47,16 +76,10 @@ impl Problem {
         )
     }
 
-    /// The response with an extension member (RFC 9457 §3.2).
+    /// The response with extension members (RFC 9457 §3.2).
     #[must_use]
-    pub fn with(self, name: &str, value: serde_json::Value) -> Response {
-        let mut extensions = serde_json::Map::new();
-        extensions.insert(name.to_owned(), value);
-        self.respond(extensions)
-    }
-
-    fn respond(self, extensions: serde_json::Map<String, serde_json::Value>) -> Response {
-        let body = Body {
+    pub fn with(self, extensions: Extensions) -> Response {
+        let body = ProblemBody {
             // RFC 9457 §3.1.1: a URI reference identifying the problem type.
             kind: format!("urn:zeabur-identity:problem:{}", self.kind),
             title: self.title,
@@ -76,6 +99,6 @@ impl Problem {
 
 impl IntoResponse for Problem {
     fn into_response(self) -> Response {
-        self.respond(serde_json::Map::new())
+        self.with(Extensions::default())
     }
 }

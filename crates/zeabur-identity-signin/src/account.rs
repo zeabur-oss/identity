@@ -34,9 +34,10 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use webauthn_rs::prelude::{
-    DiscoverableAuthentication, PasskeyRegistration, PublicKeyCredential,
+    DiscoverableAuthentication, Passkey, PasskeyRegistration, PublicKeyCredential,
     RegisterPublicKeyCredential, Uuid,
 };
 use zeabur_identity_api::token_hash;
@@ -56,7 +57,7 @@ use zeabur_identity_ui::pages::{
 };
 
 use crate::device::Requester;
-use crate::passkeys::{authenticator, backup_flags};
+use crate::passkeys::{BackupFlags, authenticator, backup_flags};
 use crate::problem::Problem;
 use crate::upstream::provider::{Descriptor, GITHUB_ISSUER, GOOGLE_ISSUER};
 use crate::{
@@ -439,8 +440,9 @@ pub(crate) fn with_cookie(mut response: Response, token: &SessionToken) -> Respo
     response
 }
 
-#[derive(Serialize)]
-struct Done {
+#[derive(Serialize, JsonSchema)]
+#[schemars(rename = "AccountChanged")]
+pub(crate) struct Done {
     /// The session viewing the page was signed out by this change.
     signed_out: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -705,10 +707,18 @@ where
 }
 
 fn passkey_row<'a>(passkey: &'a PasskeySummary, this_device: Option<&str>) -> PasskeyRow<'a> {
-    let storage = match backup_flags(&passkey.record) {
-        (_, true) => Storage::Synced,
-        (false, false) => Storage::OneDevice,
-        (true, false) => Storage::Unknown,
+    let flags = serde_json::from_str::<Passkey>(&passkey.record).map(|p| backup_flags(&p));
+    let storage = match flags {
+        Ok(BackupFlags { state: true, .. }) => Storage::Synced,
+        Ok(BackupFlags {
+            eligible: false,
+            state: false,
+        }) => Storage::OneDevice,
+        Ok(BackupFlags {
+            eligible: true,
+            state: false,
+        })
+        | Err(_) => Storage::Unknown,
     };
     PasskeyRow {
         name: &passkey.name,
@@ -795,10 +805,11 @@ where
     result.unwrap_or_else(IntoResponse::into_response)
 }
 
-#[derive(Serialize)]
-struct SignedIn {
+#[derive(Serialize, JsonSchema)]
+#[schemars(rename = "AccountSignedIn")]
+pub(crate) struct SignedIn {
     #[serde(skip_serializing_if = "Option::is_none")]
-    accepted: Option<Accepted>,
+    pub(crate) accepted: Option<Accepted>,
 }
 
 /// Creates the account session grant for `authentication` and returns its token.
