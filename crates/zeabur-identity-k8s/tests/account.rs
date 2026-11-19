@@ -22,7 +22,7 @@ mod tests {
     use zeabur_identity_k8s::setup::KubeSetupStore;
     use zeabur_identity_store::{
         AccountEvent, CredentialStore as _, GrantStore as _, NewExternal, PasswordRemoval,
-        PasswordState, Removal, Rename, SetupStore as _, Unlink, User, Verification,
+        PasswordState, Removal, Rename, Saved, SetupStore as _, Unlink, User, Verification,
         password_credential_name,
     };
 
@@ -184,6 +184,20 @@ mod tests {
                 updated["metadata"]["resourceVersion"] = json!(backend.next_version());
                 backend.objects.insert(key, updated.clone());
                 (StatusCode::OK, Json(updated))
+            }
+            (Method::POST, []) => {
+                let name = body["metadata"]["name"].as_str().unwrap().to_owned();
+                if backend
+                    .objects
+                    .contains_key(&(collection.clone(), name.clone()))
+                {
+                    return status(StatusCode::CONFLICT, "AlreadyExists");
+                }
+                backend.insert(&collection, body.clone());
+                (
+                    StatusCode::CREATED,
+                    Json(backend.objects[&(collection, name)].clone()),
+                )
             }
             (Method::DELETE, [name]) => {
                 let key = (collection, (*name).to_owned());
@@ -621,6 +635,36 @@ mod tests {
 
     /// A password removal and an unlink that both list before either writes: neither may leave
     /// the user with nothing.
+    #[tokio::test]
+    async fn a_password_change_from_a_stale_read_is_refused() {
+        let mut backend = Backend::default();
+        backend.insert("credentials", password());
+        backend.insert(
+            "users",
+            json!({"apiVersion":"identity.zeabur.com/v1alpha1","kind":"User",
+                "metadata":{"name":"alice"},"spec":{"username":"alice"}}),
+        );
+        let mock = mock(backend).await;
+        let store = credentials(&mock);
+        let read = store.password(&alice()).await.unwrap().unwrap();
+        assert!(matches!(
+            store
+                .set_password(&alice(), "first", None, Some(&read))
+                .await
+                .unwrap(),
+            Saved::Saved
+        ));
+        assert!(matches!(
+            store
+                .set_password(&alice(), "second", None, Some(&read))
+                .await
+                .unwrap(),
+            Saved::Conflict
+        ));
+        let kept = store.password(&alice()).await.unwrap().unwrap();
+        assert_eq!(kept.hash, "first");
+    }
+
     #[tokio::test]
     async fn a_password_removal_racing_an_unlink_keeps_a_credential() {
         let mut backend = Backend::default();

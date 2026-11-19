@@ -2519,8 +2519,16 @@ mod tests {
                 ((second, other), first)
             };
             assert_eq!(saved.0.status, StatusCode::OK, "{}", saved.0.body);
-            assert_eq!(refused.status, StatusCode::CONFLICT, "{}", refused.body);
-            assert!(refused.kind().ends_with(":password-conflict"));
+            // Both read the old password and the second save conflicts, or the first saved before
+            // the second read, which then finds the current password changed.
+            let kind = refused.kind();
+            assert!(
+                (refused.status == StatusCode::CONFLICT && kind.ends_with(":password-conflict"))
+                    || (refused.status == StatusCode::FORBIDDEN
+                        && kind.ends_with(":current-password-wrong")),
+                "{}",
+                refused.body
+            );
             next_step(&h);
             let code = secret.code_at(now(&h));
             let reply = admin_sign_in(&h, saved.1, Some(&code), Some(&device)).await;
