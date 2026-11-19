@@ -27,7 +27,7 @@ description: 创建和切换管理员账号、选择管理员的登录方式、�
 zeabur-identityctl setup-link --username admin
 ```
 
-管理员无法再登录时，可以在同一条命令后加上 `--reset` 来恢复账号，详见[退出登录、恢复和移除用户](./offboarding.mdx)。
+管理员无法再登录时，可以在同一条命令后加上 `--reset` 来恢复账号，详见[退出登录、找回账号与移除用户](./offboarding.mdx)。
 
 ### 邀请管理员或切换账号类型
 
@@ -50,7 +50,7 @@ kubectl -n zeabur-identity patch zbuser alice --type merge -p '{"spec":{"account
 kubectl -n zeabur-identity get zbuser            # the Type column shows the account type
 ```
 
-更改会在用户下次登录或刷新令牌时生效。已签发的访问令牌在到期前仍然有效，最长为 5 分钟或 10 分钟。账号改为管理员后，原有的 GitHub 和 Google 会话会在下次刷新令牌时结束。
+更改会在用户下次登录或刷新令牌时生效。已签发的访问令牌在到期前仍然有效，最长为 5 分钟或 10 分钟。账号改为管理员后，如果原有会话的登录方式是 `admin-sign-in` 不允许的（例如外部账号），下次刷新令牌时就会结束。
 
 目录同步不会更改账号的管理员身份，详见[从目录同步用户](./provisioning.mdx)。
 
@@ -89,7 +89,7 @@ Zeabur Identity 所在 Namespace 中的 ConfigMap `zeabur-identity-settings` 存
 | 键 | 可用值 | 默认值 | 用途 |
 |---|---|---|---|
 | `teams` | `single`、`multiple` | `single` | 设为 `multiple` 时，管理员会话默认在空闲 15 分钟后结束。 |
-| `admin-sign-in` | `any`、`two-factor`、`passkey`、`device-bound-passkey` | `two-factor` | 管理员账号的登录方式，详见下方“选择管理员的登录方式”。 |
+| `admin-sign-in` | `any`、`two-factor`、`passkey`、`device-bound-passkey` | `two-factor` | 管理员账号的登录方式，详见[选择管理员的登录方式](#选择管理员的登录方式)。 |
 
 每次安装都以单团队模式开始，管理员与普通账号使用相同的空闲时限。
 
@@ -132,15 +132,15 @@ Zeabur Identity 会在下次登录或刷新令牌时应用配置，无需重启�
 
 设为 `two-factor` 时，管理员在设置页面设置密码，还要用身份验证器应用扫描二维码，再输入应用显示的验证码。Google Authenticator、Microsoft Authenticator 或 1Password 都可以使用。随后设置页面会显示 10 个恢复码，只显示这一次。每个恢复码可以代替应用的验证码使用一次。
 
-管理员用密码登录时，登录页面随后会要求输入验证码。每个验证码只能用一次。输错验证码和输错密码计入同一个次数限制，详见[添加和管理用户](./manage-users.mdx)。
+管理员用密码登录时，登录页面随后会要求输入验证码。每个验证码只能用一次。输错验证码和输错密码计入同一个次数限制，详见[密码](./manage-users.mdx#密码)。
 
-在 `any` 配置下设置的管理员密码没有身份验证器应用，所以改为 `two-factor` 后就不能再用。要重设密码，或管理员无法再使用身份验证器应用时，请删除密码的 `Credential`，再发送新的设置链接。设置新密码时，也会一并设置新的身份验证器和恢复码。
+在 `any` 配置下设置的管理员密码没有身份验证器应用，所以改为 `two-factor` 后就不能再用。要重设密码，或管理员无法再使用身份验证器应用时，请删除密码的 `Credential`，再发送新的设置链接。如果管理员还有通行密钥或已关联的账号，设置链接要加上 `--reset`，这些也会一并删除。设置新密码时，也会一并设置新的身份验证器和恢复码。
 
 ## 限制管理员使用设备绑定的通行密钥（AAL3）
 
 将 `admin-sign-in` 设为 `device-bound-passkey` 后，管理员账号只能使用设备绑定的通行密钥，例如安全密钥，或仅保存在单个设备上的通行密钥。
 
-Zeabur Identity 会在登录、添加通行密钥及刷新令牌时，拒绝 iCloud Keychain、Google Password Manager 等同步通行密钥。使用同步通行密钥或密码创建的会话，会在下次刷新令牌时结束。拒绝消息为：
+Zeabur Identity 会在登录、添加通行密钥及刷新令牌时，拒绝 iCloud Keychain、Google Password Manager 等同步通行密钥。使用同步通行密钥、密码或外部账号创建的会话，会在下次刷新令牌时结束。拒绝消息为：
 
 > 这个通行密钥会同步到其他设备。这里的管理员账号要用安全密钥，或只保存在一台设备上的通行密钥。
 

@@ -17,6 +17,41 @@ Zeabur Identity 只執行一個副本，更新時會替換這個副本，不採�
 
 下面每個版本列出升級到該版本前要做的事。如果跳過版本升級，從目前執行的版本讀到目標版本，每一段都要看。最新的版本在最上面。
 
+### v0.3.0 → v0.4.0
+
+v0.4.0 讓一般帳號和管理員帳號都能用密碼登入，並用 `admin-sign-in` 取代 `admin-aal3` 設定。
+
+#### 1. 選擇管理員的登入方式
+
+v0.4.0 不再讀取 `admin-aal3`。預設的 `two-factor` 讓管理員用任何通行密鑰登入，或用密碼加上驗證器 App 的驗證碼登入。如果下面第一個指令印出 `true`，用第二個指令保留裝置綁定的限制。要讓管理員只能用通行密鑰、不能用密碼，改用 `admin-sign-in=passkey`。第二個指令會取代 ConfigMap 的資料，如果你設定過 `teams`，請加上 `--from-literal=teams=multiple`：
+
+```sh
+kubectl -n "$NS" get configmap zeabur-identity-settings -o jsonpath='{.data.admin-aal3}{"\n"}' --ignore-not-found
+```
+
+```sh
+kubectl -n "$NS" create configmap zeabur-identity-settings --from-literal=admin-sign-in=device-bound-passkey \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+詳見[選擇管理員的登入方式](../users/admin-sessions.mdx#選擇管理員的登入方式)。
+
+#### 2. 在新的 Deployment 之前建立密碼金鑰
+
+v0.4.0 把雜湊密碼時加入的金鑰存在 Secret `zeabur-identity-password-key`。安裝程式會建立空的 Secret，Zeabur Identity 啟動時再填入金鑰；但 Zeabur Identity 不能自己建立這個 Secret，沒有它就不會啟動。下面的升級檔案會略過 Secret，所以請在**檢查並套用資源清單**步驟、套用新的 Deployment 之前建立它。Secret 已經存在時，這個指令不會做任何事：
+
+```sh
+kubectl -n "$NS" get secret zeabur-identity-password-key ||
+  jq '.items[] | select(.kind == "Secret" and .metadata.name == "zeabur-identity-password-key")' \
+    upgrade-record/manifests.next.json | kubectl create -f -
+```
+
+請和簽署金鑰一起備份，詳見[備份與還原](./backup-restore.mdx)。
+
+#### 回復到 v0.3.0
+
+v0.3.0 沒有密碼功能。請還原升級前的備份。升級後設定的密碼和驗證器 App 會遺失，只用密碼註冊的使用者需要新的設定連結。
+
 ### v0.2.0 → v0.3.0
 
 v0.3.0 改變了 `UpstreamProvider` 與 `Credential` 的寫法。已存的 `Credential` 不用動；已存的提供者要用新寫法重寫一次，因為只要還有 v0.2.0 寫法的提供者，伺服器就不會啟動。
@@ -263,7 +298,7 @@ ZEABUR_IDENTITY_ISSUER=https://identity.example.test
 "$NEXT_ZEABUR_IDENTITYCTL" crds > upgrade-record/crds.next.json
 "$NEXT_ZEABUR_IDENTITYCTL" manifests --issuer "$ZEABUR_IDENTITY_ISSUER" --namespace "$NS" --image "$NEXT_IMAGE" \
   --serve-arg=--invitations > upgrade-record/manifests.next.json
-# Leave out the empty signing-key Secret: it's only for new installs.
+# Leave out the empty Secrets: they're only for new installs.
 jq '.items |= map(select(.kind != "Secret"))' upgrade-record/manifests.next.json \
   > upgrade-record/manifests.upgrade.json
 ```
@@ -285,7 +320,7 @@ kubectl -n "$NS" rollout status deployment/zeabur-identity --timeout=5m
 kubectl -n "$NS" logs deployment/zeabur-identity --tail=200
 ```
 
-保留 `zeabur-identity` Service、`zeabur-identity-internal-ca` 與 `zeabur-identity-signing-keys`，不要替換。新 Service 不保證沿用原本的 IP，但每個 kube-apiserver 的驗證檔案都固定使用舊 IP。
+保留 `zeabur-identity` Service、`zeabur-identity-internal-ca`、`zeabur-identity-signing-keys` 與 `zeabur-identity-password-key`，不要替換。換掉密碼金鑰後，所有密碼和驗證器 App 都會失效。新 Service 不保證沿用原本的 IP，但每個 kube-apiserver 的驗證檔案都固定使用舊 IP。
 
 不要在升級時替換根 CA、變更 Issuer 或刪除工作階段。如果新版確實需要不同的 kube-apiserver 設定，請另外處理這項變更，一次處理一台機器。
 
@@ -355,7 +390,7 @@ kubectl rollout undo deployment/zeabur-identity --to-revision=N
 
 依[備份與還原](./backup-restore.mdx)的還原流程，還原升級前的備份，搭配舊映像檔、資源清單、CRD 與 Secret。還原期間不要啟動 Zeabur Identity。
 
-你會失去備份之後的所有變更，包括新增的通行密鑰、群組變更、用戶端更新與金鑰輪替。
+你會失去備份之後的所有變更，包括新增的通行密鑰和密碼、群組變更、用戶端更新與金鑰輪替。
 
 <Callout type="warn">
 

@@ -9,7 +9,7 @@ Besides passkeys, Zeabur Identity can let users sign in with an account they alr
 
 You decide who can sign in. An account from the provider signs in only after it is linked to a Zeabur Identity user. Zeabur Identity doesn't create users on first sign-in and doesn't match accounts by email address, name or organization. Groups still come from `User`. Each linked account is recorded by the provider's issuer and its stable account ID, so a login name or email address that changes hands doesn't move the link.
 
-[Admin accounts](./admin-sessions.mdx) sign in only with passkeys and can't link accounts.
+By default, [admin accounts](./admin-sessions.mdx) can't sign in with an upstream account. See [Choose how admins sign in](./admin-sessions.mdx#choose-how-admins-sign-in).
 
 ## Before you begin
 
@@ -175,11 +175,11 @@ Choose by the user's situation:
 
 - A regular account that can already sign in: the user opens the account page, selects **Link** next to the provider under **Sign-in methods**, and confirms with a passkey.
 - A new user: send an invitation as described in [Manage users](./manage-users.mdx). Invitations need the `--invitations` option from [Install and sign in on k3s](../get-started/quickstart.mdx). After opening the link, the user selects **Continue with** and the provider's name instead of creating a passkey.
-- A user who has an account but can't sign in: send another invitation for the same username. If the account already has a passkey or a linked account, the invitation needs `--reset`. See [Sign out, recover, and remove users](./offboarding.mdx).
+- A user who has an account but can't sign in: send another invitation for the same username. If the account already has a passkey, a password or a linked account, the invitation needs `--reset`. See [Sign out, recover, and remove users](./offboarding.mdx).
 
 <Callout type="warn">
 
-Anyone with an invitation link can take over that user. Give it only to that person. `--reset` first deletes the user's passkeys and linked accounts. Each link adds one passkey or one account, and an account can be linked to only one user.
+Anyone with an invitation link can take over that user. Give it only to that person. `--reset` first deletes the user's passkeys, password and linked accounts. Each link adds one passkey, one password or one account, and an account can be linked to only one user.
 
 </Callout>
 
@@ -220,7 +220,7 @@ rm -rf ~/.kube/cache/oidc-login
 kubectl auth whoami          # the user is zeabur:<username>
 ```
 
-In the output, `identity.zeabur.com/amr` lists `swk` and `mfa` for a passkey sign-in and stays empty for an upstream sign-in. Admin accounts, such as `admin` from the quickstart, don't accept upstream sign-ins.
+In the output, `identity.zeabur.com/amr` lists `swk` and `mfa` for a passkey sign-in and stays empty for an upstream sign-in. By default, admin accounts, such as `admin` from the quickstart, don't accept upstream sign-ins.
 
 ## Change or remove a provider
 
@@ -276,5 +276,5 @@ Check `$SUBJECT` before you apply. A wrong ID links someone else's account. With
 | **Unable to complete the request** right after choosing the button | If the provider was removed or renamed after the page loaded, reload the page. If the logs show `provider_unavailable`, Zeabur Identity can't read the issuer's `/.well-known/openid-configuration`: check that the Pod can reach the issuer over HTTPS and, for a private CA, the steps above. |
 | **Unable to verify the provider's answer** after the provider sends the user back | Look for `provider_unavailable` in the logs. The Secret `zeabur-identity-upstream` doesn't exist or lacks a key with the provider's name, or the Pod can't reach the provider's token or key addresses. |
 | **This account isn't linked** | Link the account first. Zeabur Identity doesn't match accounts by email address or name. A `Credential` you created with a wrong name or ID gives the same message. |
-| **Use a passkey for this account** | The account is linked to an admin account, which signs in only with passkeys. |
+| **Sign in to this account another way** | The account is linked to an admin account, and the `admin-sign-in` setting doesn't let admins sign in with an upstream account. See [Choose how admins sign in](./admin-sessions.mdx#choose-how-admins-sign-in). |
 | `org_internal` or another Google access error | Check the application's **Audience** and the account's organization policies. |

@@ -28,7 +28,7 @@ Zeabur Identity 會將使用者、通行密鑰與工作階段存成 Kubernetes �
 | 物件 | 短名稱 | 用途 | 建立者 |
 |---|---|---|---|
 | `User` | `zbuser` | 一位使用者，包含使用者名稱、顯示名稱、群組與帳號類型 | 你 |
-| `Credential` | `zbcred` | 一組通行密鑰，或一個已連結的外部帳號 | Zeabur Identity，在使用者使用連結時建立 |
+| `Credential` | `zbcred` | 一組通行密鑰、一組密碼，或一個已連結的外部帳號 | Zeabur Identity，在使用者使用連結時建立 |
 | `Invitation` | `zbinvite` | 一個尚未使用的一次性連結 | `zeabur-identityctl invite`；Zeabur Identity 會在連結使用後或到期時刪除 |
 | `Grant` | `zbgrant` | 一個已登入的工作階段：應用程式使用 `g-…`，帳號頁使用 `s-…` | Zeabur Identity，在每次登入時建立 |
 
@@ -54,7 +54,7 @@ zeabur-identityctl invite --username alice --display-name "Alice Chen" --group d
 
 `--group`、`--admin` 與 `--display-name` 只在建立新使用者時生效。邀請既有使用者時，只能新增通行密鑰或連結外部帳號，不會修改群組或顯示名稱。
 
-如果使用者已有通行密鑰或已連結的帳號，`invite` 會回報錯誤並停止。`--reset` 會先刪除這些登入認證資訊。帳號救援方式請見[登出、救援與移除使用者](./offboarding.mdx)。
+如果使用者已有通行密鑰、密碼或已連結的帳號，`invite` 會回報錯誤並停止。`--reset` 會先刪除這些登入認證資訊。帳號救援方式請見[登出、救援與移除使用者](./offboarding.mdx)。
 
 </Step>
 
@@ -158,7 +158,7 @@ kubectl auth whoami          # Groups lists zeabur:dev and zeabur:oncall
 
 ## 密碼
 
-使用者可以在設定頁面改為設定密碼，之後用使用者名稱與密碼登入。管理員設定密碼時，預設還要設定驗證器 App，詳見[管理員帳號與工作階段](./admin-sessions.mdx)。
+使用者可以在設定頁面改為設定密碼，之後用使用者名稱與密碼登入。管理員設定密碼時，預設還要設定驗證器 App，詳見[選擇管理員的登入方式](./admin-sessions.mdx#選擇管理員的登入方式)。
 
 密碼至少要有 15 個字元。Zeabur Identity 會拒絕常見密碼，以及含有使用者名稱或網站名稱的密碼。
 
@@ -166,7 +166,7 @@ kubectl auth whoami          # Groups lists zeabur:dev and zeabur:oncall
 
 使用者可以在帳號頁輸入目前的密碼和新密碼來變更密碼，或輸入目前的密碼來移除密碼。沒有通行密鑰、也沒有連結帳號的使用者無法移除密碼。變更或移除密碼後，這位使用者的其他工作階段都會結束。變更密碼後，驗證器 App 和還沒用過的備援碼都能繼續使用；移除密碼時，驗證器 App 也會一起移除。在帳號頁輸錯目前的密碼，和登入時輸錯密碼一樣會計入次數。
 
-使用者忘記密碼時，請刪除對應的 `Credential`，再寄出新的設定連結。
+使用者忘記密碼時，如果密碼是唯一的登入方式，請刪除對應的 `Credential`，再寄出新的設定連結。如果使用者還有通行密鑰或已連結的帳號，設定連結要加上 `--reset`，這些也會一併刪除，詳見[登出、救援與移除使用者](./offboarding.mdx)。
 
 ## 使用者自己管理帳號
 

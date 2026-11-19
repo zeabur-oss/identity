@@ -1,9 +1,9 @@
 ---
-title: 在 Ubuntu 的 k3s 上安裝，用通行密鑰登入 kubectl
-description: 在 Ubuntu 伺服器安裝 Zeabur Identity、設定 HTTPS 與管理員帳號，再從你的電腦用通行密鑰登入 k3s 叢集。
+title: 在 Ubuntu 的 k3s 上安裝並登入 kubectl
+description: 在 Ubuntu 伺服器安裝 Zeabur Identity、設定 HTTPS 與管理員帳號，再從你的電腦登入 k3s 叢集。
 ---
 
-在 Ubuntu 伺服器安裝 Zeabur Identity，設定 HTTPS 和第一個管理員帳號後，你就能從自己的電腦用通行密鑰登入 k3s 叢集，執行 `kubectl`。伺服器使用 k3s 內建的 Traefik 處理 Ingress。
+在 Ubuntu 伺服器安裝 Zeabur Identity，設定 HTTPS 和第一個管理員帳號後，你就能從自己的電腦登入 k3s 叢集，執行 `kubectl`。伺服器使用 k3s 內建的 Traefik 處理 Ingress。
 
 把叢集的管理員 kubeconfig 留在伺服器上，用來安裝元件，或在 Zeabur Identity 無法運作時救援。另外存一份加密副本，離線保管。你的電腦只取得叢集的 CA 憑證，以及使用 Zeabur Identity 登入的 kubeconfig。
 
@@ -68,10 +68,12 @@ SERVER=ubuntu@identity.example.test
 ssh "$SERVER"
 ```
 
-從 [GitHub Releases](https://github.com/zeabur-oss/identity/releases) 選擇版本。範例使用 `v0.1.1`。x86_64 的 `arch` 設為 `amd64`，aarch64 設為 `arm64`：
+以下指令會使用 [GitHub Releases](https://github.com/zeabur-oss/identity/releases) 上的最新版本，並印出版本號，例如 `v0.2.0`。要固定其他版本，請自行設定 `version`。x86_64 的 `arch` 設為 `amd64`，aarch64 設為 `arm64`：
 
 ```sh
-version=v0.1.1
+version=$(curl -fsSLo /dev/null -w '%{url_effective}' https://github.com/zeabur-oss/identity/releases/latest)
+version=${version##*/}
+echo "$version"
 arch=arm64
 mkdir -p ~/zeabur-identity-download
 ```
@@ -99,6 +101,8 @@ mkdir -p ~/zeabur-identity-download
   zeabur-identityctl --version
 )
 ```
+
+最後一行會印出不含 `v` 的版本號，例如 `zeabur-identityctl 0.2.0`。任何一項檢查失敗，指令都會在這行之前停止。
 
 接著驗證映像檔和 SBOM，也就是映像檔內的相依套件清單。`ZEABUR_IDENTITY_IMAGE` 會儲存這個版本的確切映像檔摘要，安裝時會用到：
 
@@ -192,6 +196,8 @@ zeabur-identityctl manifests --image "$ZEABUR_IDENTITY_IMAGE" \
   --serve-arg=--invitations | kubectl apply --server-side -f -
 kubectl -n zeabur-identity rollout status deploy/zeabur-identity --timeout=180s
 ```
+
+最後一個指令會印出 `deployment "zeabur-identity" successfully rolled out`。
 
 產生的資源清單包含 RBAC、Service 和 Deployment。Zeabur Identity 管理的資源都放在 `zeabur-identity` Namespace。`--invitations` 會啟用[邀請使用者](../users/manage-users.mdx)的連結。
 
@@ -397,7 +403,7 @@ zeabur-identityctl kube-config --distro k3s > ~/authn.yaml &&
 
 <Step>
 
-### 註冊 kubectl 並建立第一把通行密鑰
+### 註冊 kubectl 並設定第一位管理員
 
 使用 Zeabur Identity 登入的應用程式都要註冊為用戶端。在伺服器註冊 `kubectl`，讓 kubelogin 在 127.0.0.1 接收登入結果：
 
@@ -412,9 +418,15 @@ zeabur-identityctl client create kubectl --type public \
 zeabur-identityctl setup-link --username admin
 ```
 
-這會建立 `admin` 使用者，帳號類型為管理員帳號。管理員帳號只能用通行密鑰登入，並取得 Kubernetes 的完整權限 `cluster-admin`。詳見[管理員帳號與工作階段](../users/admin-sessions.mdx)。
+這會建立 `admin` 使用者，帳號類型為管理員帳號。管理員帳號預設用通行密鑰登入，或用密碼加上驗證器 App 的驗證碼登入，並取得 Kubernetes 的完整權限 `cluster-admin`。詳見[管理員帳號與工作階段](../users/admin-sessions.mdx)。
 
-回到你的電腦，用瀏覽器開啟指令顯示的連結，建立通行密鑰。連結只能使用一次，60 分鐘後就會到期。需要新連結時，再執行一次指令。
+回到你的電腦，用瀏覽器開啟指令顯示的連結，選擇**建立通行密鑰**。沒有通行密鑰時，改選**使用密碼**，設定至少 15 個字元的密碼，用驗證器 App 掃描 QR code、輸入驗證碼，再保存 10 組備援碼。連結只能使用一次，60 分鐘後就會到期。需要新連結時，再執行一次指令。
+
+在伺服器確認管理員已有登入方式。輸出會列出一個 `Credential`，`USER` 欄是 `admin`：
+
+```sh
+kubectl -n zeabur-identity get credentials
+```
 
 </Step>
 
@@ -501,7 +513,7 @@ kubectl -n default delete configmap zeabur-identity-permission-check
 
 - **管理員權杖會自動更新**：權杖有效期為 5 分鐘，更新時不需要你操作。首次登入 12 小時後，或停止使用 `kubectl` 達 1 小時後，需要重新登入。多團隊共用叢集時，閒置期限為 15 分鐘。一般帳號的權杖有效期為 10 分鐘。詳見[管理員帳號與工作階段](../users/admin-sessions.mdx)。
 - **管理員帳號只用於管理工作**：日常操作請邀請自己建立一般帳號，再依需求替群組綁定權限。詳見[管理使用者](../users/manage-users.mdx)。
-- **使用者、通行密鑰和工作階段都是 Kubernetes 物件**：都放在 `zeabur-identity` Namespace。通行密鑰是 `Credential`，登入後的工作階段是 `Grant`。在伺服器執行 `kubectl -n zeabur-identity get users,credentials,grants` 可列出這些物件，操作方式見[管理使用者](../users/manage-users.mdx)。
+- **使用者、登入方式和工作階段都是 Kubernetes 物件**：都放在 `zeabur-identity` Namespace。通行密鑰或密碼是 `Credential`，登入後的工作階段是 `Grant`。在伺服器執行 `kubectl -n zeabur-identity get users,credentials,grants` 可列出這些物件，操作方式見[管理使用者](../users/manage-users.mdx)。
 
 接著設定[備份與還原](../operations/backup-restore.mdx)、[升級與回滾](../operations/upgrade.mdx)，並[保留不經過 Zeabur Identity 的入口](../operations/emergency-access.mdx)。日常使用可從[管理使用者](../users/manage-users.mdx)開始，[加入 GitHub、Google 或自家的 OpenID 服務作為登入方式](../users/upstream-sign-in.mdx)，也能[註冊用戶端](../users/clients.mdx)，讓 Grafana 或 Argo CD 等應用程式使用 Zeabur Identity 登入。
 

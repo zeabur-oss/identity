@@ -27,7 +27,7 @@ Run the following command to create the first user. This user is an admin accoun
 zeabur-identityctl setup-link --username admin
 ```
 
-If an admin can no longer sign in, use the same command with `--reset` to recover the account. See [Sign out, recover accounts, and remove users](./offboarding.mdx).
+If an admin can no longer sign in, use the same command with `--reset` to recover the account. See [Sign out, recover, and remove users](./offboarding.mdx).
 
 ### Invite an admin or switch account types
 
@@ -50,7 +50,7 @@ kubectl -n zeabur-identity patch zbuser alice --type merge -p '{"spec":{"account
 kubectl -n zeabur-identity get zbuser            # the Type column shows the account type
 ```
 
-Changes take effect the next time the user signs in or refreshes their token. Previously issued access tokens remain valid until they expire, for up to 5 minutes or 10 minutes. After an account becomes an admin account, its existing GitHub and Google sessions end at the next token refresh.
+Changes take effect the next time the user signs in or refreshes their token. Previously issued access tokens remain valid until they expire, for up to 5 minutes or 10 minutes. After an account becomes an admin account, its existing sessions that the `admin-sign-in` setting doesn't allow, such as upstream sign-ins, end at the next token refresh.
 
 Directory sync doesn't change an account's admin status. See [Sync users from a directory](./provisioning.mdx).
 
@@ -134,13 +134,13 @@ With `two-factor`, an admin who sets a password on the setup page also scans a Q
 
 When the admin signs in with the password, the sign-in page then asks for a code. Each code works once. Wrong codes count toward the same limit as wrong passwords. See [Passwords](./manage-users.mdx#passwords).
 
-An admin password set with `any` has no authenticator app, so it stops working when you change the setting to `two-factor`. To reset a password or a lost authenticator app, delete the password's `Credential` and send a new setup link. The new password comes with a new authenticator and new recovery codes.
+An admin password set with `any` has no authenticator app, so it stops working when you change the setting to `two-factor`. To reset a password or a lost authenticator app, delete the password's `Credential` and send a new setup link. If the admin also has a passkey or a linked account, the setup link needs `--reset`, which deletes those too. The new password comes with a new authenticator and new recovery codes.
 
 ## Require device-bound passkeys for admins (AAL3)
 
 When you set `admin-sign-in` to `device-bound-passkey`, admin accounts can use only device-bound passkeys, such as security keys or passkeys that stay on a single device.
 
-Zeabur Identity rejects synced passkeys, such as those in iCloud Keychain or Google Password Manager, during sign-in, passkey registration, and token refresh. Sessions created with synced passkeys or passwords end at the next token refresh. The rejection message is:
+Zeabur Identity rejects synced passkeys, such as those in iCloud Keychain or Google Password Manager, during sign-in, passkey registration, and token refresh. Sessions created with synced passkeys, passwords or upstream accounts end at the next token refresh. The rejection message is:
 
 > This passkey syncs to other devices. Admin accounts here need a security key, or a passkey that stays on one device.
 

@@ -3,7 +3,7 @@ title: Zeabur Identity 的架构
 description: 了解 Zeabur Identity 在 Kubernetes 集群中的运行方式、安全特性、组件关系与 crate 分工。
 ---
 
-Zeabur Identity 是以通行密钥为主要登录方式的 OpenID Connect Issuer，在自管 Kubernetes 集群中运行。kube-apiserver 使用 [Structured Authentication Configuration][kep-3331]，自行验证 Zeabur Identity 签发的令牌。你可以用通行密钥登录，无需持有无法撤销的长期有效的管理员 kubeconfig。其他 OpenID Connect 客户端，例如 Argo CD、Grafana 和 Headlamp，也能使用同一个 Issuer。
+Zeabur Identity 是在自管 Kubernetes 集群中运行的 OpenID Connect Issuer。kube-apiserver 使用 [Structured Authentication Configuration][kep-3331]，自行验证 Zeabur Identity 签发的令牌。你可以用通行密钥、外部账号或密码登录，无需持有无法撤销的长期有效的管理员 kubeconfig。其他 OpenID Connect 客户端，例如 Argo CD、Grafana 和 Headlamp，也能使用同一个 Issuer。
 
 k3s 和 RKE2 使用相同配置。CI 测试涵盖 k3s。
 
@@ -13,7 +13,7 @@ k3s 和 RKE2 使用相同配置。CI 测试涵盖 k3s。
 - **管理员权限只授予管理员账号**。只有 `accountType: Admin` 的 `User` 会获得 `zeabur:admins` 组，该组绑定 `cluster-admin`。管理员账号的登录方式由 `admin-sign-in` 配置决定，默认是通行密钥，或密码加上身份验证器的验证码；也可以设为只接受通行密钥，或只接受设备绑定的通行密钥。管理员令牌默认有效期为五分钟，会话也可能因空闲而提前结束。普通账号只能获得所属组绑定的权限。所有会话都会在登录 12 小时后结束。
 - **令牌有效期短**。令牌绑定目标受众（audience），签名密钥会定期轮换。
 - **用户自行管理登录方式**。添加或移除通行密钥、关联或取消关联外部账号，都需要重新使用通行密钥完成验证。修改或移除密码则需要输入当前密码。用户无法移除最后一把通行密钥，也无法取消关联最后一种登录方式。
-- **状态存储在 Kubernetes 中**。自定义资源存储用户、凭证、客户端、会话与邀请，无需数据库。撤销访问权限与删除数据的顺序，见[退出登录、救援与移除用户](../users/offboarding.mdx)。
+- **状态存储在 Kubernetes 中**。自定义资源存储用户、凭证、客户端、会话与邀请，无需数据库。撤销访问权限与删除数据的顺序，见[退出登录、找回账号与移除用户](../users/offboarding.mdx)。
 
 [规范符合度](./conformance.mdx)列出 Zeabur Identity 实现的各项规范要求，以及对应的代码和验证测试。
 
@@ -89,15 +89,15 @@ kube-apiserver 使用 Zeabur Identity 公开的密钥，验证令牌签名。密
 | Crate | 内容 | 依赖 |
 |---|---|---|
 | [`zeabur-identity-api`](../../../crates/zeabur-identity-api) | `identity.zeabur.com` 自定义资源，以及其他程序与 Zeabur Identity 共用的名称 | — |
-| [`zeabur-identity-core`](../../../crates/zeabur-identity-core) | 时间、加密辅助工具、已验证的配置值、端点路径 | — |
+| [`zeabur-identity-core`](../../../crates/zeabur-identity-core) | 时间、加密辅助工具、已验证的配置值、端点路径，以及密码、验证码与猜测次数限制的规则 | — |
 | [`zeabur-identity-keys`](../../../crates/zeabur-identity-keys) | 签名密钥、JWK 发布、JWS 签名与验证、密钥轮换 | api, core |
 | [`zeabur-identity-store`](../../../crates/zeabur-identity-store) | 存储端口（trait、记录）与内存适配器 | api, core, keys |
-| [`zeabur-identity-tls`](../../../crates/zeabur-identity-tls) | 信任根、证书签发、可重新加载的 TLS 监听器 | core |
+| [`zeabur-identity-tls`](../../../crates/zeabur-identity-tls) | 信任根、证书签发、可重新加载的 TLS 监听器 | — |
 | [`zeabur-identity-ui`](../../../crates/zeabur-identity-ui) | 服务器渲染的页面、内嵌资源、翻译、安全响应头 | core |
 | [`zeabur-identity-oauth`](../../../crates/zeabur-identity-oauth) | OAuth 2.0 / OpenID Connect 授权服务器 | api, core, keys, store, ui |
-| [`zeabur-identity-signin`](../../../crates/zeabur-identity-signin) | 通行密钥注册与登录、上游提供方、页面路由 | api, core, keys, store, oauth, ui |
+| [`zeabur-identity-signin`](../../../crates/zeabur-identity-signin) | 通行密钥注册与登录、密码与验证码登录、外部登录提供方、页面路由 | api, core, keys, store, oauth, ui |
 | [`zeabur-identity-k8s`](../../../crates/zeabur-identity-k8s) | Kubernetes 适配器、GC、清单、kube-apiserver 配置 | api, core, keys, store, tls |
-| [`zeabur-identity`](../../../crates/zeabur-identity) | **可执行文件**：集群内的服务器 | 以上所有 crate |
+| [`zeabur-identity`](../../../crates/zeabur-identity) | **可执行文件**：集群内的服务器 | api, core, keys, store, tls, oauth, signin, k8s |
 | [`zeabur-identityctl`](../../../crates/zeabur-identityctl) | **可执行文件**：管理员 CLI | api, core, keys, k8s |
 | [`zeabur-identity-test-support`](../../../crates/zeabur-identity-test-support), [`zeabur-identity-e2e`](../../../crates/zeabur-identity-e2e) | 测试辅助工具；集群上的端到端测试 | — |
 

@@ -1,9 +1,9 @@
 ---
 title: 把 Zeabur Identity 安裝到既有叢集
-description: 在既有 Kubernetes 叢集安裝 Zeabur Identity，設定 kube-apiserver 驗證，再用第一位管理員的通行密鑰登入。
+description: 在既有 Kubernetes 叢集安裝 Zeabur Identity，設定 kube-apiserver 驗證，再以第一位管理員登入。
 ---
 
-用叢集管理員的 kubeconfig 安裝 Zeabur Identity，再為 kube-apiserver 設定驗證。完成後，你就能用通行密鑰登入，讓 `kubectl` 取得短效權杖。
+用叢集管理員的 kubeconfig 安裝 Zeabur Identity，再為 kube-apiserver 設定驗證。完成後，你在瀏覽器登入，`kubectl` 就能取得短效權杖。
 
 ## 開始前
 
@@ -15,7 +15,7 @@ description: 在既有 Kubernetes 叢集安裝 Zeabur Identity，設定 kube-api
 
 <Callout type="warn">
 
-保留管理員 kubeconfig，並把加密副本存放在叢集外。即使已確認通行密鑰能正常登入，也不要刪除唯一的緊急入口。
+保留管理員 kubeconfig，並把加密副本存放在叢集外。即使已確認能正常登入，也不要刪除唯一的緊急入口。
 
 </Callout>
 
@@ -39,9 +39,10 @@ description: 在既有 Kubernetes 叢集安裝 Zeabur Identity，設定 kube-api
 export ZEABUR_IDENTITY_ISSUER=https://login.example.com
 zeabur-identityctl crds | kubectl apply --server-side -f -
 zeabur-identityctl manifests --image "$ZEABUR_IDENTITY_IMAGE" --serve-arg=--invitations | kubectl apply --server-side -f -
+kubectl -n zeabur-identity rollout status deploy/zeabur-identity --timeout=180s
 ```
 
-把 `https://login.example.com` 換成你的 HTTPS Issuer 網址，並確認這個網址可連線。
+最後一個指令會印出 `deployment "zeabur-identity" successfully rolled out`。把 `https://login.example.com` 換成你的 HTTPS Issuer 網址，並確認這個網址可連線。
 
 `--serve-arg=--invitations` 會啟用邀請功能。如果沒有啟用，使用者就無法兌換 `invite` 產生的邀請連結。
 
@@ -95,13 +96,17 @@ zeabur-identityctl kube-config --distro generic > authn.yaml
 zeabur-identityctl setup-link --username admin
 ```
 
-在瀏覽器開啟連結，建立通行密鑰。
+在瀏覽器開啟連結，選擇**建立通行密鑰**，或選擇**使用密碼**設定密碼和驗證器 App。接著確認管理員已有登入方式。輸出會列出一個 `Credential`，`USER` 欄是 `admin`：
+
+```sh
+kubectl -n zeabur-identity get credentials
+```
 
 `--username` 預設為 `admin`，`--valid-for` 預設為 `60m`。
 
 <Callout type="warn">
 
-`--reset` 會刪除使用者的通行密鑰與工作階段。不要用它處理 Pod、Ingress 或 kube-apiserver 的故障。
+`--reset` 會刪除使用者的通行密鑰、密碼、已連結的帳號與工作階段。不要用它處理 Pod、Ingress 或 kube-apiserver 的故障。
 
 </Callout>
 

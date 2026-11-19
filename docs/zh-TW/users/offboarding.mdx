@@ -22,7 +22,7 @@ kubectl -n zeabur-identity delete zbgrant -l identity.zeabur.com/user=alice
 zeabur-identityctl setup-link --username alice --reset
 ```
 
-這個指令會刪除 `alice` 的所有認證資訊、工作階段及尚未接受的邀請。認證資訊包含通行密鑰，以及已連結的外部帳號。
+這個指令會刪除 `alice` 的所有認證資訊、工作階段及尚未接受的邀請。認證資訊包含通行密鑰、密碼（連同驗證器 App 和備援碼），以及已連結的外部帳號。
 
 指令會輸出新的單次設定連結，有效時間為 1 小時。
 

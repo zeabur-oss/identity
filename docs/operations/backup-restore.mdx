@@ -13,6 +13,7 @@ Zeabur Identity identifies each person by the UID of their `User` object. Every 
 |---|---|---|
 | User UID | Preserved | Regenerated |
 | Existing passkeys | Continue to work | Everyone must register new passkeys |
+| Existing passwords and authenticator apps | Continue to work, with Secret `zeabur-identity-password-key` | Everyone sets a new password with a setup link |
 | Linked GitHub and Google accounts | Continue to work | Everyone must relink their accounts |
 | Applications that track users by `sub` | Recognize the same person | Recognize a new user |
 | Sessions | Delete them, then everyone signs in again | Don't restore |
@@ -38,9 +39,9 @@ Keep the following data together. Record the backup date, Zeabur Identity image 
 | Backup item | Purpose |
 |---|---|
 | The cluster's datastore backup, plus the server token, encryption keys, and cluster certificates that your distribution needs to open it | This is the only way to preserve UIDs and passkeys. You can't restore a snapshot that you can't decrypt. |
-| `users`, `credentials`, `oauthclients`, and `upstreamproviders` (`*.identity.zeabur.com`) | Preserve users and groups, passkey records, linked upstream accounts, registered clients, and sign-in providers. |
+| `users`, `credentials`, `oauthclients`, and `upstreamproviders` (`*.identity.zeabur.com`) | Preserve users and groups, passkey records, password hashes with their authenticator secrets and recovery codes, linked upstream accounts, registered clients, and sign-in providers. |
 | Secret `zeabur-identity-signing-keys` | Preserves all private signing keys, including keys scheduled for activation and retired keys. Other data can't reconstruct these keys. |
-| Secret `zeabur-identity-password-key` | Preserves the key that Zeabur Identity mixes into every password hash. Without it, no password works, and users must set a new one with a setup link. |
+| Secret `zeabur-identity-password-key` | Preserves the key that Zeabur Identity mixes into every password hash. It also seals authenticator secrets and signs the cookies that count wrong guesses per browser. Without it, no password, authenticator code or recovery code works, and users must set a new password with a setup link. |
 | Secret `zeabur-identity-internal-ca` | Preserves the root CA and private key. cert-manager uses it to issue the certificate that kube-apiserver verifies when it connects to the internal address. Keep this Secret with the authentication files on every control plane machine. cert-manager uses it to reissue `zeabur-identity-internal-tls`. |
 | Deployment, Service, ServiceAccount, Role, and RoleBinding `zeabur-identity`, plus ClusterRoleBinding `zeabur-identity-cluster-admins` | Preserve how Zeabur Identity runs and its admin permissions. Also back up any RoleBindings you created for other applications. |
 | ConfigMap `zeabur-identity-settings`, if you created it | Preserves the `teams` and `admin-sign-in` settings. Without it, all settings return to their defaults. |
@@ -102,13 +103,15 @@ kubectl -n "$NS" scale deploy/zeabur-identity --replicas=0
 kubectl -n "$NS" wait --for=delete pod \
   -l app.kubernetes.io/name=zeabur-identity --timeout=180s
 
-for resource in users credentials oauthclients grants invitations; do
+for resource in users credentials oauthclients upstreamproviders grants invitations; do
   kubectl -n "$NS" get "$resource.identity.zeabur.com" -o json \
     > "$BACKUP/$resource.json"
 done
 kubectl -n "$NS" get secret zeabur-identity-signing-keys zeabur-identity-internal-ca \
   zeabur-identity-password-key -o json \
   > "$BACKUP/identity-secrets.json"
+kubectl -n "$NS" get secret zeabur-identity-upstream -o json --ignore-not-found \
+  > "$BACKUP/upstream-secret.json"
 kubectl -n "$NS" get svc zeabur-identity -o json > "$BACKUP/service.json"
 kubectl -n "$NS" get serviceaccount/zeabur-identity role/zeabur-identity rolebinding/zeabur-identity -o json \
   > "$BACKUP/namespaced-rbac.json"
@@ -118,7 +121,7 @@ kubectl -n "$NS" get configmap zeabur-identity-settings -o json --ignore-not-fou
   > "$BACKUP/settings.json"
 kubectl get crd users.identity.zeabur.com credentials.identity.zeabur.com \
   oauthclients.identity.zeabur.com grants.identity.zeabur.com \
-  invitations.identity.zeabur.com -o json > "$BACKUP/crds.json"
+  invitations.identity.zeabur.com upstreamproviders.identity.zeabur.com -o json > "$BACKUP/crds.json"
 
 # Save every Secret mounted into Zeabur Identity, whatever it's called.
 jq -r '.spec.template.spec.volumes[]? | .secret.secretName // empty' \
@@ -311,7 +314,7 @@ Have an admin sign in again and verify regular and admin access. Test a passkey 
 Use this method only when you don't have a datastore backup. After the restore:
 
 - Users receive new UIDs, and the `sub` values that applications receive also change.
-- Everyone must register new passkeys.
+- Everyone must register new passkeys or set a new password.
 - Everyone must sign in again.
 
 Restore into an empty Namespace or cluster. Don't delete a working production Namespace to make room.
@@ -334,13 +337,13 @@ Don't start Zeabur Identity yet, or it will create new signing keys.
 
 ### Review and create users and clients
 
-Review `users.json` and `oauthclients.json`. Remove users and clients that shouldn't return. Edit working copies and leave the original archive unchanged.
+Review `users.json`, `oauthclients.json` and `upstreamproviders.json`. Remove users, clients and providers that shouldn't return. Edit working copies and leave the original archive unchanged.
 
 The following script removes metadata from the old cluster and creates every user in a disabled state to prevent accidental access:
 
 ```sh
 NS=zeabur-identity   # the namespace you are restoring into
-for resource in users oauthclients; do
+for resource in users oauthclients upstreamproviders; do
   jq --arg ns "$NS" '
     {apiVersion:"v1", kind:"List", items:[.items[] |
       {apiVersion, kind,
@@ -365,8 +368,8 @@ If `create` fails, stop and investigate. Don't switch to a forced apply or delet
 Before starting Zeabur Identity, restore the signing keys, internal CA, public TLS, and configuration Secrets:
 
 ```sh
-for file in identity-secrets.json mounted-secret-*.json public-tls.json; do
-  [ -e "$file" ] || continue
+for file in identity-secrets.json upstream-secret.json mounted-secret-*.json public-tls.json; do
+  [ -s "$file" ] || continue
   jq --arg ns "$NS" '
     {apiVersion:"v1", kind:"List", items:[(if .kind == "List" then .items[] else . end) |
       {apiVersion, kind, type, data,
@@ -377,6 +380,14 @@ for file in identity-secrets.json mounted-secret-*.json public-tls.json; do
   ' "$file" > "${file%.json}.restore.json"
   kubectl apply --server-side -f "${file%.json}.restore.json"
 done
+```
+
+If you exported `settings.json`, restore the `teams` and `admin-sign-in` settings as well:
+
+```sh
+[ -s settings.json ] && jq --arg ns "$NS" \
+  '{apiVersion, kind, data, metadata:{name:.metadata.name, namespace:$ns}}' settings.json \
+  | kubectl apply -f -
 ```
 
 `identity-secrets.json` contains a list. Each of the other files contains a single Secret. This filter handles both formats.
@@ -391,7 +402,7 @@ This step uses `apply` because the installer has already created empty signing k
 
 Don't create any objects from `credentials.json`, `grants.json`, or `invitations.json`.
 
-Old passkeys can't work with new UIDs. Old sessions refer to accounts by username, so an old refresh token can obtain tokens for whoever currently uses that name.
+Old passkeys and passwords can't work with new UIDs. Old sessions refer to accounts by username, so an old refresh token can obtain tokens for whoever currently uses that name.
 
 Users can relink their upstream accounts when they register again.
 
@@ -448,6 +459,16 @@ Public JWKS, client secret hashes, and passkeys can't reconstruct private signin
 If Secret `zeabur-identity-signing-keys` is empty, Zeabur Identity creates new keys at startup. If the Secret no longer exists, Zeabur Identity can't create it on its own. Check all backups, then use the installer as a cluster admin to recreate the empty Secret.
 
 If you suspect someone stole the keys, restoring old keys doesn't remove the risk. Treat the keys as compromised and use new ones.
+
+### Password key
+
+Nothing else can rebuild the key in Secret `zeabur-identity-password-key`. If it is lost and you have no backup, Zeabur Identity starts with a new key:
+
+- Every password, authenticator code and recovery code stops working, and each browser's count of wrong guesses starts again.
+- Passkeys, linked accounts and sessions keep working.
+- For each user who signed in with a password, delete the password's `Credential` and send a new setup link. A user who also has a passkey or a linked account needs `--reset`, which deletes those too.
+
+If the Secret is empty, Zeabur Identity fills it at startup. If the Secret no longer exists, Zeabur Identity can't create it. Check all backups, then use the installer as a cluster admin to recreate the empty Secret.
 
 ### Internal certificates
 
@@ -508,7 +529,7 @@ If you use the Zeabur installer, run `zeabur-installer apply` on the first serve
 
 Anyone who can read Secrets in the `zeabur-identity` Namespace can also read the CA private key and issue certificates for the internal address. If they can also respond to requests at the Service's ClusterIP, they can supply their own signing keys to kube-apiserver.
 
-Grant Secret read access in this Namespace only to cluster admins. Zeabur Identity's own ServiceAccount can read only `zeabur-identity-internal-tls`.
+Grant Secret read access in this Namespace only to cluster admins. Zeabur Identity's own ServiceAccount can access only these named Secrets: it can read and update `zeabur-identity-signing-keys` and `zeabur-identity-password-key`, read and delete `zeabur-identity-setup`, and read `zeabur-identity-internal-tls` and `zeabur-identity-upstream`.
 
 </Callout>
 
@@ -577,6 +598,7 @@ Start each scenario with a clean installation and a newly registered passkey. At
 | Datastore restore | Back up, delete a user, then restore. | The UID stays the same, and the old passkey still works. Sessions revoked after the backup return until you delete the grants. Issued tokens remain valid until they expire. |
 | Rebuild from exports | Delete a user, then rebuild from an export. | The user receives a new UID. The old passkey doesn't work even if you fix the `Credential`. The user can register again. |
 | Lost signing keys | Delete the signing key Secret, then recreate it as an empty Secret. | Old tokens and sessions are rejected. Users and passkeys still work. |
+| Lost password key | Delete the password key Secret, then recreate it as an empty Secret. | Passwords and authenticator codes are rejected. Passkeys and sessions still work. A new setup link sets a new password. |
 | Lost internal certificate | Delete `zeabur-identity-internal-tls`. | cert-manager reissues the certificate with the same CA. Sign-in continues to work, and the authentication files stay unchanged. |
 | Internal CA replacement | Follow the internal certificate procedure above. | You get a new CA. Sign-in works again after kube-apiserver applies the new configuration. |
 | Failed upgrade | Deploy an image that doesn't exist, then roll back to the old version. | Users, passkeys, and sessions stay unchanged. |

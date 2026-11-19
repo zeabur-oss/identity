@@ -17,6 +17,41 @@ Zeabur Identity 运行单个副本，更新时会替换副本，不采用滚动�
 
 下面每个版本列出升级到该版本前要做的事。如果跳过版本升级，从当前运行的版本读到目标版本，每一节都要看。最新的版本在最上面。
 
+### v0.3.0 → v0.4.0
+
+v0.4.0 让普通账号和管理员账号都能用密码登录，并用 `admin-sign-in` 取代 `admin-aal3` 设置。
+
+#### 1. 选择管理员的登录方式
+
+v0.4.0 不再读取 `admin-aal3`。默认的 `two-factor` 让管理员用任何通行密钥登录，或用密码加上身份验证器应用的验证码登录。如果下面第一条命令打印出 `true`，用第二条命令保留设备绑定的限制。要让管理员只能用通行密钥、不能用密码，改用 `admin-sign-in=passkey`。第二条命令会替换 ConfigMap 的数据，如果你设置过 `teams`，请加上 `--from-literal=teams=multiple`：
+
+```sh
+kubectl -n "$NS" get configmap zeabur-identity-settings -o jsonpath='{.data.admin-aal3}{"\n"}' --ignore-not-found
+```
+
+```sh
+kubectl -n "$NS" create configmap zeabur-identity-settings --from-literal=admin-sign-in=device-bound-passkey \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+详见[选择管理员的登录方式](../users/admin-sessions.mdx#选择管理员的登录方式)。
+
+#### 2. 在新的 Deployment 之前创建密码密钥
+
+v0.4.0 把哈希密码时加入的密钥存在 Secret `zeabur-identity-password-key`。安装程序会创建空的 Secret，Zeabur Identity 启动时再填入密钥；但 Zeabur Identity 不能自己创建这个 Secret，没有它就不会启动。下面的升级文件会略过 Secret，所以请在**检查并应用资源清单**步骤、应用新的 Deployment 之前创建它。Secret 已经存在时，这条命令什么也不做：
+
+```sh
+kubectl -n "$NS" get secret zeabur-identity-password-key ||
+  jq '.items[] | select(.kind == "Secret" and .metadata.name == "zeabur-identity-password-key")' \
+    upgrade-record/manifests.next.json | kubectl create -f -
+```
+
+请和签名密钥一起备份，详见[备份与恢复](./backup-restore.mdx)。
+
+#### 回滚到 v0.3.0
+
+v0.3.0 没有密码功能。请恢复升级前的备份。升级后设置的密码和身份验证器应用会丢失，只用密码注册的用户需要新的设置链接。
+
 ### v0.2.0 → v0.3.0
 
 v0.3.0 改变了 `UpstreamProvider` 与 `Credential` 的写法。已保存的 `Credential` 不用动；已保存的提供方要用新写法重写一遍，因为只要还有 v0.2.0 写法的提供方，服务器就不会启动。
@@ -178,7 +213,7 @@ kubectl create -f upgrade-record/credentials.v0.1.json
 
 ### 确认紧急入口并备份
 
-确认[绕过 Zeabur Identity 的入口](./emergency-access.mdx)能正常使用，再按[备份与恢复](./backup-restore.mdx)创建完整备份。
+确认[不经过 Zeabur Identity 的入口](./emergency-access.mdx)能正常使用，再按[备份与恢复](./backup-restore.mdx)创建完整备份。
 
 记录备份时间。恢复这份备份时，你会丢失备份之后的数据。
 
@@ -263,7 +298,7 @@ ZEABUR_IDENTITY_ISSUER=https://identity.example.test
 "$NEXT_ZEABUR_IDENTITYCTL" crds > upgrade-record/crds.next.json
 "$NEXT_ZEABUR_IDENTITYCTL" manifests --issuer "$ZEABUR_IDENTITY_ISSUER" --namespace "$NS" --image "$NEXT_IMAGE" \
   --serve-arg=--invitations > upgrade-record/manifests.next.json
-# Leave out the empty signing-key Secret: it's only for new installs.
+# Leave out the empty Secrets: they're only for new installs.
 jq '.items |= map(select(.kind != "Secret"))' upgrade-record/manifests.next.json \
   > upgrade-record/manifests.upgrade.json
 ```
@@ -285,7 +320,7 @@ kubectl -n "$NS" rollout status deployment/zeabur-identity --timeout=5m
 kubectl -n "$NS" logs deployment/zeabur-identity --tail=200
 ```
 
-保留 `zeabur-identity` Service、`zeabur-identity-internal-ca` 与 `zeabur-identity-signing-keys`，不要替换。新 Service 不保证沿用原来的 IP，而每个 kube-apiserver 的认证文件都固定使用旧 IP。
+保留 `zeabur-identity` Service、`zeabur-identity-internal-ca`、`zeabur-identity-signing-keys` 与 `zeabur-identity-password-key`，不要替换。换掉密码密钥后，所有密码和身份验证器应用都会失效。新 Service 不保证沿用原来的 IP，而每个 kube-apiserver 的认证文件都固定使用旧 IP。
 
 不要在升级时替换根 CA、更改 Issuer 或删除会话。如果新版确实需要不同的 kube-apiserver 配置，将它作为独立变更，一次处理一台机器。
 
@@ -355,7 +390,7 @@ kubectl rollout undo deployment/zeabur-identity --to-revision=N
 
 按[备份与恢复](./backup-restore.mdx)的恢复流程，恢复升级前的备份，搭配旧镜像、资源清单、CRD 与 Secret。恢复期间保持 Zeabur Identity 停止。
 
-你会丢失备份之后的所有变更，包括新增的通行密钥、群组变更、客户端更新与密钥轮换。
+你会丢失备份之后的所有变更，包括新增的通行密钥和密码、群组变更、客户端更新与密钥轮换。
 
 <Callout type="warn">
 

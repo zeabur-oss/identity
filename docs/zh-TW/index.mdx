@@ -1,25 +1,48 @@
 ---
 title: 開始使用 Zeabur Identity
-description: 用通行密鑰登入自己管理的 Kubernetes 叢集，取代永不過期的 admin.conf。
+description: 每個人用自己的帳號登入，可以用通行密鑰、GitHub、Google、OpenID 供應商或密碼。透過 Zeabur 開源版使用 Zeabur Identity，或單獨用它登入 kubectl。
 ---
 
-Zeabur Identity 在你的叢集裡簽發登入權杖。`kubectl` 會開啟瀏覽器，讓你用通行密鑰驗證身分，拿到的權杖只在幾分鐘內有效。你不再需要把同一份管理員 kubeconfig 複製到每台筆電。
+Zeabur Identity 是叢集的登入系統。每個人用自己的帳號登入，可以用通行密鑰、GitHub、Google、公司的 OpenID 供應商或密碼，拿到的權杖只有幾分鐘效期。管理員預設要雙重驗證。沒有人需要共用管理員密碼或管理員 kubeconfig。
 
-## 從一台 Ubuntu 伺服器開始
+## 我使用 Zeabur 開源版
 
-準備一台 Ubuntu 伺服器和你的電腦。跟著以下教學裝好 k3s 和 Zeabur Identity，再建立第一位管理員的通行密鑰，最後在電腦上用 `kubectl` 登入。
+Zeabur 開源版的登入頁就是 Zeabur Identity，所以執行 Zeabur 開源版的叢集已經裝好了。人員在 Zeabur 開源版裡管理：
 
-[在 Ubuntu 的 k3s 上安裝，用通行密鑰登入 kubectl](get-started/quickstart.mdx)
+- 要邀請成員、選擇他們能開啟哪些專案，用**成員**頁。見[邀請成員並指派專案權限](https://oss.zeabur.com/zh-TW/docs/zeabur/cluster/members/)。
+- 要在叢集上架設 Zeabur 開源版，先裝好 Zeabur Identity。[在既有叢集安裝 Zeabur 開源版](https://oss.zeabur.com/zh-TW/docs/zeabur/install/existing-cluster/)列出需要準備的東西，安裝步驟會連回這裡。
 
-## 安裝到既有叢集
+要從 Zeabur 搬到自己的伺服器，或想了解 Zeabur 開源版的其他功能，請看 [Zeabur 開源版文件](https://oss.zeabur.com/zh-TW/docs/zeabur/)。
 
-準備叢集管理員的 kubeconfig，以及一個能用 HTTPS 開啟的 Issuer 網址。用 `zeabur-identityctl` 安裝 CRD 與清單，再讓 kube-apiserver 信任 Zeabur Identity。
+## 我單獨使用 Zeabur Identity
 
-[把 Zeabur Identity 安裝到既有叢集](get-started/existing-cluster.mdx)
+Zeabur Identity 取代永不過期的管理員 kubeconfig。`kubectl` 會開啟瀏覽器讓你登入，kube-apiserver 每次請求都會檢查短效權杖。使用者、認證資訊和用戶端都是 `zeabur-identity` Namespace 裡的 Kubernetes 物件，不需要資料庫。
 
-## 安裝之後
+### 開始使用
+
+每個步驟最後都有確認結果的指令。
+
+- [在 Ubuntu 的 k3s 上安裝並登入 kubectl](get-started/quickstart.mdx)：在新伺服器上安裝 k3s 和 Zeabur Identity，設定第一位管理員，再從你的電腦登入。
+- [把 Zeabur Identity 安裝到既有叢集](get-started/existing-cluster.mdx)：準備叢集管理員的 kubeconfig 和 HTTPS Issuer 網址。
+
+### 使用者與應用程式
 
 - [新增與管理使用者](users/manage-users.mdx)：邀請同事、調整群組、加入第二把通行密鑰。
-- [用外部帳號登入](users/upstream-sign-in.mdx)：讓使用者用連結好的 GitHub、Google 或公司帳號登入。
+- [管理員帳號與工作階段](users/admin-sessions.mdx)：選擇管理員的登入方式和工作階段長度。
+- [登出、救援與移除使用者](users/offboarding.mdx)
+- [用外部帳號登入](users/upstream-sign-in.mdx)：讓使用者用 GitHub、Google 或 Keycloak 這類 OpenID 供應商登入。
+- [從目錄同步使用者](users/provisioning.mdx)
 - [註冊用戶端](users/clients.mdx)：讓 Grafana、Argo CD 也能用 Zeabur Identity 登入。
-- [備份與還原](operations/backup-restore.mdx)和[保留不經過 Zeabur Identity 的入口](operations/emergency-access.mdx)：出問題時，你還能進入叢集。
+
+### 出問題時保住存取權
+
+- [保留不經過 Zeabur Identity 的入口](operations/emergency-access.mdx)
+- [備份與還原](operations/backup-restore.mdx)
+- [升級與回復](operations/upgrade.mdx)
+
+### 了解運作方式
+
+- [架構](reference/architecture.mdx)
+- [規格符合度](reference/conformance.mdx)
+- [發行檔與驗證](reference/releases.mdx)
+- [安全性與支援政策](reference/security.mdx)

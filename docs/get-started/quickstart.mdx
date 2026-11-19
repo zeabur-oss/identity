@@ -1,9 +1,9 @@
 ---
-title: Install on k3s on Ubuntu and sign in to kubectl with a passkey
-description: Install Zeabur Identity on an Ubuntu server, configure HTTPS and an admin account, and sign in to your k3s cluster from your computer with a passkey.
+title: Install on k3s on Ubuntu and sign in to kubectl
+description: Install Zeabur Identity on an Ubuntu server, configure HTTPS and an admin account, and sign in to your k3s cluster from your computer.
 ---
 
-Install Zeabur Identity on an Ubuntu server, configure HTTPS, and create the first admin account. You can then sign in to the k3s cluster from your computer with a passkey and run `kubectl`. The server uses k3s's built-in Traefik to handle Ingress.
+Install Zeabur Identity on an Ubuntu server, configure HTTPS, and create the first admin account. You can then sign in to the k3s cluster from your computer and run `kubectl`. The server uses k3s's built-in Traefik to handle Ingress.
 
 Keep the cluster's admin kubeconfig on the server to install components or recover access if Zeabur Identity stops working. Keep a separate encrypted copy offline. Your computer gets only the cluster's CA certificate and a kubeconfig that uses Zeabur Identity for sign-in.
 
@@ -68,10 +68,12 @@ Sign in to the server from your computer:
 ssh "$SERVER"
 ```
 
-Choose a version from [GitHub Releases](https://github.com/zeabur-oss/identity/releases). This example uses `v0.1.1`. Set `arch` to `amd64` for x86_64 or `arm64` for aarch64:
+These commands use the latest version on [GitHub Releases](https://github.com/zeabur-oss/identity/releases) and print it, for example `v0.2.0`. To pin another version, set `version` yourself. Set `arch` to `amd64` for x86_64 or `arm64` for aarch64:
 
 ```sh
-version=v0.1.1
+version=$(curl -fsSLo /dev/null -w '%{url_effective}' https://github.com/zeabur-oss/identity/releases/latest)
+version=${version##*/}
+echo "$version"
 arch=arm64
 mkdir -p ~/zeabur-identity-download
 ```
@@ -99,6 +101,8 @@ Download the CLI, signed checksums, and image digests. These commands verify the
   zeabur-identityctl --version
 )
 ```
+
+The last line prints the version without the `v`, for example `zeabur-identityctl 0.2.0`. A failed check stops the commands before that line.
 
 Next, verify the image and its SBOM, the list of dependencies in the image. `ZEABUR_IDENTITY_IMAGE` stores the exact image digest for this version for use during installation:
 
@@ -192,6 +196,8 @@ zeabur-identityctl manifests --image "$ZEABUR_IDENTITY_IMAGE" \
   --serve-arg=--invitations | kubectl apply --server-side -f -
 kubectl -n zeabur-identity rollout status deploy/zeabur-identity --timeout=180s
 ```
+
+The last command prints `deployment "zeabur-identity" successfully rolled out`.
 
 The generated manifests include RBAC, a Service, and a Deployment. All resources that Zeabur Identity manages reside in the `zeabur-identity` Namespace. `--invitations` enables links to [invite users](../users/manage-users.mdx).
 
@@ -397,7 +403,7 @@ zeabur-identityctl kube-config --distro k3s > ~/authn.yaml &&
 
 <Step>
 
-### Register kubectl and create your first passkey
+### Register kubectl and set up the first admin
 
 Every application that uses Zeabur Identity for sign-in must register as a client. On the server, register `kubectl` so kubelogin can receive the sign-in result on 127.0.0.1:
 
@@ -412,9 +418,15 @@ Get a one-time setup link for the first admin:
 zeabur-identityctl setup-link --username admin
 ```
 
-This creates the `admin` user as an admin account. Admin accounts can sign in only with passkeys and receive full Kubernetes privileges through `cluster-admin`. See [Admin accounts and sessions](../users/admin-sessions.mdx).
+This creates the `admin` user as an admin account. By default, admin accounts sign in with a passkey, or with a password and a code from an authenticator app, and receive full Kubernetes privileges through `cluster-admin`. See [Admin accounts and sessions](../users/admin-sessions.mdx).
 
-Open the output link in your computer's browser and create a passkey. The link works once and expires after 60 minutes. Run the command again if you need a new link.
+Open the output link in your computer's browser and select **Create passkey**. Without a passkey, select **Use a password** instead, set a password of at least 15 characters, scan the QR code with an authenticator app, enter its code, and keep the 10 recovery codes. The link works once and expires after 60 minutes. Run the command again if you need a new link.
+
+Check on the server that the admin has a sign-in method. The output lists one `Credential` with `admin` in the `USER` column:
+
+```sh
+kubectl -n zeabur-identity get credentials
+```
 
 </Step>
 
@@ -501,7 +513,7 @@ kubectl -n default delete configmap zeabur-identity-permission-check
 
 - **Admin tokens renew automatically**: Tokens expire after 5 minutes and renew without interaction. You must sign in again 12 hours after the initial sign-in or after 1 hour without using `kubectl`; the idle timeout is 15 minutes for clusters shared by multiple teams. Regular account tokens expire after 10 minutes. See [Admin accounts and sessions](../users/admin-sessions.mdx).
 - **Use admin accounts only for administrative work**: For daily work, invite yourself to create a regular account, then bind permissions to groups as needed. See [Manage users](../users/manage-users.mdx).
-- **Users, passkeys, and sessions are Kubernetes objects**: They reside in the `zeabur-identity` Namespace. A passkey is a `Credential`, and a session after sign-in is a `Grant`. Run `kubectl -n zeabur-identity get users,credentials,grants` on the server to list these objects. See [Manage users](../users/manage-users.mdx) for operations.
+- **Users, sign-in methods, and sessions are Kubernetes objects**: They reside in the `zeabur-identity` Namespace. A passkey or a password is a `Credential`, and a session after sign-in is a `Grant`. Run `kubectl -n zeabur-identity get users,credentials,grants` on the server to list these objects. See [Manage users](../users/manage-users.mdx) for operations.
 
 Next, configure [Backup and restore](../operations/backup-restore.mdx), [Upgrade and rollback](../operations/upgrade.mdx), and [Keep an access path that bypasses Zeabur Identity](../operations/emergency-access.mdx). For daily use, start with [Manage users](../users/manage-users.mdx), [add GitHub, Google or your own OpenID provider as a sign-in](../users/upstream-sign-in.mdx), or [register clients](../users/clients.mdx) so applications such as Grafana or Argo CD can use Zeabur Identity for sign-in.
 

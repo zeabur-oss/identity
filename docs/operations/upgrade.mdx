@@ -17,6 +17,41 @@ Zeabur Identity runs a single replica. Updates replace that replica rather than 
 
 Each version below lists what you must do before you upgrade to it. If you skip versions, read every section from the version you run now to the version you're moving to. The newest version is at the top.
 
+### v0.3.0 → v0.4.0
+
+v0.4.0 adds passwords for regular accounts and admin accounts, and replaces the `admin-aal3` setting with `admin-sign-in`.
+
+#### 1. Choose how admins sign in
+
+v0.4.0 no longer reads `admin-aal3`. Its default, `two-factor`, lets admins sign in with any passkey, or with a password and a code from an authenticator app. If the first command below prints `true`, keep the device-bound restriction with the second command. To keep admins on any passkey but no password, use `admin-sign-in=passkey` instead. The second command replaces the ConfigMap's data, so add `--from-literal=teams=multiple` if you set `teams`:
+
+```sh
+kubectl -n "$NS" get configmap zeabur-identity-settings -o jsonpath='{.data.admin-aal3}{"\n"}' --ignore-not-found
+```
+
+```sh
+kubectl -n "$NS" create configmap zeabur-identity-settings --from-literal=admin-sign-in=device-bound-passkey \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+See [Choose how admins sign in](../users/admin-sessions.mdx#choose-how-admins-sign-in).
+
+#### 2. Create the password key before the new Deployment
+
+v0.4.0 keeps the key it mixes into password hashes in the Secret `zeabur-identity-password-key`. The installer creates it empty and Zeabur Identity fills it at startup, but Zeabur Identity can't create the Secret itself and doesn't start without it. The upgrade files below leave out Secrets, so create this one in the **Review and apply the manifests** step, before the new Deployment. The command does nothing when the Secret already exists:
+
+```sh
+kubectl -n "$NS" get secret zeabur-identity-password-key ||
+  jq '.items[] | select(.kind == "Secret" and .metadata.name == "zeabur-identity-password-key")' \
+    upgrade-record/manifests.next.json | kubectl create -f -
+```
+
+Back it up with the signing keys. See [Back up and restore](./backup-restore.mdx).
+
+#### Roll back to v0.3.0
+
+v0.3.0 has no passwords. Restore the pre-upgrade backup. Passwords and authenticator apps set after the upgrade are lost, and users who signed up with only a password need a new setup link.
+
 ### v0.2.0 → v0.3.0
 
 v0.3.0 changes the form of `UpstreamProvider` and `Credential`. Stored credentials keep working as they are. Stored providers don't: the server doesn't start while a provider in the v0.2.0 form is stored, so write each one again in the new form.
@@ -263,7 +298,7 @@ ZEABUR_IDENTITY_ISSUER=https://identity.example.test
 "$NEXT_ZEABUR_IDENTITYCTL" crds > upgrade-record/crds.next.json
 "$NEXT_ZEABUR_IDENTITYCTL" manifests --issuer "$ZEABUR_IDENTITY_ISSUER" --namespace "$NS" --image "$NEXT_IMAGE" \
   --serve-arg=--invitations > upgrade-record/manifests.next.json
-# Leave out the empty signing-key Secret: it's only for new installs.
+# Leave out the empty Secrets: they're only for new installs.
 jq '.items |= map(select(.kind != "Secret"))' upgrade-record/manifests.next.json \
   > upgrade-record/manifests.upgrade.json
 ```
@@ -285,7 +320,7 @@ kubectl -n "$NS" rollout status deployment/zeabur-identity --timeout=5m
 kubectl -n "$NS" logs deployment/zeabur-identity --tail=200
 ```
 
-Keep the `zeabur-identity` Service, `zeabur-identity-internal-ca`, and `zeabur-identity-signing-keys`. Don't replace them. A new Service isn't guaranteed to retain the original IP, and every kube-apiserver's authentication file uses the old IP as a fixed value.
+Keep the `zeabur-identity` Service, `zeabur-identity-internal-ca`, `zeabur-identity-signing-keys`, and `zeabur-identity-password-key`. Don't replace them. A new password key makes every password and authenticator app stop working. A new Service isn't guaranteed to retain the original IP, and every kube-apiserver's authentication file uses the old IP as a fixed value.
 
 Don't replace the root CA, change the Issuer, or delete sessions during an upgrade. If the new version requires different kube-apiserver settings, treat that as a separate change and handle one machine at a time.
 
@@ -355,7 +390,7 @@ Manually revert the other changes, then restore the replica count.
 
 Follow the restore procedure in [Backup and restore](./backup-restore.mdx) to restore the pre-upgrade backup, along with the old image, manifests, CRDs, and Secrets. Keep Zeabur Identity stopped throughout the restore.
 
-You'll lose all changes made after the backup, including new passkeys, group changes, client updates, and key rotations.
+You'll lose all changes made after the backup, including new passkeys and passwords, group changes, client updates, and key rotations.
 
 <Callout type="warn">
 
