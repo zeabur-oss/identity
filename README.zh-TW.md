@@ -30,24 +30,17 @@ Zeabur 開源版的登入頁就是 Zeabur Identity，所以執行 Zeabur 開源�
 
 ## 單獨使用
 
-Zeabur Identity 也可以不搭配 Zeabur 開源版，用在任何自己管理的 Kubernetes 叢集上。
+Zeabur Identity 也可以不搭配 Zeabur 開源版，用在任何自己管理的 Kubernetes 叢集上。很多叢集靠一份永不過期、被複製到每台筆電的管理員 kubeconfig 運作。Zeabur Identity 用登入取代它：`kubectl` 會開啟瀏覽器，每個人用自己的帳號登入，拿到的權杖只有幾分鐘效期，不是好幾年。
 
-**刪掉 `admin.conf`，用自己的帳號登入叢集。**
+https://github.com/user-attachments/assets/ddb72043-07fc-4a30-b39c-a1e749c33361
 
-大多數自己管理的叢集都靠一份永不過期的管理員 kubeconfig 運作：它被複製到每台筆電，也無法撤銷。Zeabur Identity 用登入取代它：`kubectl` 會開啟瀏覽器，你用通行密鑰、SSO 或密碼登入，拿到的權杖只有幾分鐘效期，不是好幾年。
+*Alice 用密碼登入，可以列出 Pod，但重新啟動 Deployment 時收到 403。管理員用密碼加驗證器 App 的驗證碼登入，重新啟動就成功了。*
 
-https://github.com/user-attachments/assets/4c6e29f2-341c-4622-8cc5-4337e13e53b5
+### 運作方式
 
-*用通行密鑰登入 [Aptakube](https://aptakube.com)：可以瀏覽叢集，但沒有權限的帳號重新啟動 Deployment 時會收到 403。*
-
-### 為什麼選 Zeabur Identity
-
-- **通行密鑰、SSO 或密碼**。Touch ID、Windows Hello 或安全金鑰都能用。同事也可以連結 GitHub 或 Google 帳號，或透過 OpenID 供應商連結公司帳號，或設定至少 15 個字元的密碼。
-- **管理員權限只給管理員帳號**。叢集變更用另一個管理員帳號處理。預設用通行密鑰登入，或用密碼加上驗證器 App 的驗證碼；也可以規定只能用通行密鑰。管理員權杖效期 5 分鐘。日常帳號只有你綁定到其群組的權限。
-- **不會有永久金鑰留在任何人的筆電上**。權杖只有幾分鐘效期，kube-apiserver 每次請求都會檢查。每個工作階段在登入 12 小時後結束。撤銷某人的工作階段後，他手上的權杖到期就無法再存取，最長 10 分鐘。
-- **在它保護的叢集裡執行**。只有一個小 Pod，不需要資料庫，也不需要額外的伺服器。使用者、認證資訊和用戶端都是 Kubernetes 物件。CI 在 k3s 上測試；RKE2 用同一份設定。Argo CD、Grafana 這類 OpenID Connect 應用程式也能用同一個 Issuer。
-
-### 畫面
+1. 你執行 `kubectl get pods`，瀏覽器開啟 Zeabur Identity 的登入頁。
+2. 你登入後，`kubectl` 拿到權杖，並在你工作時自動更新。每個工作階段在登入 12 小時後結束。
+3. kube-apiserver 自己檢查權杖，你的請求不會經過 Zeabur Identity。
 
 <table>
   <tr>
@@ -61,18 +54,15 @@ https://github.com/user-attachments/assets/4c6e29f2-341c-4622-8cc5-4337e13e53b5
     </picture></td>
   </tr>
   <tr>
-    <td align="center"><b>日常登入</b><br>通行密鑰或 GitHub</td>
-    <td align="center"><b>加入</b><br>一次性邀請連結</td>
+    <td align="center"><b>登入</b><br>密碼、通行密鑰或 GitHub</td>
+    <td align="center"><b>加入</b><br>用一次性連結設定通行密鑰或密碼</td>
   </tr>
 </table>
 
-### 運作方式
-
-1. 你執行 `kubectl get pods`，瀏覽器開啟 Zeabur Identity 的登入頁。
-2. 你登入後，`kubectl` 拿到 10 分鐘內有效的權杖，並在你工作時自動更新。
-3. Kubernetes 自己檢查權杖，你的請求不會經過 Zeabur Identity。
-
-要變更叢集時，用管理員帳號登入。登入後馬上就有完整權限，不必再登入一次。要用更嚴格的規則，例如管理員只能用安全金鑰，見[管理員帳號與工作階段](docs/zh-TW/users/admin-sessions.mdx)。
+- **權限來自你的 RBAC**。每個人在 Kubernetes 裡是 `zeabur:<使用者名稱>`，群組是 `zeabur:<群組>`，照平常的方式把角色綁到群組就好。權杖效期 10 分鐘。
+- **管理員帳號分開**。管理員帳號在 `zeabur:admins` 群組，有 `cluster-admin` 權限。預設用通行密鑰登入，或用密碼加驗證器 App 的驗證碼，權杖效期 5 分鐘。要規定只能用安全金鑰，見[管理員帳號與工作階段](docs/zh-TW/users/admin-sessions.mdx)。
+- **說停就停**。結束某人的工作階段後，他手上的權杖到期就無法再存取，最長 10 分鐘。
+- **在它保護的叢集裡執行**。只有一個小 Pod，不需要資料庫，也不需要額外的伺服器。使用者、認證資訊和用戶端都是 Kubernetes 物件。CI 在 k3s 上測試；RKE2 用同一份設定。Argo CD、Grafana 這類 OpenID Connect 應用程式也能用同一個 Issuer。
 
 ### 開始使用
 

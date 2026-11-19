@@ -30,24 +30,17 @@ Zeabur 开源版的登录页就是 Zeabur Identity，所以运行 Zeabur 开源�
 
 ## 单独使用
 
-Zeabur Identity 也可以不搭配 Zeabur 开源版，用在任何自己管理的 Kubernetes 集群上。
+Zeabur Identity 也可以不搭配 Zeabur 开源版，用在任何自己管理的 Kubernetes 集群上。很多集群靠一份永不过期、被复制到每台笔记本的管理员 kubeconfig 运作。Zeabur Identity 用登录取代它：`kubectl` 会打开浏览器，每个人用自己的账号登录，拿到的令牌只有几分钟有效期，而不是好几年。
 
-**删掉 `admin.conf`，用自己的账号登录集群。**
+https://github.com/user-attachments/assets/ddb72043-07fc-4a30-b39c-a1e749c33361
 
-大多数自己管理的集群都靠一份永不过期的管理员 kubeconfig 运作：它被复制到每台笔记本，也无法吊销。Zeabur Identity 用登录取代它：`kubectl` 会打开浏览器，你用通行密钥、SSO 或密码登录，拿到的令牌只有几分钟有效期，而不是好几年。
+*Alice 用密码登录，可以列出 Pod，但重启 Deployment 时收到 403。管理员用密码加验证器 App 的验证码登录，重启就成功了。*
 
-https://github.com/user-attachments/assets/4c6e29f2-341c-4622-8cc5-4337e13e53b5
+### 工作方式
 
-*用通行密钥登录 [Aptakube](https://aptakube.com)：可以浏览集群，但没有权限的账号重启 Deployment 时会收到 403。*
-
-### 为什么选 Zeabur Identity
-
-- **通行密钥、SSO 或密码**。Touch ID、Windows Hello 或安全密钥都能用。同事也可以关联 GitHub 或 Google 账号，或通过 OpenID 提供方关联公司账号，或设置至少 15 个字符的密码。
-- **管理员权限只给管理员账号**。集群变更用另一个管理员账号处理。默认用通行密钥登录，或用密码加上验证器 App 的验证码；也可以规定只能用通行密钥。管理员令牌有效期 5 分钟。日常账号只有你绑定到其用户组的权限。
-- **不会有永久密钥留在任何人的笔记本上**。令牌只有几分钟有效期，kube-apiserver 每次请求都会检查。每个会话在登录 12 小时后结束。吊销某人的会话后，他手上的令牌到期就无法再访问，最长 10 分钟。
-- **在它保护的集群里运行**。只有一个小 Pod，不需要数据库，也不需要额外的服务器。用户、凭据和客户端都是 Kubernetes 对象。CI 在 k3s 上测试；RKE2 用同一份配置。Argo CD、Grafana 这类 OpenID Connect 应用也能用同一个 Issuer。
-
-### 界面
+1. 你运行 `kubectl get pods`，浏览器打开 Zeabur Identity 的登录页。
+2. 你登录后，`kubectl` 拿到令牌，并在你工作时自动续期。每个会话在登录 12 小时后结束。
+3. kube-apiserver 自己检查令牌，你的请求不会经过 Zeabur Identity。
 
 <table>
   <tr>
@@ -61,18 +54,15 @@ https://github.com/user-attachments/assets/4c6e29f2-341c-4622-8cc5-4337e13e53b5
     </picture></td>
   </tr>
   <tr>
-    <td align="center"><b>日常登录</b><br>通行密钥或 GitHub</td>
-    <td align="center"><b>加入</b><br>一次性邀请链接</td>
+    <td align="center"><b>登录</b><br>密码、通行密钥或 GitHub</td>
+    <td align="center"><b>加入</b><br>用一次性链接设置通行密钥或密码</td>
   </tr>
 </table>
 
-### 工作方式
-
-1. 你运行 `kubectl get pods`，浏览器打开 Zeabur Identity 的登录页。
-2. 你登录后，`kubectl` 拿到 10 分钟内有效的令牌，并在你工作时自动续期。
-3. Kubernetes 自己检查令牌，你的请求不会经过 Zeabur Identity。
-
-要变更集群时，用管理员账号登录。登录后马上就有完整权限，不必再登录一次。要用更严格的规则，例如管理员只能用安全密钥，见[管理员账号与会话](docs/zh-CN/users/admin-sessions.mdx)。
+- **权限来自你的 RBAC**。每个人在 Kubernetes 里是 `zeabur:<用户名>`，用户组是 `zeabur:<用户组>`，照平常的方式把角色绑定到用户组就好。令牌有效期 10 分钟。
+- **管理员账号分开**。管理员账号在 `zeabur:admins` 用户组，有 `cluster-admin` 权限。默认用通行密钥登录，或用密码加验证器 App 的验证码，令牌有效期 5 分钟。要规定只能用安全密钥，见[管理员账号与会话](docs/zh-CN/users/admin-sessions.mdx)。
+- **说停就停**。结束某人的会话后，他手上的令牌到期就无法再访问，最长 10 分钟。
+- **在它保护的集群里运行**。只有一个小 Pod，不需要数据库，也不需要额外的服务器。用户、凭据和客户端都是 Kubernetes 对象。CI 在 k3s 上测试；RKE2 用同一份配置。Argo CD、Grafana 这类 OpenID Connect 应用也能用同一个 Issuer。
 
 ### 开始使用
 
