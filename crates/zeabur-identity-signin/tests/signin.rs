@@ -2340,6 +2340,35 @@ mod tests {
         }
 
         #[tokio::test]
+        async fn a_hold_in_another_language_still_says_when_to_retry() {
+            let h = harness().await;
+            let device = dana_with_password(&h).await;
+            for _ in 0..=LIMIT {
+                sign_in(&h, "dana", "a wrong guess, again and again", Some(&device)).await;
+            }
+            let flow = flow(&h).await;
+            let request = Request::post("/login/password")
+                .header(header::ORIGIN, ISSUER)
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::ACCEPT_LANGUAGE, "zh-TW")
+                .header(
+                    header::COOKIE,
+                    format!("{FLOW_COOKIE}={flow}; {DEVICE_COOKIE}={device}"),
+                )
+                .body(Body::from(
+                    json!({ "username": "dana", "password": GOOD }).to_string(),
+                ))
+                .unwrap();
+            let response = h.app.clone().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+            assert!(response.headers().contains_key(header::RETRY_AFTER));
+            let body: Value =
+                serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                    .unwrap();
+            assert_eq!(body["detail"], Lang::ZhTw.messages().password_held);
+        }
+
+        #[tokio::test]
         async fn a_passkey_sign_in_gives_the_browser_a_device_cookie() {
             let h = harness().await;
             let mut device = device();

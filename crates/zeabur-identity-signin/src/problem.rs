@@ -205,7 +205,12 @@ pub async fn localize(request: Request, run: Run) -> Response {
     let lang = Lang::negotiate(None, accept_language(request.headers()));
     let mut response = run.run(request).await;
     match response.extensions_mut().remove::<Pending>() {
-        Some(Pending(problem, extensions)) if lang != Lang::En => problem.render(extensions, lang),
+        // Keep the status and headers the handler added (`Retry-After`, `Set-Cookie`).
+        Some(Pending(problem, extensions)) if lang != Lang::En => {
+            let (parts, _) = response.into_parts();
+            let (_, body) = problem.render(extensions, lang).into_parts();
+            Response::from_parts(parts, body)
+        }
         Some(_) | None => response,
     }
 }
