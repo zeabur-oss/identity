@@ -43,8 +43,7 @@ use zeabur_identity_signin::password::Passwords;
 use zeabur_identity_signin::upstream::http::HyperClient;
 use zeabur_identity_signin::upstream::provider::Providers;
 use zeabur_identity_signin::upstream::{self, Upstream};
-use zeabur_identity_signin::{SignIn, pages};
-use zeabur_identity_store::{CredentialStore, Directory, GrantStore, SetupStore};
+use zeabur_identity_signin::{Backend, SignIn, pages};
 use zeabur_identity_tls::listener::{Resolver, TlsListener, server_config};
 
 use crate::config::{ServeConfig, Store};
@@ -145,7 +144,7 @@ pub async fn serve(config: ServeConfig) -> Result<(), ServeError> {
         let shutdown = shutdown_rx.clone();
         async move { gc::run::<Grant, _>(client, &namespace, SystemClock, shutdown).await }
     });
-    run(
+    run::<_, Kube>(
         &config,
         (keys, directory, grants, credentials, setup),
         (providers, password_key),
@@ -232,9 +231,26 @@ fn limits(router: axum::Router) -> axum::Router {
         ))
 }
 
-async fn run<S: KeyStore, D: Directory, G: GrantStore, K: CredentialStore, T: SetupStore>(
+/// The Kubernetes stores.
+struct Kube;
+
+impl Backend for Kube {
+    type Directory = KubeDirectory;
+    type Grants = KubeGrantStore;
+    type Clock = SystemClock;
+    type Credentials = KubeCredentialStore;
+    type Setup = KubeSetupStore;
+}
+
+async fn run<S: KeyStore, B: Backend<Clock = SystemClock>>(
     config: &ServeConfig,
-    (keys, directory, grants, credentials, setup): (S, D, G, K, T),
+    (keys, directory, grants, credentials, setup): (
+        S,
+        B::Directory,
+        B::Grants,
+        B::Credentials,
+        B::Setup,
+    ),
     (providers, password_key): (Arc<Providers>, [u8; password_key::KEY_LEN]),
     mut background: Vec<JoinHandle<()>>,
     (listener, resolver, secrets): (TlsListener, Arc<Resolver>, Api<Secret>),
@@ -278,7 +294,7 @@ async fn run<S: KeyStore, D: Directory, G: GrantStore, K: CredentialStore, T: Se
         used_codes: OneTimeIds::default(),
         used_request_uris: OneTimeIds::default(),
     });
-    let sign_in = Arc::new(SignIn {
+    let sign_in = Arc::new(SignIn::<B> {
         oauth: Arc::clone(&server),
         passkeys: Passkeys::new(&config.issuer)
             .map_err(|error| ServeError::Config(error.to_string()))?,

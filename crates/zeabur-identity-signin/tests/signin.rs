@@ -37,7 +37,7 @@ mod tests {
     use zeabur_identity_oauth::endpoints::{self, FLOW_COOKIE};
     use zeabur_identity_oauth::{AuthorizationServer, Lifetimes, OneTimeIds};
     use zeabur_identity_signin::passkeys::{PasskeyError, Passkeys};
-    use zeabur_identity_signin::{CEREMONY_COOKIE, SignIn};
+    use zeabur_identity_signin::{Backend, CEREMONY_COOKIE, SignIn};
     use zeabur_identity_store::{
         Client, CredentialStore as _, MemoryCredentialStore, MemoryDirectory, MemoryGrantStore,
         MemorySetupStore, User,
@@ -93,13 +93,18 @@ mod tests {
     }
 
     type Server = AuthorizationServer<MemoryDirectory, MemoryGrantStore, TestClock>;
-    type Service = SignIn<
-        MemoryDirectory,
-        MemoryGrantStore,
-        TestClock,
-        MemoryCredentialStore,
-        MemorySetupStore,
-    >;
+    /// The in-memory stores, on a clock the tests move.
+    struct Memory;
+
+    impl Backend for Memory {
+        type Directory = MemoryDirectory;
+        type Grants = MemoryGrantStore;
+        type Clock = TestClock;
+        type Credentials = MemoryCredentialStore;
+        type Setup = MemorySetupStore;
+    }
+
+    type Service = SignIn<Memory>;
 
     struct Harness {
         app: Router,
@@ -175,7 +180,7 @@ mod tests {
             &token_hash(SETUP_TOKEN.as_bytes()),
             UnixTime::from_secs(START + 3600),
         );
-        let service = Arc::new(SignIn {
+        let service = Arc::new(SignIn::<Memory> {
             oauth: Arc::clone(&oauth),
             passkeys: Passkeys::new(&issuer).unwrap(),
             credentials: MemoryCredentialStore::default(),

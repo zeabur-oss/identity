@@ -37,7 +37,6 @@ mod tests {
     use zeabur_identity_keys::store::MemoryKeyStore;
     use zeabur_identity_oauth::endpoints::{self, FLOW_COOKIE};
     use zeabur_identity_oauth::{AuthorizationServer, Lifetimes, OneTimeIds};
-    use zeabur_identity_signin::SignIn;
     use zeabur_identity_signin::account::{ACCOUNT_CLIENT, SESSION_COOKIE, SessionToken};
     use zeabur_identity_signin::passkeys::Passkeys;
     use zeabur_identity_signin::upstream::http::{HttpClient, HttpError};
@@ -45,6 +44,7 @@ mod tests {
         ClientSecret, Exchange, GITHUB_ISSUER, GOOGLE_ISSUER, GitHubEndpoints, Provider, Providers,
     };
     use zeabur_identity_signin::upstream::{self, UPSTREAM_COOKIE, Upstream};
+    use zeabur_identity_signin::{Backend, SignIn};
     use zeabur_identity_store::{
         Client, CredentialStore as _, Directory as _, GrantStore as _, MemoryCredentialStore,
         MemoryDirectory, MemoryGrantStore, MemorySetupStore, NewExternal, NewGrant,
@@ -229,19 +229,21 @@ mod tests {
         }
     }
 
+    /// The in-memory stores.
+    struct Memory;
+
+    impl Backend for Memory {
+        type Directory = MemoryDirectory;
+        type Grants = MemoryGrantStore;
+        type Clock = SystemClock;
+        type Credentials = MemoryCredentialStore;
+        type Setup = MemorySetupStore;
+    }
+
     struct Harness {
         app: Router,
         fake: Arc<Fake>,
-        service: Arc<
-            Upstream<
-                MemoryDirectory,
-                MemoryGrantStore,
-                SystemClock,
-                MemoryCredentialStore,
-                MemorySetupStore,
-                FakeHttp,
-            >,
-        >,
+        service: Arc<Upstream<Memory, FakeHttp>>,
     }
 
     async fn harness() -> Harness {
@@ -311,7 +313,7 @@ mod tests {
             };
             providers.push(Arc::new(provider));
         }
-        let sign_in = Arc::new(SignIn {
+        let sign_in = Arc::new(SignIn::<Memory> {
             oauth: Arc::clone(&oauth),
             passkeys: Passkeys::new(&issuer).unwrap(),
             credentials: MemoryCredentialStore::default(),
