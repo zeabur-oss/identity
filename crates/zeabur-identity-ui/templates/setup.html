@@ -56,7 +56,7 @@
     <form id="setup-password" hidden class="flex flex-col gap-5" novalidate data-post="/setup/password"
           data-msg-too-short="{{ m.too_short() }}">
       {% call ui::field("new-password", m.setup_password, m.password_hint()) %}
-      <input id="new-password" name="password" type="password" minlength="{{ zeabur_identity_core::password::MIN_CHARS }}" maxlength="{{ zeabur_identity_core::password::MAX_CHARS }}" class="{{ ds::input() }}"
+      <input id="new-password" name="password" type="password" minlength="{{ zeabur_identity_core::password::MIN_CHARS }}" maxlength="{{ zeabur_identity_core::password::MAX_BYTES }}" class="{{ ds::input() }}"
              autocomplete="new-password"
              {{- ui::field_describedby("new-password", m.password_hint()) }}>
       {% endcall %}

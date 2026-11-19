@@ -174,10 +174,10 @@
           {%- if password.authenticator %} {{ m.password_authenticator_note }}{% endif %}</p>
         <input type="text" name="username" autocomplete="username" value="{{ view.username }}" hidden>
         {% call ui::field("current-password", m.password_current) %}
-        <input id="current-password" name="current" type="password" maxlength="{{ zeabur_identity_core::password::MAX_CHARS }}" required autofocus class="{{ ds::input() }}" autocomplete="current-password">
+        <input id="current-password" name="current" type="password" maxlength="{{ zeabur_identity_core::password::MAX_BYTES }}" required autofocus class="{{ ds::input() }}" autocomplete="current-password">
         {% endcall %}
         {% call ui::field("new-password", m.password_new, m.password_hint()) %}
-        <input id="new-password" name="new" type="password" minlength="{{ zeabur_identity_core::password::MIN_CHARS }}" maxlength="{{ zeabur_identity_core::password::MAX_CHARS }}" required class="{{ ds::input() }}" autocomplete="new-password"
+        <input id="new-password" name="new" type="password" minlength="{{ zeabur_identity_core::password::MIN_CHARS }}" maxlength="{{ zeabur_identity_core::password::MAX_BYTES }}" required class="{{ ds::input() }}" autocomplete="new-password"
                {{- ui::field_describedby("new-password", m.password_hint()) }}>
         {% endcall %}
         </div>
@@ -186,7 +186,7 @@
         <p data-slot="dialog-description" class="{{ ds::dialog_description() }} text-pretty">{{ m.password_remove_body }}
           {%- if password.authenticator %} {{ m.password_remove_authenticator }}{% endif %}</p>
         <label class="sr-only" for="remove-current">{{ m.password_current }}</label>
-        <input id="remove-current" name="current" type="password" maxlength="{{ zeabur_identity_core::password::MAX_CHARS }}" required autofocus autocomplete="current-password"
+        <input id="remove-current" name="current" type="password" maxlength="{{ zeabur_identity_core::password::MAX_BYTES }}" required autofocus autocomplete="current-password"
                placeholder="{{ m.password_current }}" class="{{ ds::input() }}">
         {%- endcall %}
         <p data-status role="status" aria-live="polite" class="empty:sr-only text-[0.8125rem] leading-5 text-secondary"></p>
