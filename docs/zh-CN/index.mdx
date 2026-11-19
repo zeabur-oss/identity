@@ -1,25 +1,48 @@
 ---
 title: 开始使用 Zeabur Identity
-description: 用通行密钥登录自己管理的 Kubernetes 集群，取代永不过期的 admin.conf。
+description: 每个人用自己的账号登录，可以用通行密钥、GitHub、Google、OpenID 提供方或密码。通过 Zeabur 开源版使用 Zeabur Identity，或单独用它登录 kubectl。
 ---
 
-Zeabur Identity 在你的集群里签发登录令牌。`kubectl` 打开浏览器，你用通行密钥验证身份，拿到的令牌只有几分钟有效期。你不再需要把管理员 kubeconfig 复制到每台笔记本电脑。
+Zeabur Identity 是集群的登录系统。每个人用自己的账号登录，可以用通行密钥、GitHub、Google、公司的 OpenID 提供方或密码，拿到的令牌只有几分钟有效期。管理员默认要双重验证。没有人需要共用管理员密码或管理员 kubeconfig。
 
-## 从一台 Ubuntu 服务器开始
+## 我使用 Zeabur 开源版
 
-准备一台 Ubuntu 服务器和你的电脑。跟着页面装好 k3s 和 Zeabur Identity，创建第一位管理员的通行密钥，最后在电脑上用 `kubectl` 登录。
+Zeabur 开源版的登录页就是 Zeabur Identity，所以运行 Zeabur 开源版的集群已经装好了。人员在 Zeabur 开源版里管理：
 
-[在 Ubuntu 的 k3s 上安装，用通行密钥登录 kubectl](get-started/quickstart.mdx)
+- 要邀请成员、选择他们能打开哪些项目，用**成员**页。见[邀请成员并分配项目权限](https://oss.zeabur.com/zh-CN/docs/zeabur/cluster/members/)。
+- 要在集群上部署 Zeabur 开源版，先装好 Zeabur Identity。[在已有集群上安装 Zeabur 开源版](https://oss.zeabur.com/zh-CN/docs/zeabur/install/existing-cluster/)列出了需要准备的东西，安装步骤会链接回这里。
 
-## 安装到现有集群
+要从 Zeabur 迁移到自己的服务器，或想了解 Zeabur 开源版的其他功能，请看 [Zeabur 开源版文档](https://oss.zeabur.com/zh-CN/docs/zeabur/)。
 
-准备集群管理员的 kubeconfig 和一个能通过 HTTPS 打开的 Issuer 网址。用 `zeabur-identityctl` 安装 CRD 和清单，再让 kube-apiserver 信任 Zeabur Identity。
+## 我单独使用 Zeabur Identity
 
-[把 Zeabur Identity 安装到现有集群](get-started/existing-cluster.mdx)
+Zeabur Identity 取代永不过期的管理员 kubeconfig。`kubectl` 会打开浏览器让你登录，kube-apiserver 每次请求都会检查短期令牌。用户、凭据和客户端都是 `zeabur-identity` Namespace 里的 Kubernetes 对象，不需要数据库。
 
-## 安装后
+### 开始使用
 
-- [添加和管理用户](users/manage-users.mdx)：邀请同事、调整群组、添加第二把通行密钥。
-- [用外部账号登录](users/upstream-sign-in.mdx)：让用户用关联好的 GitHub、Google 或公司账号登录。
-- [注册客户端](users/clients.mdx)：让 Grafana、Argo CD 也通过 Zeabur Identity 登录。
-- [备份与恢复](operations/backup-restore.mdx)和[保留不经过 Zeabur Identity 的入口](operations/emergency-access.mdx)：出问题时还能进入集群。
+每个步骤最后都有确认结果的命令。
+
+- [在 Ubuntu 的 k3s 上安装并登录 kubectl](get-started/quickstart.mdx)：在新服务器上安装 k3s 和 Zeabur Identity，设置第一位管理员，再从你的电脑登录。
+- [把 Zeabur Identity 安装到已有集群](get-started/existing-cluster.mdx)：准备集群管理员的 kubeconfig 和 HTTPS Issuer 地址。
+
+### 用户与应用
+
+- [添加与管理用户](users/manage-users.mdx)：邀请同事、调整用户组、添加第二个通行密钥。
+- [管理员账号与会话](users/admin-sessions.mdx)：选择管理员的登录方式和会话时长。
+- [退出登录、找回账号与移除用户](users/offboarding.mdx)
+- [用外部账号登录](users/upstream-sign-in.mdx)：让用户用 GitHub、Google 或 Keycloak 这类 OpenID 提供方登录。
+- [从目录同步用户](users/provisioning.mdx)
+- [注册客户端](users/clients.mdx)：让 Grafana、Argo CD 也能用 Zeabur Identity 登录。
+
+### 出问题时保住访问权限
+
+- [保留不经过 Zeabur Identity 的入口](operations/emergency-access.mdx)
+- [备份与恢复](operations/backup-restore.mdx)
+- [升级与回滚](operations/upgrade.mdx)
+
+### 了解工作方式
+
+- [架构](reference/architecture.mdx)
+- [规范符合度](reference/conformance.mdx)
+- [发行文件与验证](reference/releases.mdx)
+- [安全与支持政策](reference/security.mdx)

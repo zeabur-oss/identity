@@ -148,7 +148,7 @@ For other cases, use the following table:
 During recovery, avoid these actions:
 
 - Don't change the Issuer hostname to work around the failure. Tokens and passkeys are both bound to that hostname. Changing it invalidates both.
-- Don't run `zeabur-identityctl setup-link --reset`. It deletes users' passkeys and sessions and can't fix Pods, Ingress, or kube-apiserver.
+- Don't run `zeabur-identityctl setup-link --reset`. It deletes the user's passkeys, password, authenticator, linked accounts, invitations and sessions, and can't fix Pods, Ingress, or kube-apiserver.
 - Don't paste tokens, links, headers, or Secret contents into chats or issue reports.
 
 ## When kube-apiserver can't start
@@ -227,9 +227,9 @@ If your managed Kubernetes provider offers a way to configure authentication, us
 
 ### Verify that you can log in to Zeabur Identity again
 
-Ready Pods aren't enough. Clear cached tokens, then log in again with a passkey to verify that new login requests succeed.
+Ready Pods aren't enough. Clear cached tokens, then log in again with a passkey, or a password and authenticator code, to verify that new login requests succeed.
 
-On your computer, use the kubeconfig you configured in [Install and log in on k3s](../get-started/quickstart.mdx):
+On your computer, use the kubeconfig you configured in [Install and sign in on k3s](../get-started/quickstart.mdx):
 
 ```sh
 export KUBECONFIG=~/.kube/zeabur-identity-k3s.yaml

@@ -1,7 +1,7 @@
 - group: get-started
   label: 開始使用
   pages:
-    quickstart: 在 Ubuntu 的 k3s 上安裝，用通行密鑰登入 kubectl
+    quickstart: 在 Ubuntu 的 k3s 上安裝並登入 kubectl
     existing-cluster: 安裝到既有叢集
 - group: users
   label: 使用者與應用程式

@@ -148,7 +148,7 @@ sudo k3s kubectl -n zeabur-identity rollout status deploy/zeabur-identity --time
 修復期間，避免以下操作：
 
 - 不要更改 Issuer 的主機名稱來繞過故障。權杖與通行密鑰都綁定該主機名稱，更改後兩者都會失效。
-- 不要執行 `zeabur-identityctl setup-link --reset`。這會刪除使用者的通行密鑰與工作階段，無法修復 Pod、Ingress 或 kube-apiserver。
+- 不要執行 `zeabur-identityctl setup-link --reset`。這會刪除該使用者的通行密鑰、密碼、驗證器、已連結的帳號、邀請與工作階段，無法修復 Pod、Ingress 或 kube-apiserver。
 - 不要把權杖、連結、標頭或 Secret 內容貼到聊天或問題回報中。
 
 ## kube-apiserver 無法啟動
@@ -227,7 +227,7 @@ sudo $KUBECTL get --raw=/readyz
 
 ### 確認 Zeabur Identity 可重新登入
 
-Pod 就緒還不夠。請清除快取權杖，再用通行密鑰重新登入，確認新的登入請求也能成功。
+Pod 就緒還不夠。請清除快取權杖，再用通行密鑰，或密碼加驗證碼重新登入，確認新的登入請求也能成功。
 
 在你的電腦上，使用[在 k3s 上安裝並登入](../get-started/quickstart.mdx)時設定的 kubeconfig：
 

@@ -16,10 +16,10 @@ Zeabur Identity has no built-in directory connectors and doesn't support SCIM. Y
 
 The sync tool doesn't handle the following operations:
 
-- **Creating a `Credential`.** Users must open a one-time link to link a passkey or an upstream account. The sync tool can't decide who can sign in with which account.
+- **Creating a `Credential`.** Users must open a one-time link to create a passkey, set a password or link an upstream account. The sync tool can't decide who can sign in with which account.
 - **Creating an `Invitation`.** An invitation link can register a passkey for an existing user, so anyone with permission to create invitations can take over any account. Keep this permission with admins who run `zeabur-identityctl invite --username <name>`, or assign it to a separate job with admin-equivalent privileges.
 - **Setting up admin accounts.** An admin can manually make a synced user an admin account. The sync tool preserves the account type during subsequent updates.
-- **Deleting users.** Before you safely remove a user, you must delete their credentials and sessions. See [Sign out, recover, and remove users](./offboarding.mdx). Disabling an account blocks sign-in, and you can re-enable it later.
+- **Deleting users.** Deleting the `User` makes its credentials, sessions and invitations unusable; delete them as well to clean up at once. See [Sign out, recover, and remove users](./offboarding.mdx). Disabling an account blocks sign-in, and you can re-enable it later.
 
 Match people by the directory's permanent ID, and store that ID in a `User` annotation. Don't match by email address: someone else may reuse the same address after a person leaves.
 

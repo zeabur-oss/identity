@@ -50,7 +50,7 @@ kubectl -n zeabur-identity patch zbuser alice --type merge -p '{"spec":{"account
 kubectl -n zeabur-identity get zbuser            # the Type column shows the account type
 ```
 
-變更會在使用者下次登入或更新權杖時生效。已核發的存取權杖在到期前仍然有效，最長為 5 分鐘或 10 分鐘。帳號改為管理員後，原有的 GitHub 和 Google 工作階段會在下次更新權杖時結束。
+變更會在使用者下次登入或更新權杖時生效。已核發的存取權杖在到期前仍然有效，最長為 5 分鐘或 10 分鐘。帳號改為管理員後，如果原有的工作階段是 `admin-sign-in` 不允許的登入方式（例如外部帳號），下次更新權杖時就會結束。
 
 目錄同步不會變更帳號的管理員身分，詳見[從目錄同步使用者](./provisioning.mdx)。
 
@@ -89,7 +89,7 @@ Zeabur Identity 不保留單一登入工作階段，所以每次授權請求都�
 | 鍵 | 可用值 | 預設值 | 用途 |
 |---|---|---|---|
 | `teams` | `single`、`multiple` | `single` | 設為 `multiple` 時，管理員工作階段預設在閒置 15 分鐘後結束。 |
-| `admin-sign-in` | `any`、`two-factor`、`passkey`、`device-bound-passkey` | `two-factor` | 管理員帳號的登入方式，詳見下方〈選擇管理員的登入方式〉。 |
+| `admin-sign-in` | `any`、`two-factor`、`passkey`、`device-bound-passkey` | `two-factor` | 管理員帳號的登入方式，詳見[選擇管理員的登入方式](#選擇管理員的登入方式)。 |
 
 每次安裝都從單一團隊模式開始，管理員與一般帳號使用相同的閒置時限。
 
@@ -132,15 +132,15 @@ Zeabur Identity 會在下次登入或更新權杖時套用設定，不需要重�
 
 設為 `two-factor` 時，管理員在設定頁面設定密碼，還要用驗證器 App 掃描 QR Code，再輸入 App 顯示的驗證碼。Google Authenticator、Microsoft Authenticator 或 1Password 都可以使用。接著設定頁面會顯示 10 組備援碼，只會顯示這一次。每組備援碼可以代替 App 的驗證碼使用一次。
 
-管理員用密碼登入時，登入頁面接著會要求輸入驗證碼。每個驗證碼只能用一次。輸錯驗證碼和輸錯密碼算在同一個次數限制裡，詳見[新增與管理使用者](./manage-users.mdx)。
+管理員用密碼登入時，登入頁面接著會要求輸入驗證碼。每個驗證碼只能用一次。輸錯驗證碼和輸錯密碼算在同一個次數限制裡，詳見[密碼](./manage-users.mdx#密碼)。
 
-在 `any` 設定下設定的管理員密碼沒有驗證器 App，所以改成 `two-factor` 後就不能再用。要重設密碼，或管理員無法再使用驗證器 App 時，請刪除密碼的 `Credential`，再寄出新的設定連結。設定新密碼時，也會一併設定新的驗證器與備援碼。
+在 `any` 設定下設定的管理員密碼沒有驗證器 App，所以改成 `two-factor` 後就不能再用。要重設密碼，或管理員無法再使用驗證器 App 時，請刪除密碼的 `Credential`，再寄出新的設定連結。如果管理員還有通行密鑰或已連結的帳號，設定連結要加上 `--reset`，這些也會一併刪除。設定新密碼時，也會一併設定新的驗證器與備援碼。
 
 ## 限制管理員使用裝置綁定的通行密鑰（AAL3）
 
 將 `admin-sign-in` 設為 `device-bound-passkey` 後，管理員帳號只能使用裝置綁定的通行密鑰，例如安全金鑰，或只留在單一裝置上的通行密鑰。
 
-Zeabur Identity 會在登入、新增通行密鑰及更新權杖時，拒絕 iCloud Keychain、Google Password Manager 等同步通行密鑰。如果工作階段是用同步通行密鑰或密碼建立的，就會在下次更新權杖時結束。拒絕訊息如下：
+Zeabur Identity 會在登入、新增通行密鑰及更新權杖時，拒絕 iCloud Keychain、Google Password Manager 等同步通行密鑰。如果工作階段是用同步通行密鑰、密碼或外部帳號建立的，就會在下次更新權杖時結束。拒絕訊息如下：
 
 > 這個通行密鑰會同步到其他裝置。這裡的管理員帳號要用安全金鑰，或只存在一台裝置上的通行密鑰。
 

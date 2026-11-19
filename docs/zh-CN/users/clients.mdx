@@ -47,6 +47,7 @@ Zeabur Identity 会逐字匹配 Redirect URI。`zeabur-identityctl` 只接受浏
 |---|---|
 | `--audience kubernetes` | 让客户端获取 kube-apiserver 接受的令牌。只有应用需要以登录者身份调用 Kubernetes API 时才加入。 |
 | `--home-url` | 指定用户打开应用的地址，例如 `https://zeabur.example.com/`。只接受 `https://`，格式规则与 Redirect URI 相同。 |
+| `--id-token-signing-alg RS256` | 这个客户端的 ID 令牌改用 RS256 签名，不用 ES256。只有应用无法验证 ES256 时才加入。 |
 
 配置 `--home-url` 后，用户直接打开登录页、没有要登录的应用时，或完成通行密钥配置后，登录页会提供打开应用的入口，并显示应用名称。任何能打开登录页的人都能看到这些名称与地址。
 

@@ -1,25 +1,48 @@
 ---
 title: Get started with Zeabur Identity
-description: Use a passkey to sign in to your self-managed Kubernetes cluster and replace an admin.conf that never expires.
+description: Everyone signs in with their own account, by passkey, GitHub, Google, an OpenID provider or a password. Use Zeabur Identity through Zeabur, or on its own to sign in to kubectl.
 ---
 
-Zeabur Identity issues sign-in tokens inside your cluster. `kubectl` opens a browser, you verify your identity with a passkey, and the token you receive is valid for only a few minutes. The cluster no longer needs an admin kubeconfig copied to every laptop.
+Zeabur Identity is the sign-in for your cluster. Each person signs in with their own account, using a passkey, GitHub, Google, your company's OpenID provider or a password, and gets a token that lasts a few minutes. Admins need two factors by default. Nobody shares an admin password or an admin kubeconfig.
 
-## Start with an Ubuntu server
+## I use Zeabur
 
-Prepare an Ubuntu server and your computer. Follow the guide to install k3s and Zeabur Identity, create the first admin's passkey, and sign in with `kubectl` on your computer.
+Zeabur's sign-in page is Zeabur Identity, so a cluster that runs Zeabur already has it. You manage people in Zeabur:
 
-[Install on k3s on Ubuntu and sign in to kubectl with a passkey](get-started/quickstart.mdx)
+- To invite people and choose which projects they can open, use **Members**. See [Invite members and assign project permissions](https://oss.zeabur.com/docs/zeabur/cluster/members/).
+- To set up Zeabur on a cluster, install Zeabur Identity first. [Install Zeabur in an existing cluster](https://oss.zeabur.com/docs/zeabur/install/existing-cluster/) lists what you need and links back here for the steps.
 
-## Install on an existing cluster
+To move from zeabur.com to your own server, or for anything else about Zeabur, see the [Zeabur documentation](https://oss.zeabur.com/docs/zeabur/).
 
-Prepare a cluster admin kubeconfig and an Issuer URL that's accessible over HTTPS. Use `zeabur-identityctl` to install the CRD and manifests, then configure kube-apiserver to trust Zeabur Identity.
+## I use Zeabur Identity on its own
 
-[Install Zeabur Identity on an existing cluster](get-started/existing-cluster.mdx)
+Zeabur Identity replaces the admin kubeconfig that never expires. `kubectl` opens a browser, you sign in, and kube-apiserver checks the short-lived token on every request. Users, credentials, and clients are Kubernetes objects in the `zeabur-identity` Namespace, with no database.
 
-## After installation
+### Get started
+
+Each step ends with a command that checks it worked.
+
+- [Install on k3s on Ubuntu and sign in to kubectl](get-started/quickstart.mdx): Install k3s and Zeabur Identity on a new server, set up the first admin, and sign in from your computer.
+- [Install Zeabur Identity on an existing cluster](get-started/existing-cluster.mdx): Bring a cluster-admin kubeconfig and an HTTPS Issuer URL.
+
+### People and apps
 
 - [Add and manage users](users/manage-users.mdx): Invite teammates, adjust groups, and add a second passkey.
-- [Add an upstream sign-in](users/upstream-sign-in.mdx): Let users sign in with a linked GitHub, Google or company account.
+- [Admin accounts and sessions](users/admin-sessions.mdx): Choose how admins sign in and how long sessions last.
+- [Sign out users, recover accounts, and remove users](users/offboarding.mdx)
+- [Add an upstream sign-in](users/upstream-sign-in.mdx): Let users sign in with GitHub, Google or an OpenID provider such as Keycloak.
+- [Sync users from a directory](users/provisioning.mdx)
 - [Register clients](users/clients.mdx): Use Zeabur Identity to sign in to Grafana and Argo CD, too.
-- [Back up and restore](operations/backup-restore.mdx) and [keep an access path that bypasses Zeabur Identity](operations/emergency-access.mdx): Retain access to the cluster when something goes wrong.
+
+### Keep access when something goes wrong
+
+- [Keep an access path that bypasses Zeabur Identity](operations/emergency-access.mdx)
+- [Back up and restore](operations/backup-restore.mdx)
+- [Upgrade and roll back](operations/upgrade.mdx)
+
+### Understand how it works
+
+- [Architecture](reference/architecture.mdx)
+- [Specification conformance](reference/conformance.mdx)
+- [Release files and verification](reference/releases.mdx)
+- [Security and support policy](reference/security.mdx)

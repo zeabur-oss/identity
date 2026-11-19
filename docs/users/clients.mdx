@@ -47,6 +47,7 @@ Add other options as needed:
 |---|---|
 | `--audience kubernetes` | Let the client obtain tokens that kube-apiserver accepts. Add this only when the application needs to call the Kubernetes API as the signed-in user. |
 | `--home-url` | Specify the address users open to access the application, such as `https://zeabur.example.com/`. Only `https://` is accepted, with the same format rules as redirect URIs. |
+| `--id-token-signing-alg RS256` | Sign this client's ID tokens with RS256 instead of ES256. Add this only when the application can't verify ES256. |
 
 When you set `--home-url`, the sign-in page displays the application’s name and a link to open it when users open the sign-in page directly without an application to sign in to, or after they finish setting up a passkey. Anyone who can open the sign-in page can see these names and addresses.
 
