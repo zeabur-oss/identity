@@ -172,7 +172,7 @@ function refused(reply: Reply, place: Place, passkey: string): void {
   const code = problem(reply)
   if (stale.has(code)) refresh(code, passkey)
   else if (code === "password-weak")
-    fail(place, text(weaknesses[(reply.body as Problem).weakness ?? ""] ?? "msgCommon"))
+    fail(place, text(weaknesses[String((reply.body as Problem).weakness)] ?? "msgCommon"))
   else fail(place, explain(code))
 }
 
