@@ -47,9 +47,14 @@ fn resources() -> ExitCode {
         output::stderr("error: the Deployment's memory request is not a whole number of Mi");
         return ExitCode::FAILURE;
     };
-    print_json(serde_json::to_string(
-        &serde_json::json!({ "requestMemoryMiB": request_memory_mib }),
-    ))
+    print_json(serde_json::to_string(&Resources { request_memory_mib }))
+}
+
+/// `resources` output, read by CI.
+#[derive(serde::Serialize)]
+struct Resources {
+    #[serde(rename = "requestMemoryMiB")]
+    request_memory_mib: u64,
 }
 
 fn client_create(args: ClientCreateArgs) -> ExitCode {

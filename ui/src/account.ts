@@ -9,6 +9,7 @@ import {
   messages,
   post,
   problem,
+  redirect,
   type Reply,
   registrationJson,
   requestOptions,
@@ -17,6 +18,7 @@ import {
   write,
 } from "./webauthn"
 import { codeStep, entered, wireOtherAccount } from "./password"
+import type { Problem } from "./contract"
 
 const root = document.getElementById("account")
 const text = messages(root)
@@ -170,7 +172,7 @@ function refused(reply: Reply, place: Place, passkey: string): void {
   const code = problem(reply)
   if (stale.has(code)) refresh(code, passkey)
   else if (code === "password-weak")
-    fail(place, text(weaknesses[String(reply.body.weakness)] ?? "msgCommon"))
+    fail(place, text(weaknesses[String((reply.body as Problem).weakness)] ?? "msgCommon"))
   else fail(place, explain(code))
 }
 
@@ -254,8 +256,9 @@ function wirePasskey(item: HTMLElement): void {
 function link(provider: string): void {
   run(async () => {
     const reply = await fresh(header, () => post("/account/links/start", { provider }))
-    if (!reply.ok || typeof reply.body.redirect_to !== "string") return reply
-    window.location.assign(reply.body.redirect_to)
+    const to = redirect(reply)
+    if (!to) return reply
+    window.location.assign(to)
     return null
   })
 }

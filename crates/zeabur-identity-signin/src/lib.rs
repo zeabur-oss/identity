@@ -8,6 +8,9 @@ pub mod password;
 pub mod problem;
 pub mod upstream;
 
+#[cfg(test)]
+mod contract;
+
 use std::sync::Arc;
 
 use axum::Router;
@@ -18,6 +21,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use webauthn_rs::prelude::{
@@ -40,7 +44,7 @@ use crate::account::{Audit, record};
 use crate::device::Requester;
 use crate::passkeys::{Passkeys, authenticator, backup_flags, credential_name};
 use crate::password::Passwords;
-use crate::problem::Problem;
+use crate::problem::{Extensions, Problem, UnknownCredential};
 use crate::upstream::provider::Providers;
 
 /// Cookie holding the sealed WebAuthn ceremony state (`SameSite=Strict`).
@@ -420,7 +424,7 @@ where
     // Checked after the assertion verifies, so the answer says nothing about unproven keys.
     // A credential can become eligible for backup after enrolment, so both must say no.
     let device_bound =
-        !backup_flags(&stored.record).0 && !passkeys::assertion_backup_eligible(response);
+        !backup_flags(&passkey).eligible && !passkeys::assertion_backup_eligible(response);
     check_account(
         &service.oauth.directory,
         &user,
@@ -439,10 +443,13 @@ impl Refused {
     /// The response, with `unknownCredential` for an unregistered credential.
     pub(crate) fn respond(self, rp_id: &str) -> Response {
         match self.unknown {
-            Some(id) => self.problem.with(
-                "unknownCredential",
-                serde_json::json!({ "rpId": rp_id, "credentialId": URL_SAFE_NO_PAD.encode(id) }),
-            ),
+            Some(id) => self.problem.with(Extensions {
+                unknown_credential: Some(UnknownCredential {
+                    rp_id: rp_id.to_owned(),
+                    credential_id: URL_SAFE_NO_PAD.encode(id),
+                }),
+                ..Extensions::default()
+            }),
             None => self.problem.into_response(),
         }
     }
@@ -474,7 +481,7 @@ pub(crate) async fn touch<D, G, C, K, S>(
 /// The user's registered credentials, for `signalAllAcceptedCredentials` (WebAuthn Level 3
 /// §5.1.10.2). Only a complete list read from storage is sent; an empty one never is, so a
 /// failed or partial read cannot make a provider hide working passkeys.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Accepted {
     rp_id: String,
@@ -795,8 +802,9 @@ where
     result.unwrap_or_else(IntoResponse::into_response)
 }
 
-#[derive(Serialize)]
-struct SignInResponse {
+#[derive(Serialize, JsonSchema)]
+#[schemars(rename = "PasskeySignedIn")]
+pub(crate) struct SignInResponse {
     redirect_to: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     accepted: Option<Accepted>,

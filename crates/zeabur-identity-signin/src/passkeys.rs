@@ -9,10 +9,11 @@
 
 use thiserror::Error;
 use webauthn_rs::prelude::{
-    DiscoverableAuthentication, Passkey, PasskeyRegistration, PublicKeyCredential,
-    RegisterPublicKeyCredential, RequestChallengeResponse, Url, Uuid, Webauthn, WebauthnBuilder,
-    WebauthnError,
+    CreationChallengeResponse, Credential, DiscoverableAuthentication, Passkey,
+    PasskeyRegistration, PublicKeyCredential, RegisterPublicKeyCredential,
+    RequestChallengeResponse, Url, Uuid, Webauthn, WebauthnBuilder, WebauthnError,
 };
+use webauthn_rs_proto::ResidentKeyRequirement;
 use zeabur_identity_core::config::BaseUrl;
 
 /// A failed ceremony. Details are logged by the caller; users see a generic message.
@@ -80,23 +81,17 @@ impl Passkeys {
         username: &str,
         display_name: &str,
         exclude: Vec<Vec<u8>>,
-    ) -> Result<(serde_json::Value, PasskeyRegistration), PasskeyError> {
+    ) -> Result<(CreationChallengeResponse, PasskeyRegistration), PasskeyError> {
         let exclude = (!exclude.is_empty()).then_some(exclude);
-        let (options, state) = self
+        let (mut options, state) = self
             .webauthn
             .start_passkey_registration(handle, username, display_name, exclude)
             .map_err(|e| PasskeyError::Verification(e.to_string()))?;
-        let mut options =
-            serde_json::to_value(options).map_err(|e| PasskeyError::Verification(e.to_string()))?;
         // Sign-in uses discoverable credentials (no username first), so the credential must be
         // resident. webauthn-rs defaults to non-resident for broad compatibility.
-        if let Some(selection) = options
-            .get_mut("publicKey")
-            .and_then(|p| p.get_mut("authenticatorSelection"))
-            .and_then(serde_json::Value::as_object_mut)
-        {
-            selection.insert("requireResidentKey".into(), true.into());
-            selection.insert("residentKey".into(), "required".into());
+        if let Some(selection) = options.public_key.authenticator_selection.as_mut() {
+            selection.require_resident_key = true;
+            selection.resident_key = Some(ResidentKeyRequirement::Required);
         }
         Ok((options, state))
     }
@@ -225,18 +220,23 @@ pub fn assertion_backup_eligible(response: &PublicKeyCredential) -> bool {
         .is_some_and(|flags| flags & FLAG_BE != 0)
 }
 
-/// The BE and BS flags as recorded in a stored credential record.
+/// The backup flags of a registered passkey (WebAuthn Level 3 §6.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BackupFlags {
+    /// BE: the credential may be synced.
+    pub eligible: bool,
+    /// BS: the credential is synced.
+    pub state: bool,
+}
+
+/// The BE and BS flags webauthn-rs recorded for `passkey`.
 #[must_use]
-pub fn backup_flags(record: &str) -> (bool, bool) {
-    let value: serde_json::Value = serde_json::from_str(record).unwrap_or_default();
-    let flag = |name: &str| {
-        value
-            .get("cred")
-            .and_then(|cred| cred.get(name))
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false)
-    };
-    (flag("backup_eligible"), flag("backup_state"))
+pub fn backup_flags(passkey: &Passkey) -> BackupFlags {
+    let credential = Credential::from(passkey.clone());
+    BackupFlags {
+        eligible: credential.backup_eligible,
+        state: credential.backup_state,
+    }
 }
 
 /// The `authData` byte string in a CBOR attestation object (WebAuthn Level 3 §6.5.4): a map
@@ -328,7 +328,7 @@ mod tests {
         let (options, _) = passkeys
             .begin_registration(Uuid::nil(), "alice", "Alice", vec![b"old".to_vec()])
             .unwrap();
-        let json = options;
+        let json = serde_json::to_value(&options).unwrap();
         let selection = &json["publicKey"]["authenticatorSelection"];
         assert_eq!(selection["residentKey"], "required");
         assert_eq!(selection["requireResidentKey"], true);
@@ -386,14 +386,6 @@ mod tests {
         for garbage in [&[][..], &[0xA1], &[0xBF, 0xFF], &[0xA1, 0x7B, 0xFF]] {
             assert_eq!(auth_data(garbage), None);
         }
-    }
-
-    #[test]
-    fn reads_backup_flags_from_records() {
-        let record = r#"{"cred":{"backup_eligible":true,"backup_state":false}}"#;
-        assert_eq!(backup_flags(record), (true, false));
-        assert_eq!(backup_flags("{}"), (false, false));
-        assert_eq!(backup_flags("not json"), (false, false));
     }
 
     #[test]

@@ -4547,6 +4547,7 @@ dependencies = [
  "http",
  "icu_normalizer",
  "proptest",
+ "schemars 1.2.3",
  "serde",
  "thiserror 2.0.21",
 ]
@@ -4667,6 +4668,7 @@ dependencies = [
  "public-suffix",
  "qrcode",
  "rustls",
+ "schemars 1.2.3",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -4675,6 +4677,7 @@ dependencies = [
  "tracing",
  "url",
  "webauthn-rs",
+ "webauthn-rs-proto",
  "zeabur-identity-api",
  "zeabur-identity-core",
  "zeabur-identity-keys",
@@ -4741,6 +4744,7 @@ version = "0.3.1"
 dependencies = [
  "clap",
  "kube",
+ "serde",
  "serde_json",
  "tokio",
  "zeabur-identity-api",

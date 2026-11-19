@@ -1,5 +1,6 @@
 #![doc = include_str!("../README.md")]
 
+pub mod cert_manager;
 pub mod clients;
 pub mod credentials;
 pub mod deployment;

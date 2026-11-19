@@ -21,6 +21,8 @@ use aws_lc_rs::pbkdf2::{self, PBKDF2_HMAC_SHA256};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD_NO_PAD;
 use icu_normalizer::ComposingNormalizerBorrowed;
+use schemars::JsonSchema;
+use serde::Serialize;
 
 use crate::crypto::{CryptoError, ct_eq, random};
 
@@ -44,7 +46,8 @@ static COMMON: [&str; line_count(COMMON_TEXT)] = lines(COMMON_TEXT);
 const COMMON_TEXT: &str = include_str!("../data/common-passwords.txt");
 
 /// Why a new password is refused.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
 pub enum Weakness {
     /// Fewer than [`MIN_CHARS`] characters.
     TooShort,

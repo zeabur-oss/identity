@@ -80,19 +80,22 @@
 //! [K3s]: https://docs.k3s.io/cli/server
 //! [RKE2]: https://docs.rke2.io/reference/server_config
 
+use std::fmt::Debug;
 use std::net::IpAddr;
 use std::time::Duration;
 
 use clap::ValueEnum;
 use k8s_openapi::api::core::v1::{Secret, Service};
 use kube::Client;
-use kube::api::{Api, ApiResource, DynamicObject, GroupVersionKind, Patch, PatchParams};
-use serde_json::Value;
+use kube::api::{Api, Patch, PatchParams};
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 use thiserror::Error;
 use zeabur_identity_api::IDENTITY_PREFIX;
 use zeabur_identity_core::config::{BaseUrl, ConfigError};
 use zeabur_identity_core::protocol::OPENID_CONFIGURATION_PATH;
 
+use crate::cert_manager::{Certificate, Issuer};
 use crate::internal_tls::{self, TlsError};
 use crate::rbac::NAME;
 
@@ -187,23 +190,91 @@ pub enum KubeConfigError {
     /// An option is invalid.
     #[error(transparent)]
     Config(#[from] ConfigError),
+    /// The configuration could not be serialised.
+    #[error("rendering the configuration failed: {0}")]
+    Render(#[from] serde_json::Error),
     /// An audience cannot be used.
     #[error("audience {0:?} must be non-empty printable ASCII without spaces")]
     BadAudience(String),
 }
 
-/// A YAML double-quoted scalar (JSON string syntax is valid YAML).
-fn quoted(value: &str) -> String {
-    Value::String(value.to_owned()).to_string()
-}
-
 /// The first line of the generated file.
 const HEADER: &str = "# kube-apiserver AuthenticationConfiguration for Zeabur Identity, from `zeabur-identityctl kube-config`.";
 
-/// Why an ID token is refused, as kube-apiserver reports it.
-const ID_TOKEN_MESSAGE: &str = "    message: \"only Zeabur Identity access tokens are accepted (ID tokens carry no client_id)\"";
+/// The `apiserver.config.k8s.io/v1` `AuthenticationConfiguration` fields Zeabur Identity sets
+/// ([reference](https://kubernetes.io/docs/reference/config-api/apiserver-config.v1/#apiserver-config-k8s-io-v1-AuthenticationConfiguration)).
+/// `k8s-openapi` has no type for it, as it is a file, not an API object.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AuthenticationConfiguration {
+    api_version: &'static str,
+    kind: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    anonymous: Option<Anonymous>,
+    jwt: Vec<JwtAuthenticator>,
+}
 
-/// Renders the `AuthenticationConfiguration` (YAML).
+#[derive(Serialize)]
+struct Anonymous {
+    enabled: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct JwtAuthenticator {
+    issuer: JwtIssuer,
+    claim_validation_rules: Vec<Rule>,
+    claim_mappings: ClaimMappings,
+    user_validation_rules: Vec<Rule>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct JwtIssuer {
+    url: String,
+    #[serde(rename = "discoveryURL", skip_serializing_if = "Option::is_none")]
+    discovery_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    certificate_authority: Option<String>,
+    audiences: Vec<String>,
+    audience_match_policy: &'static str,
+}
+
+/// A claim or user validation rule: a CEL expression and the message when it is false.
+#[derive(Serialize)]
+struct Rule {
+    expression: String,
+    message: String,
+}
+
+#[derive(Serialize)]
+struct ClaimMappings {
+    username: PrefixedClaim,
+    groups: PrefixedClaim,
+    uid: Claim,
+    extra: Vec<ExtraMapping>,
+}
+
+#[derive(Serialize)]
+struct PrefixedClaim {
+    claim: &'static str,
+    prefix: &'static str,
+}
+
+#[derive(Serialize)]
+struct Claim {
+    claim: &'static str,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExtraMapping {
+    key: String,
+    value_expression: &'static str,
+}
+
+/// Renders the `AuthenticationConfiguration`: a comment line, then JSON, which kube-apiserver
+/// reads as YAML.
 ///
 /// # Errors
 ///
@@ -216,81 +287,71 @@ pub fn authentication_configuration(options: &ApiserverOptions) -> Result<String
     {
         return Err(KubeConfigError::BadAudience(bad.clone()));
     }
-    let mut out = String::new();
-    let mut line = |text: &str| {
-        out.push_str(text);
-        out.push('\n');
-    };
-    line(HEADER);
-    line("apiVersion: apiserver.config.k8s.io/v1");
-    line("kind: AuthenticationConfiguration");
-    match options.distro {
-        // K3s/RKE2 drop their own --anonymous-auth=false when they see this file; restore it.
-        Distro::K3s => {
-            line("anonymous:");
-            line("  enabled: false");
-        }
-        Distro::Generic => {}
-    }
-    line("jwt:");
-    line("- issuer:");
-    line(&format!("    url: {}", quoted(options.issuer.as_str())));
-    if let Some(internal) = &options.internal {
-        line(&format!(
-            "    discoveryURL: {}",
-            quoted(&internal.url.join(OPENID_CONFIGURATION_PATH))
-        ));
-        line("    certificateAuthority: |");
-        for pem in internal.ca_pem.lines().filter(|l| !l.trim().is_empty()) {
-            line(&format!("      {}", pem.trim_end()));
-        }
-    }
-    line("    audiences:");
-    for audience in &options.audiences {
-        line(&format!("    - {}", quoted(audience)));
-    }
-    line("    audienceMatchPolicy: MatchAny");
-    line("  claimValidationRules:");
-    line("  - expression: \"has(claims.client_id)\"");
-    line(ID_TOKEN_MESSAGE);
     let lifetime = options.max_token_lifetime.as_secs();
-    line(&format!(
-        "  - expression: \"claims.exp - claims.iat <= {lifetime}\""
-    ));
-    line(&format!(
-        "    message: \"token lifetime must not exceed {lifetime} seconds\""
-    ));
-    line("  claimMappings:");
-    line("    username:");
-    line("      claim: preferred_username");
-    line(&format!("      prefix: {}", quoted(IDENTITY_PREFIX)));
-    line("    groups:");
-    line("      claim: groups");
-    line(&format!("      prefix: {}", quoted(IDENTITY_PREFIX)));
-    line("    uid:");
-    line("      claim: sub");
-    line("    extra:");
-    line(&format!(
-        "    - key: {}",
-        quoted(&format!("{EXTRA_PREFIX}client-id"))
-    ));
-    line("      valueExpression: \"claims.client_id\"");
-    line(&format!(
-        "    - key: {}",
-        quoted(&format!("{EXTRA_PREFIX}amr"))
-    ));
-    line("      valueExpression: \"has(claims.amr) ? claims.amr : []\"");
-    line(&format!(
-        "    - key: {}",
-        quoted(&format!("{EXTRA_PREFIX}jti"))
-    ));
-    line("      valueExpression: \"claims.jti\"");
-    line("  userValidationRules:");
-    line("  - expression: \"!user.username.startsWith('system:')\"");
-    line("    message: \"the system: prefix is reserved\"");
-    line("  - expression: \"user.groups.all(g, !g.startsWith('system:'))\"");
-    line("    message: \"the system: prefix is reserved\"");
-    Ok(out)
+    let extra = |key: &str, value_expression| ExtraMapping {
+        key: format!("{EXTRA_PREFIX}{key}"),
+        value_expression,
+    };
+    let reserved = |expression: &str| Rule {
+        expression: expression.to_owned(),
+        message: "the system: prefix is reserved".to_owned(),
+    };
+    let configuration = AuthenticationConfiguration {
+        api_version: "apiserver.config.k8s.io/v1",
+        kind: "AuthenticationConfiguration",
+        anonymous: match options.distro {
+            // K3s/RKE2 drop their own --anonymous-auth=false when they see this file; restore it.
+            Distro::K3s => Some(Anonymous { enabled: false }),
+            Distro::Generic => None,
+        },
+        jwt: vec![JwtAuthenticator {
+            issuer: JwtIssuer {
+                url: options.issuer.as_str().to_owned(),
+                discovery_url: options
+                    .internal
+                    .as_ref()
+                    .map(|internal| internal.url.join(OPENID_CONFIGURATION_PATH)),
+                certificate_authority: options
+                    .internal
+                    .as_ref()
+                    .map(|internal| internal.ca_pem.clone()),
+                audiences: options.audiences.clone(),
+                audience_match_policy: "MatchAny",
+            },
+            claim_validation_rules: vec![
+                Rule {
+                    expression: "has(claims.client_id)".to_owned(),
+                    message: "only Zeabur Identity access tokens are accepted (ID tokens carry no client_id)".to_owned(),
+                },
+                Rule {
+                    expression: format!("claims.exp - claims.iat <= {lifetime}"),
+                    message: format!("token lifetime must not exceed {lifetime} seconds"),
+                },
+            ],
+            claim_mappings: ClaimMappings {
+                username: PrefixedClaim {
+                    claim: "preferred_username",
+                    prefix: IDENTITY_PREFIX,
+                },
+                groups: PrefixedClaim {
+                    claim: "groups",
+                    prefix: IDENTITY_PREFIX,
+                },
+                uid: Claim { claim: "sub" },
+                extra: vec![
+                    extra("client-id", "claims.client_id"),
+                    extra("amr", "has(claims.amr) ? claims.amr : []"),
+                    extra("jti", "claims.jti"),
+                ],
+            },
+            user_validation_rules: vec![
+                reserved("!user.username.startsWith('system:')"),
+                reserved("user.groups.all(g, !g.startsWith('system:'))"),
+            ],
+        }],
+    };
+    let json = serde_json::to_string_pretty(&configuration)?;
+    Ok(format!("{HEADER}\n{json}\n"))
 }
 
 /// How to install the file on `distro`, for the cluster admin (plain text).
@@ -354,7 +415,7 @@ pub struct Request {
 }
 
 /// Prepares the cluster for internal discovery (if chosen) and renders the
-/// `AuthenticationConfiguration` (YAML).
+/// `AuthenticationConfiguration`.
 ///
 /// # Errors
 ///
@@ -400,34 +461,13 @@ async fn ensure_certificate(
         format!("{NAME}.{namespace}.svc"),
         format!("{NAME}.{namespace}.svc.cluster.local"),
     ];
-    let params = PatchParams::apply(FIELD_MANAGER).force();
-    for object in internal_tls::objects(namespace, ip, &dns_names) {
-        let text = |pointer: &str| object.pointer(pointer).and_then(Value::as_str);
-        let (Some(kind), Some(name)) = (text("/kind"), text("/metadata/name")) else {
-            continue;
-        };
-        let resource = ApiResource::from_gvk_with_plural(
-            &GroupVersionKind::gvk("cert-manager.io", "v1", kind),
-            &format!("{}s", kind.to_ascii_lowercase()),
-        );
-        let api: Api<DynamicObject> = Api::namespaced_with(client.clone(), namespace, &resource);
-        match api.patch(name, &params, &Patch::Apply(&object)).await {
-            Ok(_) => {}
-            Err(kube::Error::Api(status)) if status.code == 404 => {
-                return Err(KubeConfigError::NoCertManager);
-            }
-            Err(error) => return Err(error.into()),
-        }
-    }
-
-    let certificates: Api<DynamicObject> = Api::namespaced_with(
-        client,
-        namespace,
-        &ApiResource::from_gvk_with_plural(
-            &GroupVersionKind::gvk("cert-manager.io", "v1", "Certificate"),
-            "certificates",
-        ),
-    );
+    let objects = internal_tls::objects(namespace, ip, &dns_names);
+    let issuers: Api<Issuer> = Api::namespaced(client.clone(), namespace);
+    let certificates: Api<Certificate> = Api::namespaced(client, namespace);
+    apply(&issuers, &objects.root_issuer).await?;
+    apply(&certificates, &objects.ca).await?;
+    apply(&issuers, &objects.ca_issuer).await?;
+    apply(&certificates, &objects.serving).await?;
     for name in [internal_tls::CA_SECRET, internal_tls::SECRET] {
         wait_until_ready(&certificates, namespace, name).await?;
     }
@@ -437,24 +477,22 @@ async fn ensure_certificate(
     Ok(InternalDiscovery { url, ca_pem })
 }
 
-/// Whether cert-manager reports the Certificate `Ready` for its current spec.
-fn ready(certificate: &DynamicObject) -> bool {
-    let generation = certificate.metadata.generation;
-    certificate
-        .data
-        .pointer("/status/conditions")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .any(|condition| {
-            condition.get("type").and_then(Value::as_str) == Some("Ready")
-                && condition.get("status").and_then(Value::as_str) == Some("True")
-                && condition.get("observedGeneration").and_then(Value::as_i64) == generation
-        })
+/// Server-side applies a cert-manager object; a 404 means cert-manager is not installed.
+async fn apply<K>(api: &Api<K>, object: &K) -> Result<(), KubeConfigError>
+where
+    K: kube::Resource + Clone + Serialize + DeserializeOwned + Debug + Sync,
+{
+    let name = object.meta().name.as_deref().unwrap_or_default();
+    let params = PatchParams::apply(FIELD_MANAGER).force();
+    match api.patch(name, &params, &Patch::Apply(object)).await {
+        Ok(_) => Ok(()),
+        Err(kube::Error::Api(status)) if status.code == 404 => Err(KubeConfigError::NoCertManager),
+        Err(error) => Err(error.into()),
+    }
 }
 
 async fn wait_until_ready(
-    certificates: &Api<DynamicObject>,
+    certificates: &Api<Certificate>,
     namespace: &str,
     name: &'static str,
 ) -> Result<(), KubeConfigError> {
@@ -464,7 +502,7 @@ async fn wait_until_ready(
             .get_opt(name)
             .await?
             .as_ref()
-            .is_some_and(ready)
+            .is_some_and(Certificate::is_ready)
         {
             return Ok(());
         }
@@ -495,65 +533,70 @@ mod tests {
         }
     }
 
+    /// The JSON after the comment line.
+    fn body(file: &str) -> serde_json::Value {
+        let (header, json) = file.split_once('\n').unwrap();
+        assert_eq!(header, HEADER);
+        serde_json::from_str(json).unwrap()
+    }
+
     #[test]
     fn k3s_internal_configuration() {
-        let yaml = authentication_configuration(&options(Distro::K3s, true)).unwrap();
-        let expected = r#"# kube-apiserver AuthenticationConfiguration for Zeabur Identity, from `zeabur-identityctl kube-config`.
-apiVersion: apiserver.config.k8s.io/v1
-kind: AuthenticationConfiguration
-anonymous:
-  enabled: false
-jwt:
-- issuer:
-    url: "https://login.example.com"
-    discoveryURL: "https://10.43.0.53/.well-known/openid-configuration"
-    certificateAuthority: |
-      -----BEGIN CERTIFICATE-----
-      AAAA
-      -----END CERTIFICATE-----
-    audiences:
-    - "kubernetes"
-    audienceMatchPolicy: MatchAny
-  claimValidationRules:
-  - expression: "has(claims.client_id)"
-    message: "only Zeabur Identity access tokens are accepted (ID tokens carry no client_id)"
-  - expression: "claims.exp - claims.iat <= 3600"
-    message: "token lifetime must not exceed 3600 seconds"
-  claimMappings:
-    username:
-      claim: preferred_username
-      prefix: "zeabur:"
-    groups:
-      claim: groups
-      prefix: "zeabur:"
-    uid:
-      claim: sub
-    extra:
-    - key: "identity.zeabur.com/client-id"
-      valueExpression: "claims.client_id"
-    - key: "identity.zeabur.com/amr"
-      valueExpression: "has(claims.amr) ? claims.amr : []"
-    - key: "identity.zeabur.com/jti"
-      valueExpression: "claims.jti"
-  userValidationRules:
-  - expression: "!user.username.startsWith('system:')"
-    message: "the system: prefix is reserved"
-  - expression: "user.groups.all(g, !g.startsWith('system:'))"
-    message: "the system: prefix is reserved"
-"#;
-        assert_eq!(yaml, expected);
+        let file = authentication_configuration(&options(Distro::K3s, true)).unwrap();
+        let expected = serde_json::json!({
+            "apiVersion": "apiserver.config.k8s.io/v1",
+            "kind": "AuthenticationConfiguration",
+            "anonymous": {"enabled": false},
+            "jwt": [{
+                "issuer": {
+                    "url": "https://login.example.com",
+                    "discoveryURL": "https://10.43.0.53/.well-known/openid-configuration",
+                    "certificateAuthority": "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n",
+                    "audiences": ["kubernetes"],
+                    "audienceMatchPolicy": "MatchAny",
+                },
+                "claimValidationRules": [
+                    {
+                        "expression": "has(claims.client_id)",
+                        "message": "only Zeabur Identity access tokens are accepted (ID tokens carry no client_id)",
+                    },
+                    {
+                        "expression": "claims.exp - claims.iat <= 3600",
+                        "message": "token lifetime must not exceed 3600 seconds",
+                    },
+                ],
+                "claimMappings": {
+                    "username": {"claim": "preferred_username", "prefix": "zeabur:"},
+                    "groups": {"claim": "groups", "prefix": "zeabur:"},
+                    "uid": {"claim": "sub"},
+                    "extra": [
+                        {"key": "identity.zeabur.com/client-id", "valueExpression": "claims.client_id"},
+                        {"key": "identity.zeabur.com/amr", "valueExpression": "has(claims.amr) ? claims.amr : []"},
+                        {"key": "identity.zeabur.com/jti", "valueExpression": "claims.jti"},
+                    ],
+                },
+                "userValidationRules": [
+                    {"expression": "!user.username.startsWith('system:')", "message": "the system: prefix is reserved"},
+                    {"expression": "user.groups.all(g, !g.startsWith('system:'))", "message": "the system: prefix is reserved"},
+                ],
+            }],
+        });
+        assert_eq!(body(&file), expected);
     }
 
     #[test]
     fn generic_configuration_has_no_anonymous_section() {
-        let yaml = authentication_configuration(&options(Distro::Generic, true)).unwrap();
-        assert!(!yaml.contains("anonymous"));
+        let file = authentication_configuration(&options(Distro::Generic, true)).unwrap();
+        assert!(body(&file).get("anonymous").is_none());
     }
 
     #[test]
     fn public_discovery_has_no_discovery_url_or_ca() {
-        let yaml = authentication_configuration(&options(Distro::K3s, false)).unwrap();
-        assert!(!yaml.contains("discoveryURL") && !yaml.contains("certificateAuthority"));
+        let file = authentication_configuration(&options(Distro::K3s, false)).unwrap();
+        let issuer = &body(&file)["jwt"][0]["issuer"];
+        assert!(
+            issuer.get("discoveryURL").is_none() && issuer.get("certificateAuthority").is_none()
+        );
     }
 
     #[test]

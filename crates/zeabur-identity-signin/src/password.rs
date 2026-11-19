@@ -20,6 +20,7 @@ use axum::body::Bytes;
 use axum::extract::State;
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Semaphore;
 use zeabur_identity_core::account::{Method, allows};
@@ -40,7 +41,7 @@ use crate::account::{
     with_cookie,
 };
 use crate::device::Requester;
-use crate::problem::Problem;
+use crate::problem::{Extensions, Problem};
 use crate::{
     NO_REQUEST, SETUP_INVALID, Shared, SignIn, check_account, check_request, cookie, internal,
     json, parse, redeemed, refused, set_cookie_with, valid_setup_token,
@@ -373,15 +374,10 @@ impl Failure {
                     .insert(header::RETRY_AFTER, HeaderValue::from(seconds));
                 response
             }
-            Self::Weak(weakness) => {
-                let name = match weakness {
-                    Weakness::TooShort => "too-short",
-                    Weakness::TooLong => "too-long",
-                    Weakness::Common => "common",
-                    Weakness::Context => "context",
-                };
-                PASSWORD_WEAK.with("weakness", serde_json::Value::from(name))
-            }
+            Self::Weak(weakness) => PASSWORD_WEAK.with(Extensions {
+                weakness: Some(weakness),
+                ..Extensions::default()
+            }),
         }
     }
 }
@@ -449,8 +445,9 @@ pub(crate) struct SignInRequest {
     code: Option<String>,
 }
 
-#[derive(Serialize)]
-struct SignedIn {
+#[derive(Serialize, JsonSchema)]
+#[schemars(rename = "PasswordSignedIn")]
+pub(crate) struct SignedIn {
     redirect_to: String,
 }
 
@@ -640,7 +637,7 @@ where
         audit.credential.clone_from(&authentication.credential);
         let token = start_session(&service, &authentication).await?;
         audit.session = Some(token.name().to_owned());
-        let mut response = json(StatusCode::OK, &serde_json::json!({}));
+        let mut response = json(StatusCode::OK, &crate::account::SignedIn { accepted: None });
         service
             .passwords
             .remember(&mut response, &headers, &authentication.subject);
@@ -751,8 +748,9 @@ struct TotpRequest {
     code: String,
 }
 
-#[derive(Serialize)]
-struct SetUp<'a> {
+#[derive(Serialize, JsonSchema)]
+#[schemars(rename = "PasswordSetUp")]
+pub(crate) struct SetUp<'a> {
     username: &'a str,
     /// Shown once; only their hashes are stored.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -764,13 +762,15 @@ pub(crate) struct OptionsRequest {
     token: String,
 }
 
-#[derive(Serialize)]
-struct SetupOptions {
+#[derive(Serialize, JsonSchema)]
+#[schemars(rename = "PasswordSetupOptions")]
+pub(crate) struct SetupOptions {
     /// An authenticator to add, when the settings need a second factor for this user.
     totp: Option<Enrolment>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
+#[schemars(rename = "TotpEnrolment")]
 struct Enrolment {
     /// The secret in base32, for typing into the app.
     secret: String,
@@ -782,7 +782,7 @@ struct Enrolment {
 }
 
 /// A QR code as one SVG path in a `size` × `size` box, quiet zone included.
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 struct Qr {
     size: usize,
     path: String,

@@ -68,6 +68,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use zeabur_identity_api::upstream::{Issuer, ProviderId};
 use zeabur_identity_core::clock::{Clock, UnixTime};
@@ -205,8 +206,9 @@ struct StartRequest {
     token: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
-struct StartResponse {
+#[derive(Debug, Serialize, JsonSchema)]
+#[schemars(rename = "UpstreamStarted")]
+pub(crate) struct StartResponse {
     redirect_to: String,
 }
 
