@@ -9,7 +9,7 @@ description: 将 GitHub、Google 或自建 OpenID 提供方（如 Keycloak）的
 
 你决定哪些人能登录。外部账号只有关联到 Zeabur Identity 用户后才能登录。Zeabur Identity 不会在首次登录时创建用户，也不会根据电子邮箱、姓名或组织匹配账号。用户组仍由 `User` 决定。每个关联账号都用提供方的 issuer 和固定账号 ID 记录，所以登录名或电子邮箱转给其他人后，关联关系也不会转移。
 
-[管理员账号](./admin-sessions.mdx)默认不能用外部账号登录，详见[选择管理员的登录方式](./admin-sessions.mdx#选择管理员的登录方式)。
+[管理员账号](./admin-sessions.mdx)默认不能用外部账号登录，也不能关联外部账号。例外是你自己运营、每次登录都要求第二因素，并已标记出来的 OpenID 提供方，请见[让管理员通过提供方登录](#让管理员通过提供方登录)。各种设置详见[选择管理员的登录方式](./admin-sessions.mdx#选择管理员的登录方式)。
 
 ## 开始前
 
@@ -220,7 +220,21 @@ rm -rf ~/.kube/cache/oidc-login
 kubectl auth whoami          # the user is zeabur:<username>
 ```
 
-使用通行密钥登录时，输出中的 `identity.zeabur.com/amr` 会列出 `swk` 和 `mfa`；使用外部账号登录时，内容为空。快速入门创建的 `admin` 等管理员账号默认不接受外部账号登录。
+使用通行密钥登录时，输出中的 `identity.zeabur.com/amr` 会列出 `swk` 和 `mfa`。使用外部账号登录时，内容为空；如果提供方标记了 `mfa: Enforced`，则只列出 `mfa`。快速入门创建的 `admin` 等管理员账号，只接受通过标记 `mfa: Enforced` 的提供方登录。
+
+## 让管理员通过提供方登录
+
+[管理员账号](./admin-sessions.mdx)默认需要两个因素，而 Zeabur Identity 看不到 GitHub、Google 等提供方有没有要求第二因素，所以管理员不能通过外部提供方登录。如果你自己运营 Microsoft Entra ID、Keycloak 等 OpenID 提供方，并配置成这个客户端的每次登录都要求第二因素，可以标记 `mfa: Enforced`：
+
+```sh
+kubectl -n zeabur-identity patch upstreamprovider keycloak --type merge -p '{"spec":{"openid":{"mfa":"Enforced"}}}'
+```
+
+之后在 `admin-sign-in` 为默认的 `two-factor` 时，管理员账号就能用这个提供方的账号登录，也能关联这个提供方的账号。关联方式和普通账号相同：在账号页面关联，或使用设置链接。设为 `passkey` 和 `device-bound-passkey` 时，管理员仍然只能用通行密钥；设为 `any` 时，则可以使用所有提供方。
+
+Zeabur Identity 不会检查这项配置，也不会读取提供方的 `amr` 或 `acr` claim，所以通过这个提供方登录的管理员账号，安全程度取决于提供方的第二因素规则。只有在可能关联到管理员的每个账号，在提供方那边都一定要通过第二因素时，才设为 `Enforced`；如果有可信网络、记住设备等你不接受的例外，就不要设置。`github` 提供方没有 `mfa` 字段：github.com 不是你运营的，你无法让它一定要求第二因素。
+
+通过已标记的提供方登录时，令牌会带有 `amr: ["mfa"]`。如果把 `mfa` 改回 `Unknown`，之后通过这个提供方的管理员登录会立即失败，但已经登录的会话会持续到结束为止。要立即结束，请按照[退出登录、恢复与移除用户](./offboarding.mdx)让这些管理员退出登录。
 
 ## 修改或移除提供方
 
@@ -276,5 +290,5 @@ EOF
 | 选择按钮后立即显示**无法完成操作** | 如果页面加载后提供方已移除或改名，重新加载页面。如果日志显示 `provider_unavailable`，说明 Zeabur Identity 无法读取 issuer 的 `/.well-known/openid-configuration`。检查 Pod 能否通过 HTTPS 连接到 issuer；如果使用私有 CA，还要检查是否已完成前面的配置。 |
 | 提供方将用户重定向回来后显示**无法验证外部账号的响应** | 在日志中查找 `provider_unavailable`。Secret `zeabur-identity-upstream` 不存在、缺少与提供方同名的键，或 Pod 无法连接到提供方的 token 地址或密钥地址。 |
 | **此账号尚未关联** | 先关联账号。Zeabur Identity 不会根据电子邮箱或姓名匹配账号。自行创建的 `Credential` 如果名称或 ID 错误，也会出现相同提示。 |
-| **此账号需要改用其他方式登录** | 外部账号关联到了管理员账号，而当前的 `admin-sign-in` 设置不允许管理员用外部账号登录。详见[选择管理员的登录方式](./admin-sessions.mdx#选择管理员的登录方式)。 |
+| **此账号需要改用其他方式登录** | 外部账号关联到了管理员账号，而当前的 `admin-sign-in` 设置不允许管理员使用这个提供方。详见[让管理员通过提供方登录](#让管理员通过提供方登录)。 |
 | `org_internal` 或其他 Google 访问错误 | 检查应用的 **Audience** 和账号所属组织的政策。 |

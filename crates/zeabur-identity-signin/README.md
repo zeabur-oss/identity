@@ -70,9 +70,12 @@ tests; `zeabur-identity-test-support` provides the software authenticator for th
   strictest setting that survives the provider's redirect back. Google ID tokens are validated
   as [OpenID Connect Core 1.0 §3.1.3.7][oidc] requires.
 - **Admin accounts follow the `admin-sign-in` level.** The default, `two-factor`, allows a
-  passkey, or a password followed by a TOTP code or a recovery code. Upstream sign-ins carry no
-  `amr` value and give no evidence of user verification, so under every level but `any` an admin
-  account can neither sign in with GitHub or Google nor link either. `passkey` allows passkeys
+  passkey, a password followed by a TOTP code or a recovery code, or an OpenID provider that the
+  operator marks `mfa: Enforced`. A sign-in through such a provider carries `amr = ["mfa"]`
+  ([RFC 8176 §2][rfc8176]) on the operator's statement alone; the provider's own `amr` and `acr`
+  are not read. Other upstream sign-ins carry no `amr` value and give no evidence of a second
+  factor, so under every level but `any` an admin account can neither sign in with GitHub or
+  Google nor link either. `passkey` allows passkeys
   only. `device-bound-passkey` allows only a device-bound passkey (WebAuthn BE flag unset), at
   sign-in and at enrolment. The authenticator reports BE itself; attestation is `none`, so
   nothing verifies it.

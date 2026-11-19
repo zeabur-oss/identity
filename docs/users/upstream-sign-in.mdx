@@ -9,7 +9,7 @@ Besides passkeys, Zeabur Identity can let users sign in with an account they alr
 
 You decide who can sign in. An account from the provider signs in only after it is linked to a Zeabur Identity user. Zeabur Identity doesn't create users on first sign-in and doesn't match accounts by email address, name or organization. Groups still come from `User`. Each linked account is recorded by the provider's issuer and its stable account ID, so a login name or email address that changes hands doesn't move the link.
 
-By default, [admin accounts](./admin-sessions.mdx) can't sign in with an upstream account. See [Choose how admins sign in](./admin-sessions.mdx#choose-how-admins-sign-in).
+By default, [admin accounts](./admin-sessions.mdx) can't sign in with or link an upstream account, unless you run an OpenID provider that always asks for a second factor and [mark it so](#let-admins-sign-in-through-a-provider). See also [Choose how admins sign in](./admin-sessions.mdx#choose-how-admins-sign-in).
 
 ## Before you begin
 
@@ -220,7 +220,21 @@ rm -rf ~/.kube/cache/oidc-login
 kubectl auth whoami          # the user is zeabur:<username>
 ```
 
-In the output, `identity.zeabur.com/amr` lists `swk` and `mfa` for a passkey sign-in and stays empty for an upstream sign-in. By default, admin accounts, such as `admin` from the quickstart, don't accept upstream sign-ins.
+In the output, `identity.zeabur.com/amr` lists `swk` and `mfa` for a passkey sign-in. For an upstream sign-in it stays empty, or lists only `mfa` if the provider is marked `mfa: Enforced`. Admin accounts, such as `admin` from the quickstart, accept upstream sign-ins only through a provider marked `mfa: Enforced`.
+
+## Let admins sign in through a provider
+
+By default, [admin accounts](./admin-sessions.mdx) need two factors, and Zeabur Identity can't see whether GitHub, Google or another provider asked for a second factor. So admins can't sign in through an upstream provider. If you run an OpenID provider, such as Microsoft Entra ID or Keycloak, and set it up to ask every sign-in to this client for a second factor, mark it with `mfa: Enforced`:
+
+```sh
+kubectl -n zeabur-identity patch upstreamprovider keycloak --type merge -p '{"spec":{"openid":{"mfa":"Enforced"}}}'
+```
+
+Then, with `admin-sign-in` set to `two-factor`, the default, admin accounts can sign in with and link accounts from this provider. They link one the same way as regular accounts: from the account page, or with a setup link. Under `passkey` and `device-bound-passkey`, admins still use passkeys only, and under `any` they can use every provider.
+
+Zeabur Identity doesn't check this setting. It doesn't read the provider's `amr` or `acr` claims, so an admin account through this provider is only as safe as the provider's second-factor rule. Set `Enforced` only if every account that can be linked to an admin must pass a second factor at that provider, with no exemptions such as trusted networks or remembered devices that you don't accept. `github` providers have no `mfa` field: you don't run github.com, so you can't make it ask for a second factor.
+
+A sign-in through a marked provider carries `amr: ["mfa"]` in its tokens. If you set `mfa` back to `Unknown`, new admin sign-ins through the provider fail at once, but sessions already signed in last until they end. To end them now, sign the admins out as described in [Sign out, recover, and remove users](./offboarding.mdx).
 
 ## Change or remove a provider
 
@@ -276,5 +290,5 @@ Check `$SUBJECT` before you apply. A wrong ID links someone else's account. With
 | **Unable to complete the request** right after choosing the button | If the provider was removed or renamed after the page loaded, reload the page. If the logs show `provider_unavailable`, Zeabur Identity can't read the issuer's `/.well-known/openid-configuration`: check that the Pod can reach the issuer over HTTPS and, for a private CA, the steps above. |
 | **Unable to verify the provider's answer** after the provider sends the user back | Look for `provider_unavailable` in the logs. The Secret `zeabur-identity-upstream` doesn't exist or lacks a key with the provider's name, or the Pod can't reach the provider's token or key addresses. |
 | **This account isn't linked** | Link the account first. Zeabur Identity doesn't match accounts by email address or name. A `Credential` you created with a wrong name or ID gives the same message. |
-| **Sign in to this account another way** | The account is linked to an admin account, and the `admin-sign-in` setting doesn't let admins sign in with an upstream account. See [Choose how admins sign in](./admin-sessions.mdx#choose-how-admins-sign-in). |
+| **Sign in to this account another way** | The account is linked to an admin account, and the `admin-sign-in` setting doesn't let admins use this provider. See [Let admins sign in through a provider](#let-admins-sign-in-through-a-provider). |
 | `org_internal` or another Google access error | Check the application's **Audience** and the account's organization policies. |

@@ -3,7 +3,8 @@
 //! A regular account may use every sign-in method the server offers. An admin account's tokens
 //! carry the admin group (`zeabur_identity_api::ADMIN_GROUP`), so [`Settings::admin_sign_in`]
 //! decides which methods it may use. The default, [`AdminSignIn::TwoFactor`], asks for two
-//! factors: a passkey, or a password with a TOTP code. NIST SP 800-63B-4 allows synced passkeys
+//! factors: a passkey, a password with a TOTP code, or an upstream provider that the operator
+//! marks as one that always asks for a second factor. NIST SP 800-63B-4 allows synced passkeys
 //! up to AAL2 only, because syncing makes the key exportable ([sp800-63b]), so
 //! [`AdminSignIn::DeviceBoundPasskey`] asks for a passkey whose authenticator reports the WebAuthn
 //! backup eligibility flag (BE) as unset.
@@ -50,7 +51,8 @@ pub enum Teams {
 pub enum AdminSignIn {
     /// Every method the server offers, a password alone included (AAL1).
     Any,
-    /// A passkey, or a password with a second factor (AAL2).
+    /// A passkey, a password with a second factor, or an upstream provider that enforces a second
+    /// factor (AAL2).
     #[default]
     TwoFactor,
     /// Any passkey: phishing-resistant (AAL2).
@@ -121,7 +123,11 @@ pub enum Method {
         device_bound: bool,
     },
     /// A linked GitHub, Google or OpenID account.
-    Upstream,
+    Upstream {
+        /// The operator marks the provider as one that always asks for a second factor. Zeabur
+        /// Identity does not check this.
+        mfa_enforced: bool,
+    },
     /// A password, with a second factor or without.
     Password {
         /// A TOTP or recovery code was checked too.
@@ -136,7 +142,8 @@ pub enum Refusal {
     Passkey,
     /// The setting allows admin accounts a device-bound passkey only.
     DeviceBoundPasskey,
-    /// Admin accounts need a passkey, or a password with a second factor.
+    /// Admin accounts need a passkey, a password with a second factor, or an upstream provider
+    /// that enforces a second factor.
     TwoFactor,
 }
 
@@ -160,13 +167,16 @@ pub const fn allows(
             AdminSignIn::TwoFactor,
             Method::Password {
                 second_factor: true,
-            },
+            }
+            | Method::Upstream { mfa_enforced: true },
         )
         | (AdminSignIn::DeviceBoundPasskey, Method::Passkey { device_bound: true }) => Ok(()),
-        (AdminSignIn::TwoFactor, Method::Upstream | Method::Password { .. }) => {
+        (AdminSignIn::TwoFactor, Method::Upstream { .. } | Method::Password { .. }) => {
             Err(Refusal::TwoFactor)
         }
-        (AdminSignIn::Passkey, Method::Upstream | Method::Password { .. }) => Err(Refusal::Passkey),
+        (AdminSignIn::Passkey, Method::Upstream { .. } | Method::Password { .. }) => {
+            Err(Refusal::Passkey)
+        }
         (AdminSignIn::DeviceBoundPasskey, _) => Err(Refusal::DeviceBoundPasskey),
     }
 }
@@ -185,7 +195,11 @@ mod tests {
     const TWO_FACTOR: Method = Method::Password {
         second_factor: true,
     };
-    const METHODS: [Method; 5] = [SYNCED, DEVICE, Method::Upstream, PASSWORD, TWO_FACTOR];
+    const UNKNOWN: Method = Method::Upstream {
+        mfa_enforced: false,
+    };
+    const ENFORCED: Method = Method::Upstream { mfa_enforced: true };
+    const METHODS: [Method; 6] = [SYNCED, DEVICE, UNKNOWN, ENFORCED, PASSWORD, TWO_FACTOR];
 
     fn admin(level: AdminSignIn, method: Method) -> Result<(), Refusal> {
         let settings = Settings {
@@ -217,13 +231,14 @@ mod tests {
     fn each_level_allows_admins_what_it_names() {
         use AdminSignIn::{Any, DeviceBoundPasskey, Passkey, TwoFactor};
         let cases = [
-            (Any, [Ok(()), Ok(()), Ok(()), Ok(()), Ok(())]),
+            (Any, [Ok(()), Ok(()), Ok(()), Ok(()), Ok(()), Ok(())]),
             (
                 TwoFactor,
                 [
                     Ok(()),
                     Ok(()),
                     Err(Refusal::TwoFactor),
+                    Ok(()),
                     Err(Refusal::TwoFactor),
                     Ok(()),
                 ],
@@ -236,6 +251,7 @@ mod tests {
                     Err(Refusal::Passkey),
                     Err(Refusal::Passkey),
                     Err(Refusal::Passkey),
+                    Err(Refusal::Passkey),
                 ],
             ),
             (
@@ -243,6 +259,7 @@ mod tests {
                 [
                     Err(Refusal::DeviceBoundPasskey),
                     Ok(()),
+                    Err(Refusal::DeviceBoundPasskey),
                     Err(Refusal::DeviceBoundPasskey),
                     Err(Refusal::DeviceBoundPasskey),
                     Err(Refusal::DeviceBoundPasskey),

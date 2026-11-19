@@ -40,7 +40,7 @@ use webauthn_rs::prelude::{
     RegisterPublicKeyCredential, Uuid,
 };
 use zeabur_identity_api::token_hash;
-use zeabur_identity_core::account::{AccountType, Method};
+use zeabur_identity_core::account::{Method, allows};
 use zeabur_identity_core::clock::{Clock, UnixTime};
 use zeabur_identity_core::crypto::{CryptoError, hex, random};
 use zeabur_identity_oauth::Use;
@@ -636,12 +636,15 @@ where
             .map_err(internal)?;
         let (sessions, apps) =
             live_sessions(&service, &account.user, &account.session.spec.name, now).await?;
-        Ok(Some((account, passkeys, linked, password, sessions, apps)))
+        let settings = service.oauth.directory.settings().await.map_err(internal)?;
+        Ok(Some((
+            account, passkeys, linked, password, sessions, apps, settings,
+        )))
     }
     .await;
     match loaded {
         Ok(None) => account_page(lang, None),
-        Ok(Some((account, passkeys, linked, password, sessions, apps))) => {
+        Ok(Some((account, passkeys, linked, password, sessions, apps, settings))) => {
             let this_device = account.session.verification().credential;
             let label = |name: &str| {
                 passkeys
@@ -672,10 +675,14 @@ where
                 .map(|account| shown_provider(account, &descriptors))
                 .collect();
             let linked_rows = linked_rows(&linked, &shown);
-            let providers: Vec<ProviderButton<'_>> = descriptors
+            let unlinked: Vec<&Descriptor> = descriptors
                 .iter()
                 .filter(|d| !linked.iter().any(|account| account.issuer == d.issuer))
-                .map(Descriptor::button)
+                .collect();
+            let providers: Vec<ProviderButton<'_>> = unlinked
+                .iter()
+                .filter(|d| allows(account.user.account_type, settings, d.method).is_ok())
+                .map(|d| d.button())
                 .collect();
             account_page(
                 lang,
@@ -684,7 +691,7 @@ where
                     passkeys: &rows,
                     linked: &linked_rows,
                     providers: &providers,
-                    admin: account.user.account_type == AccountType::Admin,
+                    providers_held_back: providers.len() < unlinked.len(),
                     password: password.as_ref().map(|p| PasswordView {
                         authenticator: p.totp.is_some(),
                     }),

@@ -240,8 +240,8 @@
     </ul>
     {%- if !view.passkey_confirms %}
     <p class="text-[0.8125rem] leading-5 text-pretty text-secondary">{{ m.passkey_sign_in_needed }}</p>
-    {%- else if view.admin && !view.providers.is_empty() %}
-    <p class="text-[0.8125rem] leading-5 text-pretty text-secondary">{{ m.admin_passkey_only }}</p>
+    {%- else if view.providers_held_back %}
+    <p class="text-[0.8125rem] leading-5 text-pretty text-secondary">{{ m.admin_providers_held_back }}</p>
     {%- endif %}
   </section>
 {% endcall %}{% endcall %}

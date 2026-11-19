@@ -15,7 +15,7 @@ Regular accounts have only the permissions you bind to their groups. They have n
 
 <Callout type="warn">
 
-Each admin should also have a regular account for daily work. Use admin accounts only to make changes to the cluster. By default, admin accounts can't sign in with an upstream account, such as GitHub, or link one. The sign-in page displays **Sign in to this account another way**.
+Each admin should also have a regular account for daily work. Use admin accounts only to make changes to the cluster. By default, admin accounts can sign in with an upstream account, or link one, only through an OpenID provider that you [mark as enforcing a second factor](./upstream-sign-in.mdx#let-admins-sign-in-through-a-provider). Through any other provider, such as GitHub or Google, the sign-in page displays **Sign in to this account another way**.
 
 </Callout>
 
@@ -116,7 +116,7 @@ The `admin-sign-in` setting decides which sign-in methods admin accounts can use
 | Value | Admin accounts sign in with |
 |---|---|
 | `any` | Every method regular accounts use: a passkey, a password, or an upstream account |
-| `two-factor` (default) | A passkey, or a password and a code from an authenticator app |
+| `two-factor` (default) | A passkey, a password and a code from an authenticator app, or an upstream account from an OpenID provider [marked `mfa: Enforced`](./upstream-sign-in.mdx#let-admins-sign-in-through-a-provider) |
 | `passkey` | A passkey only |
 | `device-bound-passkey` | A device-bound passkey only, such as a security key |
 

@@ -1468,6 +1468,50 @@ mod tests {
         sign_in_tokens(&h, "alice", PASSKEY, false).await;
     }
 
+    /// An upstream sign-in through a provider marked `mfa: Enforced` carries `amr = ["mfa"]`.
+    /// Only that exact value counts: `amr` values are case-sensitive (OpenID Connect Core 1.0
+    /// §2), and a missing value counts as no second factor.
+    #[tokio::test]
+    async fn an_admin_upstream_sign_in_needs_the_mfa_value_and_the_two_factor_level() {
+        let h = harness().await;
+        let enforced = sign_in_tokens(&h, "carol", &["mfa"], false).await;
+        let (_, claims) = verify(&h, enforced["access_token"].as_str().unwrap(), "kubernetes");
+        assert_eq!(claims["amr"], serde_json::json!(["mfa"]));
+        tokens_of(&refresh(&h, refresh_token(&enforced)).await);
+
+        for amr in [&[][..], &["MFA"], &["otp"], &["fed"], &["mfa "]] {
+            let code = sign_in_with(&h, "carol", &kubectl_authorize(&[]), amr).await;
+            assert_eq!(
+                exchange(&h, &code).await.error(),
+                "invalid_grant",
+                "{amr:?}"
+            );
+        }
+
+        // `any` allows it; `passkey` and `device-bound-passkey` do not, and end the session.
+        for (level, allowed) in [
+            (AdminSignIn::Any, true),
+            (AdminSignIn::Passkey, false),
+            (AdminSignIn::DeviceBoundPasskey, false),
+        ] {
+            h.server.directory.put_settings(Settings {
+                admin_sign_in: level,
+                ..Settings::default()
+            });
+            let code = sign_in_with(&h, "carol", &kubectl_authorize(&[]), &["mfa"]).await;
+            let reply = exchange(&h, &code).await;
+            if allowed {
+                tokens_of(&reply);
+            } else {
+                assert_eq!(reply.error(), "invalid_grant", "{level:?}");
+            }
+        }
+        assert_eq!(
+            refresh(&h, refresh_token(&enforced)).await.error(),
+            "invalid_grant"
+        );
+    }
+
     #[tokio::test]
     async fn refresh_idle_follows_the_account_type_and_the_settings() {
         let multiple = Settings {
