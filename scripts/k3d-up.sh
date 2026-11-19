@@ -69,5 +69,6 @@ curl -fsSL -o "$dir/cert-manager.yaml" \
 echo "$cert_manager_sha256  $dir/cert-manager.yaml" | sha256sum -c --quiet
 KUBECONFIG="$dir/kubeconfig" kubectl apply --server-side -f "$dir/cert-manager.yaml" >/dev/null
 export KUBECONFIG="$dir/kubeconfig"
-wait_for cert-manager kubectl -n cert-manager wait deployment --all \
-  --for=condition=Available --timeout=300s
+for deployment in $(kubectl -n cert-manager get deployments -o name); do
+  wait_for cert-manager kubectl -n cert-manager rollout status "$deployment" --timeout=300s
+done
