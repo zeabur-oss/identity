@@ -9,6 +9,9 @@ use kube::{CustomResource, KubeSchema};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// Longest username, in bytes: one DNS label, so it fits a Kubernetes label value.
+pub const MAX_USERNAME: usize = 63;
+
 /// A person who can sign in. The admin (or GitOps) owns `spec`; Zeabur Identity only reads it.
 ///
 /// Kubernetes sees the user as `zeabur:<username>` with groups `zeabur:<group>`, plus
@@ -42,7 +45,7 @@ pub struct UserSpec {
     /// Use the username as the object name so object-name uniqueness also prevents duplicate
     /// usernames. Immutable because RBAC bindings and audit logs refer to it.
     #[schemars(
-        length(min = 1, max = 63),
+        length(min = 1, max = MAX_USERNAME),
         regex(pattern = r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$")
     )]
     #[x_kube(validation = Rule::new("self == oldSelf").message("username is immutable"))]

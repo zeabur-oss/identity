@@ -12,6 +12,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+zeabur-identity-api.workspace = true
 zeabur-identity-core.workspace = true
 askama.workspace = true
 axum.workspace = true
