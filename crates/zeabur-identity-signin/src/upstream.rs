@@ -66,6 +66,9 @@ use serde::{Deserialize, Serialize};
 use zeabur_identity_api::upstream::{Issuer, ProviderId};
 use zeabur_identity_core::clock::{Clock, UnixTime};
 use zeabur_identity_core::crypto::{ct_eq, hex, random, sha256};
+use zeabur_identity_core::protocol::{
+    ACCOUNT_PATH, UPSTREAM_CALLBACK_ROUTE, UPSTREAM_START_ROUTE, upstream_callback_path,
+};
 use zeabur_identity_oauth::authorize::Authentication;
 use zeabur_identity_oauth::endpoints::{FLOW_COOKIE, complete_authorization, open_flow};
 use zeabur_identity_oauth::{OneTimeIds, Use};
@@ -141,14 +144,8 @@ where
     H: HttpClient,
 {
     Router::new()
-        .route(
-            "/upstream/{provider}/start",
-            post(start::<D, G, C, K, S, H>),
-        )
-        .route(
-            "/upstream/{provider}/callback",
-            get(callback::<D, G, C, K, S, H>),
-        )
+        .route(UPSTREAM_START_ROUTE, post(start::<D, G, C, K, S, H>))
+        .route(UPSTREAM_CALLBACK_ROUTE, get(callback::<D, G, C, K, S, H>))
         .route(
             "/account/links/start",
             post(account_start::<D, G, C, K, S, H>),
@@ -207,7 +204,7 @@ pub(crate) struct StartResponse {
 }
 
 fn redirect_uri(issuer: &str, provider: &ProviderId) -> String {
-    format!("{issuer}/upstream/{}/callback", provider.as_str())
+    format!("{issuer}{}", upstream_callback_path(provider.as_str()))
 }
 
 fn random_text<const N: usize>() -> Result<String, Problem> {
@@ -429,7 +426,7 @@ where
     record(sign_in, &account.user, "AccountLinked", &audit, now).await;
     let issuer = sign_in.oauth.issuer.as_str().trim_end_matches('/');
     let mut response = StatusCode::SEE_OTHER.into_response();
-    if let Ok(value) = HeaderValue::try_from(format!("{issuer}/account#notice=linked")) {
+    if let Ok(value) = HeaderValue::try_from(format!("{issuer}{ACCOUNT_PATH}#notice=linked")) {
         response.headers_mut().insert(header::LOCATION, value);
     }
     response

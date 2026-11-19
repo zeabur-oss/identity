@@ -44,6 +44,7 @@ use zeabur_identity_api::token_hash;
 use zeabur_identity_core::account::{Method, allows};
 use zeabur_identity_core::clock::{Clock, UnixTime};
 use zeabur_identity_core::crypto::{CryptoError, hex, random};
+use zeabur_identity_core::protocol::ACCOUNT_PATH;
 use zeabur_identity_oauth::Use;
 use zeabur_identity_oauth::authorize::Authentication;
 use zeabur_identity_store::{
@@ -140,7 +141,7 @@ where
     S: SetupStore,
 {
     Router::new()
-        .route("/account", get(page::<D, G, C, K, S>))
+        .route(ACCOUNT_PATH, get(page::<D, G, C, K, S>))
         .route(
             "/.well-known/passkey-endpoints",
             get(passkey_endpoints::<D, G, C, K, S>),
@@ -496,6 +497,13 @@ struct RenameRequest {
     label: String,
 }
 
+/// The body of `/.well-known/passkey-endpoints`.
+#[derive(Serialize)]
+struct PasskeyEndpoints {
+    enroll: String,
+    manage: String,
+}
+
 /// `GET /.well-known/passkey-endpoints` (W3C, "A Well-Known URL for Relying Party Passkey
 /// Endpoints"): where a password manager sends people to add or manage passkeys. Served
 /// directly, never redirected.
@@ -508,10 +516,10 @@ where
     S: SetupStore,
 {
     let issuer = service.oauth.issuer.as_str().trim_end_matches('/');
-    let body = serde_json::json!({
-        "enroll": format!("{issuer}/account#add"),
-        "manage": format!("{issuer}/account"),
-    });
+    let body = PasskeyEndpoints {
+        enroll: format!("{issuer}{ACCOUNT_PATH}#add"),
+        manage: format!("{issuer}{ACCOUNT_PATH}"),
+    };
     let mut response = (StatusCode::OK, axum::Json(body)).into_response();
     let headers = response.headers_mut();
     headers.insert(
