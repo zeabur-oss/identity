@@ -53,11 +53,11 @@ https://github.com/user-attachments/assets/4c6e29f2-341c-4622-8cc5-4337e13e53b5
   <tr>
     <td width="50%"><picture>
       <source media="(prefers-color-scheme: dark)" srcset="docs/images/sign-in-dark.avif">
-      <img alt="登录页，有通行密钥按钮和“使用 GitHub 继续”" src="docs/images/sign-in-light.avif">
+      <img alt="登录页，有用户名和密码、通行密钥按钮和“使用 GitHub 继续”" src="docs/images/sign-in-light.avif">
     </picture></td>
     <td width="50%"><picture>
       <source media="(prefers-color-scheme: dark)" srcset="docs/images/setup-dark.avif">
-      <img alt="用一次性链接创建通行密钥的设置页" src="docs/images/setup-light.avif">
+      <img alt="用一次性链接设置登录方式的页面，可以选“创建通行密钥”或“使用密码”" src="docs/images/setup-light.avif">
     </picture></td>
   </tr>
   <tr>

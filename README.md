@@ -76,11 +76,11 @@ and restarting a deployment is refused with 403 for an account without that righ
   <tr>
     <td width="50%"><picture>
       <source media="(prefers-color-scheme: dark)" srcset="docs/images/sign-in-dark.avif">
-      <img alt="Sign-in page with a passkey button and Continue with GitHub" src="docs/images/sign-in-light.avif">
+      <img alt="Sign-in page with username and password, Sign in with a passkey and Continue with GitHub" src="docs/images/sign-in-light.avif">
     </picture></td>
     <td width="50%"><picture>
       <source media="(prefers-color-scheme: dark)" srcset="docs/images/setup-dark.avif">
-      <img alt="Setup page for creating a passkey from a one-time link" src="docs/images/setup-light.avif">
+      <img alt="Setup page from a one-time link, with Create passkey and Use a password" src="docs/images/setup-light.avif">
     </picture></td>
   </tr>
   <tr>
