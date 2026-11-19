@@ -1,31 +1,28 @@
 //! The namespace-scoped objects Zeabur Identity needs: its namespace, service account,
 //! least-privilege Role, and the empty signing-key Secret.
 //!
-//! Generated from code so the deployment manifest and the integration tests use the same rules;
-//! the tests act as the service account through impersonation and show that it cannot list
-//! Secrets, read or create other Secrets, bind `cluster-admin`, create `User`s, or read grants in
-//! another namespace.
+//! The deployment manifest and the integration tests use the same rules. The tests act as the
+//! service account through impersonation. They show that it cannot list Secrets, read or create
+//! other Secrets, bind `cluster-admin`, create `User`s, or read grants in another namespace.
 //!
-//! - **Secrets by name only.** `get`/`update` on the signing keys, `get`/`delete` on the setup
-//!   token (redeeming is deleting), `get` on the internal certificate and on the upstream client
-//!   secrets ([`upstream_provider::SECRET`]). RBAC cannot limit `create` or `deletecollection` to a
-//!   name, and `list` or `watch` on Secrets reveals their contents ([RBAC], [RBAC good practices]),
-//!   so Zeabur Identity has none of these on Secrets: the installer creates the empty key Secret
-//!   and the cluster admin's `zeabur-identityctl` writes the other two.
-//! - **Configuration is read-only.** Users, credentials, clients and upstream providers are written
-//!   by admins or GitOps; Zeabur Identity reads them and creates or deletes credentials when a
-//!   passkey is enrolled, removed or an account is linked. On credentials it writes `status` (the
-//!   label a user gives a passkey, and when it was last used). It has no write access to users or
-//!   upstream providers.
-//! - **Account settings.** It reads one `ConfigMap`, [`SETTINGS_CONFIG_MAP`], by name. Admins write
-//!   it.
+//! - **Secrets by name only.** `get` and `update` on the signing keys, `get` and `delete` on the
+//!   setup token (redeeming is deleting), `get` on the internal certificate and on the upstream
+//!   client secrets ([`upstream_provider::SECRET`]). RBAC cannot limit `create` or
+//!   `deletecollection` to a name, and `list` or `watch` on Secrets reveals their contents ([RBAC],
+//!   [RBAC good practices]). Zeabur Identity has none of these on Secrets. The installer creates
+//!   the empty key Secret. The cluster admin's `zeabur-identityctl` writes the other two.
+//! - **Configuration is read-only.** Zeabur Identity reads users, credentials, clients and upstream
+//!   providers. It creates or deletes credentials when a passkey is enrolled or removed or an
+//!   account is linked. On credentials it writes `status` (the label of a passkey and when it was
+//!   last used). It has no write access to users or upstream providers.
+//! - **Account settings.** It reads one `ConfigMap`, [`SETTINGS_CONFIG_MAP`], by name.
 //! - **Account events.** It creates core `Event`s about users who change their own passkeys or
-//!   sessions or redeem a setup link or invitation, and cannot read, change or delete events.
-//! - **Runtime state is Zeabur Identity's.** Full access to grants; invitations it can read and
-//!   redeem (`delete`), but not create.
+//!   sessions or redeem a setup link or invitation. It cannot read, change or delete events.
+//! - **Runtime state.** Full access to grants. It reads and redeems (`delete`) invitations but does
+//!   not create them.
 //! - **Nothing else.** No cluster-scoped rights, nothing in other namespaces, no RBAC objects, no
 //!   `impersonate`. The admin binding ([`ADMINS_BINDING`]) is applied at install with the cluster
-//!   admin's rights; Zeabur Identity cannot change them.
+//!   admin's rights. Zeabur Identity cannot change it.
 //!
 //! # References
 //!

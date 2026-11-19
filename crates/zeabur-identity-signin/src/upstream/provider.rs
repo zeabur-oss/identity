@@ -484,11 +484,10 @@ impl Provider {
                 query.append_pair("allow_signup", "false");
             }
             Protocol::OpenId { scopes, .. } => {
-                let mut scope = "openid".to_owned();
-                for extra in scopes.iter().filter(|s| s.as_str() != "openid") {
-                    scope.push(' ');
-                    scope.push_str(extra);
-                }
+                let scope = std::iter::once("openid")
+                    .chain(scopes.iter().map(String::as_str).filter(|s| *s != "openid"))
+                    .collect::<Vec<_>>()
+                    .join(" ");
                 query
                     .append_pair("scope", &scope)
                     .append_pair("nonce", request.nonce)

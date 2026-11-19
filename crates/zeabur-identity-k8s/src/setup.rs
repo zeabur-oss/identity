@@ -1,42 +1,37 @@
 //! The one-time setup token in a Secret, and the cluster admin's side of issuing it.
 //!
 //! The cluster admin runs `zeabur-identityctl setup-link` with their own kubeconfig. It creates the
-//! `User` as an admin account (`accountType: Admin`), optionally removes the user's pending
-//! invitations, old passkeys and sessions (`--reset`), and
-//! writes the Secret `zeabur-identity-setup` holding only the SHA-256 of a fresh 256-bit token.
-//! Zeabur Identity's service account can only `get` and `delete` that Secret, so it can redeem a
-//! token but never create one, and it never needs RBAC rights: the `zeabur:admins` binding is
-//! created at install.
+//! `User` as an admin account (`accountType: Admin`). With `--reset` it also removes the user's
+//! pending invitations, old passkeys and sessions. It writes the Secret `zeabur-identity-setup`
+//! holding only the SHA-256 of a fresh 256-bit token. Zeabur Identity's service account can only
+//! `get` and `delete` that Secret, so it can redeem a token but never create one.
 //!
 //! The Secret and each invitation carry an owner reference with the UID of their `User`. A token
-//! enrols only a `User` with that UID: see [`SetupToken::is_for`]. Thus a token left over from a
-//! deleted `User` does not enrol a new `User` with the same name.
+//! enrols only a `User` with that UID ([`SetupToken::is_for`]). A token left over from a deleted
+//! `User` does not enrol a new `User` with the same name.
 //!
-//! Redeeming is a delete with `uid` and `resourceVersion` preconditions, so exactly one of any
-//! number of concurrent redemptions succeeds, and issuing a new link (which replaces the Secret)
-//! invalidates every earlier one. The token travels in the URL fragment, which browsers do not
-//! send to servers or proxies. A user who already has passkeys or linked accounts gets a setup
-//! link or an invitation only with `--reset`, which also deletes the user's credentials and
-//! grants: otherwise the link's holder could add a passkey to an account that someone else
-//! controls. A credential owned by an earlier `User` of the same name does not count: it does not
-//! sign in as this `User`, and garbage collection deletes it.
+//! Redeeming is a delete with `uid` and `resourceVersion` preconditions. Exactly one of any number
+//! of concurrent redemptions succeeds. Issuing a new link (which replaces the Secret) invalidates
+//! every earlier one. The token travels in the URL fragment, which browsers do not send to servers
+//! or proxies.
 //!
-//! A link stays valid for at most [`MAX_VALID_FOR`]: the lifetime of an invitation from Zeabur and
-//! the default of `invite`. A link sent through chat or email can leak, so its lifetime has a cap.
+//! A user who already has passkeys or linked accounts gets a setup link or an invitation only with
+//! `--reset`, which also deletes the user's credentials and grants. Otherwise the link's holder
+//! could add a passkey to an account that someone else controls. A credential owned by an earlier
+//! `User` of the same name does not count.
+//!
+//! A link stays valid for at most [`MAX_VALID_FOR`]. A link sent through chat or email can leak.
 //!
 //! Each issued link is recorded as an `Event` on the `User`, and Zeabur Identity records each
 //! redemption the same way. If the `Event` fails, the command does not show the link.
 //!
-//! Reset deletes the user's invitations first, then credentials, then grants. Invitations go
-//! first because each one can enrol another passkey: one left behind would let whoever holds it
-//! back into the recovered account. Reset always deletes all three collections, even when they
-//! look empty: a failed later deletion may follow a successful earlier one, so a retry cannot use
-//! a count as evidence that the rest are gone. No setup Secret is written until every deletion
-//! succeeds. An enrolment that redeemed its link before the reset but stores its passkey after
-//! the credentials are deleted survives it; that window is one request long, and
-//! `kubectl get zbcred -l identity.zeabur.com/user=<name>` after the reset shows it. This
-//! implements Zeabur Identity's account-recovery policy using the security-event refresh-token
-//! revocation permitted by [RFC 9700 §4.14.2].
+//! Reset deletes the user's invitations first, then credentials, then grants. Each invitation can
+//! enrol another passkey, so none may remain. Reset always deletes all three collections, even when
+//! they look empty, because a retry cannot use a count as evidence that the rest are gone. No setup
+//! Secret is written until every deletion succeeds. An enrolment that redeemed its link before the
+//! reset but stores its passkey after the credentials are deleted survives the reset. That window
+//! is one request long. `kubectl get zbcred -l identity.zeabur.com/user=<name>` shows such a
+//! credential. The reset revokes refresh tokens on a security event, as [RFC 9700 §4.14.2] permits.
 //!
 //! [RFC 9700 §4.14.2]: https://www.rfc-editor.org/rfc/rfc9700.html#section-4.14.2
 

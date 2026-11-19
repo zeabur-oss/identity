@@ -7,48 +7,41 @@
 //! | `POST /account/links/start` | JSON: begin linking to the signed-in user |
 //! | `GET /upstream/{provider}/callback` | the provider's redirect: finish |
 //!
-//! An account signs in as a user only if it was linked to that user: by redeeming an
-//! invitation or setup link with it, by the user on the account page, or by an admin creating
-//! the `Credential`. Nothing is created on first sign-in.
+//! An account signs in as a user only if it was linked to that user: by redeeming an invitation or
+//! setup link with it, by the user on the account page, or by an admin creating the `Credential`.
+//! Nothing is created on first sign-in.
 //!
-//! Linking from the account page gives control of the account to whoever controls the upstream
-//! account, so it has the same gate as adding a passkey:
+//! Linking from the account page gives control of the user to whoever controls the upstream
+//! account. It has the same gate as adding a passkey:
 //!
 //! 1. The start needs the account session, and a user-verified passkey confirmation from the last
 //!    [`REAUTH_WINDOW`](crate::account::REAUTH_WINDOW). When `admin-sign-in` is
 //!    `device-bound-passkey`, only a device-bound passkey confirms an admin account.
 //! 2. The pending request names the session, the user and the user's UID. The callback finishes
 //!    only if the browser still sends that session. RFC 6749 §10.12 asks for this binding of
-//!    `state` to "the user-agent's authenticated state". A provider answer thus cannot link an
-//!    account to another session.
+//!    `state` to "the user-agent's authenticated state".
 //! 3. An account linked to anyone already, this user included, is refused. An admin account that
 //!    the settings keep from upstream sign-in is refused at the start and again at the callback.
-//! 4. The link names the user's UID, as an enrolment link does. The change is logged and recorded
-//!    as an `AccountLinked` event on the user.
+//! 4. The link names the user's UID, as an enrolment link does. A link left over from a removed
+//!    person does not sign in as a new person with the same username ([Object Names and IDs]). The
+//!    change is logged and recorded as an `AccountLinked` event on the user.
 //!
-//! An upstream sign-in carries no `amr` value: RFC 8176 defines none for federation, and Zeabur
-//! Identity does not read the provider's `amr`. The one exception is a provider that the operator
-//! marks `mfa: Enforced` (see [`Provider::enforcing_mfa`]): its sign-ins carry `amr = ["mfa"]`,
-//! "Multiple-factor authentication" ([RFC 8176] §2). The value rests on the operator's statement
-//! alone. The token endpoint reads it back to decide again whether an admin account may use the
-//! sign-in (`zeabur_identity_core::account::allows`). Under `admin-sign-in: two-factor`, an admin
-//! account signs in and links accounts only through such a provider. Under `passkey` and
-//! `device-bound-passkey`, it does neither through any provider.
-//!
-//! A link names its `User` by UID as well as by name. After a delete, a new object can have the
-//! same name, but every object gets a distinct UID ([Object Names and IDs]). Thus a link left
-//! over from a removed person does not sign in as a new person with the same username.
+//! An upstream sign-in carries no `amr` value: RFC 8176 defines none for federation. The one
+//! exception is a provider that the operator marks `mfa: Enforced` (see
+//! [`Provider::enforcing_mfa`]). Its sign-ins carry `amr = ["mfa"]` ([RFC 8176] §2). The value
+//! rests on the operator's statement alone. The token endpoint reads it back to decide again
+//! whether an admin account may use the sign-in (`zeabur_identity_core::account::allows`). Under
+//! `admin-sign-in: two-factor`, an admin account signs in and links accounts only through such a
+//! provider. Under `passkey` and `device-bound-passkey`, it does neither through any provider.
 //!
 //! The pending request (`state`, `nonce`, PKCE verifier, the provider's issuer and purpose) is
-//! sealed into a `__Host-` cookie with `SameSite=Lax`, the strictest setting that still
-//! accompanies the provider's top-level redirect back. `state` is compared in constant time and
-//! accepted once (RFC 6749 §10.12, RFC 9700 §2.1). The callback answers with HTML; errors never
+//! sealed into a `__Host-` cookie with `SameSite=Lax`. `state` is compared in constant time and
+//! accepted once (RFC 6749 §10.12, RFC 9700 §2.1). The callback answers with HTML. Errors never
 //! echo the provider's text.
 //!
-//! The callback checks the `iss` parameter of the authorization response ([RFC 9207] §2.4)
-//! against the issuer recorded when the request started, before the code is sent anywhere. A
-//! response without `iss` is accepted, as §2.4 allows: no provider is configured as one that
-//! sends it. Such a provider gets no protection from this check.
+//! The callback checks the `iss` parameter of the authorization response ([RFC 9207] §2.4) against
+//! the issuer recorded at the start, before it sends the code anywhere. A response without `iss` is
+//! accepted, as §2.4 allows. Such a provider gets no protection from this check.
 //!
 //! [Object Names and IDs]: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/
 //! [RFC 8176]: https://www.rfc-editor.org/rfc/rfc8176.html#section-2

@@ -1,10 +1,10 @@
 //! The certificate of the in-cluster discovery listener.
 //!
 //! kube-apiserver fetches discovery and keys over `https` only, and does not resolve cluster DNS
-//! names, so it reaches Zeabur Identity at its Service's ClusterIP with a certificate for that IP.
+//! names. It reaches Zeabur Identity at its Service's ClusterIP with a certificate for that IP.
 //! cert-manager issues and renews that certificate ([cert-manager Certificate]).
-//! `zeabur-identityctl kube-config`, run with the cluster admin's credentials, applies
-//! [`objects`] in Zeabur Identity's namespace:
+//! `zeabur-identityctl kube-config`, run with the cluster admin's credentials, applies [`objects`]
+//! in Zeabur Identity's namespace:
 //!
 //! 1. A `SelfSigned` Issuer issues a root CA, valid for [`CA_DURATION`], into the Secret
 //!    [`CA_SECRET`] ([cert-manager SelfSigned]).
@@ -12,20 +12,18 @@
 //! 3. A Certificate for the ClusterIP and the Service's DNS names goes into the `kubernetes.io/tls`
 //!    Secret [`SECRET`], with cert-manager's default duration and renewal.
 //!
-//! kube-apiserver trusts the root CA (`issuer.certificateAuthority`), not the serving
-//! certificate. A renewed serving certificate therefore needs no change to kube-apiserver's
-//! configuration. The running server reads [`SECRET`] again within a minute. The root CA keeps
-//! its key when cert-manager renews it (`rotationPolicy: Never`), so the CA certificate that
-//! kube-apiserver holds stays valid until it expires.
+//! kube-apiserver trusts the root CA (`issuer.certificateAuthority`), not the serving certificate.
+//! A renewed serving certificate needs no change to kube-apiserver's configuration. The running
+//! server reads [`SECRET`] again within a minute. The root CA keeps its key when cert-manager
+//! renews it (`rotationPolicy: Never`), so the CA certificate that kube-apiserver holds stays valid
+//! until it expires.
 //!
-//! Pinning kube-apiserver to this CA, rather than the system roots or plain `http`, is what
-//! keeps someone who can answer at the ClusterIP from handing kube-apiserver their own keys. The
-//! chain ends in a certificate with `CA:TRUE` because Go's TLS stack, which kube-apiserver uses,
-//! requires that even for a self-signed setup ([Authenticating]).
+//! The chain ends in a certificate with `CA:TRUE`, because Go's TLS stack requires it even for a
+//! self-signed setup ([Authenticating]).
 //!
 //! The CA's private key is in [`CA_SECRET`]. Anyone who can read that Secret can issue a
-//! certificate for the internal address. To impersonate Zeabur Identity, they must also answer
-//! at the ClusterIP. Zeabur Identity's service account can only `get` [`SECRET`], not the CA.
+//! certificate for the internal address. To impersonate Zeabur Identity, they must also answer at
+//! the ClusterIP. Zeabur Identity's service account can only `get` [`SECRET`], not the CA.
 //!
 //! # References
 //!

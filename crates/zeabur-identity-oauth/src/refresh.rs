@@ -1,42 +1,28 @@
 //! Refresh tokens: `<grant name>.<256-bit secret>`. Only the secret's hash is stored.
 //!
 //! Each authorization creates one `Grant` (a refresh-token family) holding the hashes of the
-//! current and previous secret. Every refresh rotates the secret with one compare-and-swap, and
-//! the family is classified by [`zeabur_identity_store::classify`]:
+//! current and previous secret. Every refresh rotates the secret with one compare-and-swap. The
+//! family is classified by [`zeabur_identity_store::classify`]:
 //!
 //! - the current secret rotates;
-//! - the previous secret is a replay: someone used a rotated token, so the whole family is revoked
-//!   (RFC 9700 §4.14.2, and §2.2.2 for public clients). The thief and the victim share a lineage,
-//!   so the first of them to refresh makes the other's next refresh end it;
+//! - the previous secret is a replay. Someone used a rotated token, so the whole family is revoked
+//!   (RFC 9700 §4.14.2, and §2.2.2 for public clients);
 //! - anything else is `invalid_grant` without revoking, so a cluster reader who knows a grant name
 //!   cannot end someone's session by guessing.
 //!
 //! A losing concurrent rotation is a replay too. There is no grace window: kubelogin serialises
-//! refreshes of one token cache with a file lock ([kubelogin]), so legitimate use does not race
-//! itself. Every refresh also checks that the presenting client owns the family (otherwise it is
-//! revoked only with proof of the current or previous secret), that the user still exists and is
-//! enabled, and that the scope only narrows ([RFC 6749 §6]).
+//! refreshes of one token cache with a file lock ([kubelogin]). Every refresh also checks that the
+//! presenting client owns the family, that the user still exists and is enabled, and that the scope
+//! only narrows ([RFC 6749 §6]).
 //!
 //! Revocation and wrong-client refresh compare the presented secret hash in constant time against
-//! both retained hashes before deleting a family. The grant name is only a lookup key, not a
-//! credential. An unknown secret cannot terminate a session, even when the requester knows its
-//! grant name. The owning client can revoke with either retained secret; invalid revocation
-//! tokens still receive HTTP 200 ([RFC 7009 §2.1 and §2.2]).
+//! both retained hashes before they delete a family. The grant name is a lookup key, not a
+//! credential. The owning client can revoke with either retained secret. Invalid revocation tokens
+//! still receive HTTP 200 ([RFC 7009 §2.1 and §2.2]).
 //!
 //! [RFC 6749 §6]: https://www.rfc-editor.org/rfc/rfc6749#section-6
 //! [RFC 7009 §2.1 and §2.2]: https://www.rfc-editor.org/rfc/rfc7009#section-2.1
-//!
-//! One small record per family follows Kanidm, and revoking the family on reuse with no grace
-//! period follows Hydra's default ([Kanidm], [Hydra]). Pinniped and Rauthy delete the old token on
-//! rotation, so a replay looks like an unknown token and the family survives; Dex rejects reuse
-//! but keeps the family and stores refresh tokens in plain text ([Pinniped], [Rauthy], [Dex]).
-//!
 //! [kubelogin]: https://github.com/int128/kubelogin
-//! [Kanidm]: https://github.com/kanidm/kanidm/tree/3331b8ed7f1541901ffe0c722f2a04c82897809c
-//! [Hydra]: https://github.com/ory/hydra/tree/4174065ffb052799890f7480f5360a877a67ffc1
-//! [Pinniped]: https://github.com/vmware/pinniped/tree/e635a39cf793b5b915220a846de91e089ab431c9
-//! [Rauthy]: https://github.com/sebadob/rauthy/tree/abd24b6d189b473178c7797787d6cbddd65df3d3
-//! [Dex]: https://github.com/dexidp/dex/tree/05a275057112ba93e17db21f600b756f000f1c21
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
