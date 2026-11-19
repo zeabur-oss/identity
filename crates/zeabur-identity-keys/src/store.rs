@@ -18,6 +18,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use zeabur_identity_core::clock::UnixTime;
+pub use zeabur_identity_core::store::StoreError;
 
 use super::Algorithm;
 use super::rotation::{KeyRecord, KeyRing};
@@ -139,17 +140,6 @@ pub struct Loaded {
     pub keyset: StoredKeyset,
     /// The version to pass back to [`KeyStore::save`].
     pub revision: Revision,
-}
-
-/// A storage failure.
-#[derive(Debug, Error, PartialEq, Eq)]
-pub enum StoreError {
-    /// Someone else wrote the keyset since it was read.
-    #[error("the stored keys changed concurrently")]
-    Conflict,
-    /// The backend failed.
-    #[error("key storage failed: {0}")]
-    Backend(String),
 }
 
 /// Where signing keys are kept.

@@ -5,7 +5,6 @@ use std::collections::hash_map::Entry;
 use std::future::{self, Future};
 use std::sync::{Mutex, PoisonError};
 
-use thiserror::Error;
 use zeabur_identity_api::ADMIN_GROUP;
 use zeabur_identity_api::client::ClientType;
 use zeabur_identity_api::upstream::{ExternalId, Issuer};
@@ -13,15 +12,7 @@ use zeabur_identity_core::account::{AccountType, Settings};
 use zeabur_identity_core::clock::UnixTime;
 use zeabur_identity_core::crypto::ct_eq;
 use zeabur_identity_core::guessing::Counts;
-
-/// A storage backend failed or answered ambiguously.
-///
-/// Callers fail closed: they answer `server_error` and never treat an error as success. A lost race
-/// is not an error; it is an outcome such as [`CreateGrant::AlreadyExists`] or
-/// [`Rotation::Replay`].
-#[derive(Debug, Error, PartialEq, Eq)]
-#[error("storage failed: {0}")]
-pub struct StoreError(pub String);
+pub use zeabur_identity_core::store::{StoreError, WRITE_ATTEMPTS, retry_on_conflict};
 
 /// A registered client.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -413,7 +404,7 @@ impl Directory for MemoryDirectory {
         let mut matches = users.values().filter(|user| user.subject == subject);
         let user = matches.next().cloned();
         let result = if matches.next().is_some() {
-            Err(StoreError("ambiguous user subject".to_owned()))
+            Err(StoreError::backend("ambiguous user subject"))
         } else {
             Ok(user)
         };

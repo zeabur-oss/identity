@@ -7,4 +7,5 @@ pub mod crypto;
 pub mod guessing;
 pub mod password;
 pub mod protocol;
+pub mod store;
 pub mod totp;

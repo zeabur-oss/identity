@@ -96,7 +96,9 @@ pub enum DeleteOutcome {
     NotFound,
 }
 
-fn status_code(error: &kube::Error) -> Option<u16> {
+/// The HTTP status code of an API server refusal; `None` for other failures.
+#[must_use]
+pub const fn status_code(error: &kube::Error) -> Option<u16> {
     if let kube::Error::Api(status) = error {
         Some(status.code)
     } else {

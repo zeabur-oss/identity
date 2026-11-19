@@ -27,17 +27,15 @@ use zeabur_identity_store::{
     AccountEvent, CreateCredential, CredentialStore, LinkedAccount, LinkedSummary, NewExternal,
     NewPasskey, PasskeySummary, PasswordRemoval, PasswordState, Removal, Rename, Saved, StoreError,
     StoredPasskey, StoredPassword, StoredTotp, Unlink, User, password_credential_name,
+    retry_on_conflict,
 };
 
 use super::MANAGED_BY;
 use super::objects::{
     CreateOutcome, DeleteOutcome, ReplaceOutcome, create_once, delete_if_unchanged, list_all,
-    replace_status_if_unchanged,
+    replace_status_if_unchanged, status_code,
 };
 use super::users::{owned_by_another, user_owner, user_owner_uid};
-
-/// How many times a rename re-reads after losing a compare-and-swap.
-const MAX_ATTEMPTS: usize = 4;
 
 /// Passkeys as `Credential` objects named by their credential ID.
 #[derive(Clone)]
@@ -64,10 +62,6 @@ impl KubeCredentialStore {
     }
 }
 
-fn backend(error: &kube::Error) -> StoreError {
-    StoreError(error.to_string())
-}
-
 fn secs(time: UnixTime) -> i64 {
     i64::try_from(time.as_secs()).unwrap_or(i64::MAX)
 }
@@ -80,7 +74,7 @@ fn time(secs: i64) -> UnixTime {
 /// those owned by another `User` UID.
 async fn owned_passkeys(api: &Api<Credential>, user: &User) -> Result<Vec<Credential>, StoreError> {
     let params = ListParams::default().labels(&format!("{USER_LABEL}={}", user.name));
-    let list = list_all(api, params).await.map_err(|e| backend(&e))?;
+    let list = list_all(api, params).await.map_err(StoreError::backend)?;
     Ok(list
         .into_iter()
         .filter(|object| {
@@ -98,7 +92,7 @@ async fn owned_externals(
     user: &User,
 ) -> Result<Vec<Credential>, StoreError> {
     let params = ListParams::default().labels(&format!("{USER_LABEL}={}", user.name));
-    let list = list_all(api, params).await.map_err(|e| backend(&e))?;
+    let list = list_all(api, params).await.map_err(StoreError::backend)?;
     Ok(list
         .into_iter()
         .filter(|object| {
@@ -126,7 +120,7 @@ async fn delete_keeping(
         target.metadata.uid.as_deref(),
         target.metadata.resource_version.as_deref(),
     ) else {
-        return Err(StoreError(
+        return Err(StoreError::Backend(
             "the credential has no uid or resourceVersion".to_owned(),
         ));
     };
@@ -137,7 +131,7 @@ async fn delete_keeping(
         other.status = Some(status);
         match replace_status_if_unchanged(api, &other)
             .await
-            .map_err(|e| backend(&e))?
+            .map_err(StoreError::backend)?
         {
             ReplaceOutcome::Replaced(_) => {}
             ReplaceOutcome::Conflict | ReplaceOutcome::NotFound => return Ok(false),
@@ -145,7 +139,7 @@ async fn delete_keeping(
     }
     match delete_if_unchanged(api, &target.name_any(), uid, version)
         .await
-        .map_err(|e| backend(&e))?
+        .map_err(StoreError::backend)?
     {
         DeleteOutcome::Deleted => Ok(true),
         DeleteOutcome::Changed | DeleteOutcome::NotFound => Ok(false),
@@ -161,7 +155,7 @@ async fn owned_password(
     let object = api
         .get_opt(&password_credential_name(&user.subject))
         .await
-        .map_err(|e| backend(&e))?;
+        .map_err(StoreError::backend)?;
     Ok(object.filter(|object| {
         object.spec.user == user.name
             && matches!(object.spec.kind, CredentialKind::Password(_))
@@ -297,7 +291,10 @@ impl CredentialStore for KubeCredentialStore {
             object.metadata.owner_references = user_owner(&api, &object.spec.user)
                 .await?
                 .map(|owner| vec![owner]);
-            match create_once(&api, &object).await.map_err(|e| backend(&e))? {
+            match create_once(&api, &object)
+                .await
+                .map_err(StoreError::backend)?
+            {
                 CreateOutcome::Created(_) => Ok(CreateCredential::Created),
                 CreateOutcome::AlreadyExists => Ok(CreateCredential::AlreadyExists),
             }
@@ -311,7 +308,7 @@ impl CredentialStore for KubeCredentialStore {
         let api = self.api.clone();
         let name = name.to_owned();
         async move {
-            let object = api.get_opt(&name).await.map_err(|e| backend(&e))?;
+            let object = api.get_opt(&name).await.map_err(StoreError::backend)?;
             Ok(object.and_then(|object| {
                 let last_used_at = object
                     .status
@@ -357,9 +354,12 @@ impl CredentialStore for KubeCredentialStore {
             let owner = user_owner(&api, &object.spec.user)
                 .await?
                 .filter(|owner| owner.uid == user_subject)
-                .ok_or_else(|| StoreError("the user changed during linking".to_owned()))?;
+                .ok_or_else(|| StoreError::Backend("the user changed during linking".to_owned()))?;
             object.metadata.owner_references = Some(vec![owner]);
-            match create_once(&api, &object).await.map_err(|e| backend(&e))? {
+            match create_once(&api, &object)
+                .await
+                .map_err(StoreError::backend)?
+            {
                 CreateOutcome::Created(_) => Ok(CreateCredential::Created),
                 CreateOutcome::AlreadyExists => Ok(CreateCredential::AlreadyExists),
             }
@@ -373,7 +373,7 @@ impl CredentialStore for KubeCredentialStore {
         let api = self.api.clone();
         let name = name.to_owned();
         async move {
-            let object = api.get_opt(&name).await.map_err(|e| backend(&e))?;
+            let object = api.get_opt(&name).await.map_err(StoreError::backend)?;
             Ok(object
                 .filter(|o| matches!(o.spec.kind, CredentialKind::External(_)))
                 .map(|o| LinkedAccount {
@@ -409,30 +409,29 @@ impl CredentialStore for KubeCredentialStore {
         let api = self.api.clone();
         let (user, name, label) = (user.clone(), name.to_owned(), label.to_owned());
         async move {
-            for _ in 0..MAX_ATTEMPTS {
-                let Some(mut object) = owned_passkeys(&api, &user)
+            let (api, user, name, label) = (&api, &user, &name, &label);
+            retry_on_conflict(|| async move {
+                let Some(mut object) = owned_passkeys(api, user)
                     .await?
                     .into_iter()
-                    .find(|object| object.name_any() == name)
+                    .find(|object| object.name_any() == *name)
                 else {
-                    return Ok(Rename::NotFound);
+                    return Ok(Some(Rename::NotFound));
                 };
                 let mut status = object.status.take().unwrap_or_default();
                 status.label = Some(label.clone());
                 status.revision = status.revision.saturating_add(1);
                 object.status = Some(status);
-                match replace_status_if_unchanged(&api, &object)
+                match replace_status_if_unchanged(api, &object)
                     .await
-                    .map_err(|e| backend(&e))?
+                    .map_err(StoreError::backend)?
                 {
-                    ReplaceOutcome::Replaced(_) => return Ok(Rename::Renamed),
-                    ReplaceOutcome::NotFound => return Ok(Rename::NotFound),
-                    ReplaceOutcome::Conflict => {}
+                    ReplaceOutcome::Replaced(_) => Ok(Some(Rename::Renamed)),
+                    ReplaceOutcome::NotFound => Ok(Some(Rename::NotFound)),
+                    ReplaceOutcome::Conflict => Ok(None),
                 }
-            }
-            Err(StoreError(
-                "renaming the passkey kept conflicting".to_owned(),
-            ))
+            })
+            .await
         }
     }
 
@@ -554,8 +553,8 @@ impl CredentialStore for KubeCredentialStore {
                 .await
             {
                 Ok(_) => Ok(()),
-                Err(kube::Error::Api(status)) if status.code == 404 => Ok(()),
-                Err(error) => Err(backend(&error)),
+                Err(error) if status_code(&error) == Some(404) => Ok(()),
+                Err(error) => Err(StoreError::backend(error)),
             }
         }
     }
@@ -595,13 +594,13 @@ impl CredentialStore for KubeCredentialStore {
             ..Event::default()
         };
         async move {
-            let events =
-                events.ok_or_else(|| StoreError("events need a namespaced API".to_owned()))?;
+            let events = events
+                .ok_or_else(|| StoreError::Backend("events need a namespaced API".to_owned()))?;
             events
                 .create(&PostParams::default(), &object)
                 .await
                 .map(|_| ())
-                .map_err(|e| backend(&e))
+                .map_err(StoreError::backend)
         }
     }
 
@@ -668,7 +667,7 @@ impl CredentialStore for KubeCredentialStore {
         };
         async move {
             let name = object.name_any();
-            let current = api.get_opt(&name).await.map_err(|e| backend(&e))?;
+            let current = api.get_opt(&name).await.map_err(StoreError::backend)?;
             if let Some(current) = current {
                 let read = replacing.unwrap_or_else(|| version(&current));
                 let Some((uid, resource_version)) = read.split_once('/') else {
@@ -676,7 +675,7 @@ impl CredentialStore for KubeCredentialStore {
                 };
                 match delete_if_unchanged(&api, &name, uid, resource_version)
                     .await
-                    .map_err(|e| backend(&e))?
+                    .map_err(StoreError::backend)?
                 {
                     DeleteOutcome::Deleted => {}
                     DeleteOutcome::Changed | DeleteOutcome::NotFound => {
@@ -690,10 +689,13 @@ impl CredentialStore for KubeCredentialStore {
                 .await?
                 .filter(|owner| owner.uid == user.subject)
                 .ok_or_else(|| {
-                    StoreError("the user changed while setting a password".to_owned())
+                    StoreError::Backend("the user changed while setting a password".to_owned())
                 })?;
             object.metadata.owner_references = Some(vec![owner]);
-            match create_once(&api, &object).await.map_err(|e| backend(&e))? {
+            match create_once(&api, &object)
+                .await
+                .map_err(StoreError::backend)?
+            {
                 CreateOutcome::Created(_) => Ok(Saved::Saved),
                 CreateOutcome::AlreadyExists => Ok(Saved::Conflict),
             }
@@ -727,10 +729,8 @@ impl CredentialStore for KubeCredentialStore {
                 .await
             {
                 Ok(_) => Ok(Saved::Saved),
-                Err(kube::Error::Api(status)) if matches!(status.code, 404 | 409) => {
-                    Ok(Saved::Conflict)
-                }
-                Err(error) => Err(backend(&error)),
+                Err(error) if matches!(status_code(&error), Some(404 | 409)) => Ok(Saved::Conflict),
+                Err(error) => Err(StoreError::backend(error)),
             }
         }
     }

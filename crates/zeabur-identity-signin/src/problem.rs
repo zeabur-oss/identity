@@ -66,9 +66,10 @@ impl Problem {
         }
     }
 
-    /// An internal error; details are logged, not returned.
+    /// An internal error: logs `error` and returns a refusal without details.
     #[must_use]
-    pub const fn internal() -> Self {
+    pub fn internal(error: impl std::fmt::Display) -> Self {
+        tracing::error!(reason = "internal_error", %error, "sign-in failed");
         Self::new(
             StatusCode::INTERNAL_SERVER_ERROR,
             "internal",

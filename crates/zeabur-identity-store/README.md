@@ -27,8 +27,9 @@ signing algorithm of a client's ID tokens). Used by `zeabur-identity-oauth`, `ze
   Kubernetes these are a create, an update carrying `resourceVersion`, and a delete with `uid`
   and `resourceVersion` preconditions.
 - Lost races are outcomes (`AlreadyExists`, `Replay`, `AlreadyUsed`, `Conflict`), never
-  errors. `StoreError` means the backend failed or answered ambiguously, and callers fail
-  closed: an error is never treated as success.
+  errors. A read-modify-write that loses is read again, up to `WRITE_ATTEMPTS` times
+  (`retry_on_conflict`). `StoreError` means the backend failed or answered ambiguously, or every
+  attempt lost; callers fail closed: an error is never treated as success.
 - Only hashes of secrets are stored: refresh tokens, client secrets, setup and invitation
   tokens. Passkeys are public-key records.
 - Object names derived from secrets or external identifiers are SHA-256 based, so names

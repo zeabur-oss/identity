@@ -20,6 +20,7 @@ use zeabur_identity_keys::store::{
 };
 
 use super::MANAGED_BY;
+use super::objects::status_code;
 
 /// The Secret `type` of the key Secret.
 pub const SECRET_TYPE: &str = "identity.zeabur.com/signing-keys";
@@ -52,16 +53,12 @@ impl SecretKeyStore {
         }
     }
 
-    fn backend(error: impl std::fmt::Display) -> StoreError {
-        StoreError::Backend(error.to_string())
-    }
-
     fn secret(
         &self,
         keyset: &StoredKeyset,
         revision: Option<&Revision>,
     ) -> Result<Secret, StoreError> {
-        let json = serde_json::to_vec(keyset).map_err(Self::backend)?;
+        let json = serde_json::to_vec(keyset).map_err(StoreError::backend)?;
         Ok(Secret {
             metadata: ObjectMeta {
                 name: Some(self.name.clone()),
@@ -79,17 +76,14 @@ impl SecretKeyStore {
     }
 }
 
-fn code(error: &kube::Error) -> Option<u16> {
-    if let kube::Error::Api(status) = error {
-        Some(status.code)
-    } else {
-        None
-    }
-}
-
 impl KeyStore for SecretKeyStore {
     async fn load(&self) -> Result<Option<Loaded>, StoreError> {
-        let Some(secret) = self.api.get_opt(&self.name).await.map_err(Self::backend)? else {
+        let Some(secret) = self
+            .api
+            .get_opt(&self.name)
+            .await
+            .map_err(StoreError::backend)?
+        else {
             return Ok(None);
         };
         if secret.type_.as_deref() != Some(SECRET_TYPE) {
@@ -101,7 +95,7 @@ impl KeyStore for SecretKeyStore {
         let revision = Revision(secret.metadata.resource_version.clone().unwrap_or_default());
         // An installer-created Secret has no data yet: it is an empty keyset at this revision.
         let keyset = match secret.data.as_ref().and_then(|data| data.get(DATA_KEY)) {
-            Some(bytes) => serde_json::from_slice(&bytes.0).map_err(Self::backend)?,
+            Some(bytes) => serde_json::from_slice(&bytes.0).map_err(StoreError::backend)?,
             None => StoredKeyset {
                 version: SCHEMA_VERSION,
                 keys: Vec::new(),
@@ -129,8 +123,10 @@ impl KeyStore for SecretKeyStore {
                 saved.metadata.resource_version.unwrap_or_default(),
             )),
             // 409: someone else wrote first. 404: the Secret was deleted since we read it.
-            Err(error) if matches!(code(&error), Some(409 | 404)) => Err(StoreError::Conflict),
-            Err(error) => Err(Self::backend(error)),
+            Err(error) if matches!(status_code(&error), Some(409 | 404)) => {
+                Err(StoreError::Conflict)
+            }
+            Err(error) => Err(StoreError::backend(error)),
         }
     }
 }
