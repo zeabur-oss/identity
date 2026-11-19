@@ -38,6 +38,8 @@ mod tests {
     use kube::config::Kubeconfig;
     use kube::core::GroupVersionKind;
     use kube::discovery::{Scope, pinned_kind};
+    use kube::runtime::conditions;
+    use kube::runtime::wait::await_condition;
     use kube::{Client, ResourceExt as _};
     use passkey::client::DefaultClientData;
     use passkey::types::webauthn::{CredentialCreationOptions, CredentialRequestOptions};
@@ -106,6 +108,19 @@ mod tests {
             assert!(Instant::now() < deadline, "timed out waiting for {what}");
             tokio::time::sleep(Duration::from_secs(2)).await;
         }
+    }
+
+    /// Waits until the Deployment's rollout is complete, as `kubectl rollout status` does.
+    async fn rolled_out(deployments: &Api<Deployment>, what: &str) {
+        let completed = await_condition(
+            deployments.clone(),
+            rbac::NAME,
+            conditions::is_deployment_completed(),
+        );
+        tokio::time::timeout(Duration::from_secs(180), completed)
+            .await
+            .unwrap_or_else(|_| panic!("timed out waiting for {what}"))
+            .unwrap();
     }
 
     /// Writes kube-apiserver's configuration atomically (it re-reads the file by path).
@@ -379,20 +394,7 @@ mod tests {
             apply(admin, object).await;
         }
         let deployments: Api<Deployment> = Api::namespaced(admin.clone(), namespace);
-        wait_for(
-            "Zeabur Identity to become ready",
-            Duration::from_secs(180),
-            || async {
-                deployments
-                    .get(rbac::NAME)
-                    .await
-                    .ok()
-                    .and_then(|d| d.status)
-                    .and_then(|s| s.ready_replicas)
-                    == Some(1)
-            },
-        )
-        .await;
+        rolled_out(&deployments, "Zeabur Identity to become ready").await;
     }
 
     /// Reaches the public listener through a `NodePort` on the node's address. Returns the
@@ -1284,20 +1286,7 @@ mod tests {
             )
             .await
             .unwrap();
-        wait_for(
-            "the Deployment to roll out with the CA",
-            Duration::from_secs(180),
-            || async {
-                let deployment = deployments.get(rbac::NAME).await.unwrap();
-                let generation = deployment.metadata.generation;
-                let status = deployment.status.unwrap_or_default();
-                status.observed_generation == generation
-                    && status.updated_replicas == Some(1)
-                    && status.ready_replicas == Some(1)
-                    && status.replicas == Some(1)
-            },
-        )
-        .await;
+        rolled_out(&deployments, "the Deployment to roll out with the CA").await;
 
         // The provider: its client secret, then the object.
         apply(
