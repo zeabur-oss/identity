@@ -38,7 +38,6 @@ mod tests {
     use kube::config::Kubeconfig;
     use kube::core::GroupVersionKind;
     use kube::discovery::{Scope, pinned_kind};
-    use kube::runtime::conditions;
     use kube::runtime::wait::await_condition;
     use kube::{Client, ResourceExt as _};
     use passkey::client::DefaultClientData;
@@ -110,13 +109,21 @@ mod tests {
         }
     }
 
-    /// Waits until the Deployment's rollout is complete, as `kubectl rollout status` does.
+    /// Waits until the Deployment's rollout is complete, as `kubectl rollout status` decides: the
+    /// controller saw the current generation, and every replica is updated and available.
     async fn rolled_out(deployments: &Api<Deployment>, what: &str) {
-        let completed = await_condition(
-            deployments.clone(),
-            rbac::NAME,
-            conditions::is_deployment_completed(),
-        );
+        let completed =
+            await_condition(deployments.clone(), rbac::NAME, |d: Option<&Deployment>| {
+                d.is_some_and(|d| {
+                    let want = d.spec.as_ref().and_then(|s| s.replicas).unwrap_or(1);
+                    d.status.as_ref().is_some_and(|s| {
+                        s.observed_generation >= d.metadata.generation
+                            && s.updated_replicas.unwrap_or(0) == want
+                            && s.replicas.unwrap_or(0) == want
+                            && s.available_replicas.unwrap_or(0) == want
+                    })
+                })
+            });
         tokio::time::timeout(Duration::from_secs(180), completed)
             .await
             .unwrap_or_else(|_| panic!("timed out waiting for {what}"))
