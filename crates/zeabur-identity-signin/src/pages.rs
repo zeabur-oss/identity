@@ -10,6 +10,7 @@ use axum::http::HeaderMap;
 use axum::response::Response;
 use axum::routing::get;
 use zeabur_identity_core::clock::Clock;
+use zeabur_identity_core::protocol::SETUP_PATH;
 use zeabur_identity_oauth::AuthorizationServer;
 use zeabur_identity_oauth::authorize::Flow;
 use zeabur_identity_oauth::endpoints::{FLOW_COOKIE, open_flow};
@@ -29,7 +30,7 @@ pub fn router<D: Directory, G: GrantStore, C: Clock>(
 ) -> Router {
     Router::new()
         .route("/login", get(login::<D, G, C>))
-        .route("/setup", get(setup::<D, G, C>))
+        .route(SETUP_PATH, get(setup::<D, G, C>))
         .with_state((server, providers))
         .merge(zeabur_identity_ui::assets::router())
 }

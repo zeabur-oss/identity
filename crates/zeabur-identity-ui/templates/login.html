@@ -18,7 +18,7 @@
     {% call ui::alert(m.no_request_title, "default", "WarningCircle", live = "") %}{{ m.no_request_apps_body }}{% endcall %}
     {{ ui::app_links(apps, m) }}
     {%- endif %}
-    <a href="/account" class="{{ ds::button("secondary", "lg") }} w-full">{{ icons::icon("Key") }}{{ m.manage_passkeys }}</a>
+    <a href="{{ zeabur_identity_core::protocol::ACCOUNT_PATH }}" class="{{ ds::button("secondary", "lg") }} w-full">{{ icons::icon("Key") }}{{ m.manage_passkeys }}</a>
     {%- else %}
     {#- Shown by the script once the request has ended: signing in can then only fail. -#}
     <div id="ended" hidden tabindex="-1" class="flex flex-col gap-5 outline-none">

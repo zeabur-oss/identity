@@ -13,12 +13,10 @@ use zeabur_identity_api::{EXPIRES_AT_ANNOTATION, EXPIRY_BUCKET_LABEL, USER_LABEL
 use zeabur_identity_core::clock::UnixTime;
 use zeabur_identity_core::config::BaseUrl;
 use zeabur_identity_core::crypto::{hex, random};
+use zeabur_identity_core::protocol::SETUP_PATH;
 
 use super::MANAGED_BY;
 use super::setup::{LinkError, check_valid_for, issued_note, prepare_enrolment, record_issued};
-
-/// Path of the enrolment page; the token goes in the fragment.
-pub const ENROL_PATH: &str = "/setup";
 
 /// Who to invite.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,7 +57,7 @@ pub fn new_token(name: &str) -> Result<String, LinkError> {
 /// The enrolment link for `token`.
 #[must_use]
 pub fn link(issuer: &BaseUrl, token: &str) -> String {
-    format!("{}#token={token}", issuer.join(ENROL_PATH))
+    format!("{}#token={token}", issuer.join(SETUP_PATH))
 }
 
 /// Creates the user (if missing) and an invitation, with the caller's (admin's) credentials.

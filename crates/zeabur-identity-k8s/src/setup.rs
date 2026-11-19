@@ -54,6 +54,7 @@ use zeabur_identity_api::{EXPIRES_AT_ANNOTATION, USER_LABEL, token_hash};
 use zeabur_identity_core::clock::UnixTime;
 use zeabur_identity_core::config::BaseUrl;
 use zeabur_identity_core::crypto::random;
+use zeabur_identity_core::protocol::SETUP_PATH;
 use zeabur_identity_store::{
     AccountEvent, Consume, CredentialStore as _, SetupStore, SetupToken, StoreError,
     invitation_name,
@@ -419,7 +420,7 @@ pub async fn issue_setup_link(
     let note = issued_note(None, expires_at, reset);
     record_issued(&client, namespace, &user, "SetupLinkIssued", note, now).await?;
     Ok(SetupLink {
-        url: format!("{}#token={token}", issuer.join("/setup")),
+        url: format!("{}#token={token}", issuer.join(SETUP_PATH)),
         expires_at,
     })
 }

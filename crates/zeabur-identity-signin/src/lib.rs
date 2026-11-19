@@ -33,6 +33,7 @@ use zeabur_identity_api::token_hash;
 use zeabur_identity_core::account::{Method, Refusal, allows};
 use zeabur_identity_core::clock::{Clock, UnixTime};
 use zeabur_identity_core::crypto::{ct_eq, hex, random};
+use zeabur_identity_core::protocol::SETUP_PATH;
 use zeabur_identity_oauth::authorize::Authentication;
 use zeabur_identity_oauth::endpoints::{FLOW_COOKIE, complete_authorization};
 use zeabur_identity_oauth::{AuthorizationServer, OneTimeIds, Use};
@@ -99,7 +100,7 @@ where
 {
     Router::new()
         .route("/setup/options", post(setup_options::<D, G, C, K, S>))
-        .route("/setup", post(setup_finish::<D, G, C, K, S>))
+        .route(SETUP_PATH, post(setup_finish::<D, G, C, K, S>))
         .route("/login/options", post(login_options::<D, G, C, K, S>))
         .route("/login", post(login_finish::<D, G, C, K, S>))
         .route("/login/password", post(password::sign_in::<D, G, C, K, S>))
