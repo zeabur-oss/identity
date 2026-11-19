@@ -1348,7 +1348,8 @@ mod tests {
                 let address = address.clone();
                 async move {
                     let page = http(&address, Method::GET, "/setup", &[], None).await;
-                    String::from_utf8_lossy(&page.body).contains("data-provider=\"keycloak\"")
+                    String::from_utf8_lossy(&page.body)
+                        .contains("data-start=\"/upstream/keycloak/start\"")
                 }
             },
         )
