@@ -2,10 +2,31 @@
 
 use serde_json::Value;
 
+/// The optional fields of an account page event that succeeded, and of one that failed.
+const ACCOUNT_SUCCESS: &[&str] = &[
+    "actor",
+    "subject",
+    "credential",
+    "aaguid",
+    "session",
+    "client_ip",
+    "peer",
+    "user_agent",
+];
+const ACCOUNT_FAILURE: &[&str] = &[
+    "actor",
+    "subject",
+    "credential",
+    "session",
+    "client_ip",
+    "peer",
+    "user_agent",
+];
+
 /// Checks the fields and message of one `zeabur_identity::audit` record against the documented
 /// shape of its event (`crates/zeabur-identity/README.md`, "Audit events"). Operators filter on
 /// these names, so a refactor must not rename, add or drop one.
-pub fn assert_audit_shape(record: &Value) {
+pub(crate) fn assert_audit_shape(record: &Value) {
     let fields = record["fields"].as_object().unwrap();
     let event = fields["event"].as_str().unwrap();
     // The OAuth endpoints' events are checked by their own tests.
@@ -66,31 +87,13 @@ pub fn assert_audit_shape(record: &Value) {
             &["method"],
             ["upstream operation completed", "upstream operation failed"],
         ),
-        (event, None) if event.starts_with("account.") && success => (
-            &[
-                "actor",
-                "subject",
-                "credential",
-                "aaguid",
-                "session",
-                "client_ip",
-                "peer",
-                "user_agent",
-            ],
-            &["revoked"],
-            ["account changed", "account change failed"],
-        ),
         (event, None) if event.starts_with("account.") => (
-            &[
-                "actor",
-                "subject",
-                "credential",
-                "session",
-                "client_ip",
-                "peer",
-                "user_agent",
-            ],
-            &[],
+            if success {
+                ACCOUNT_SUCCESS
+            } else {
+                ACCOUNT_FAILURE
+            },
+            if success { &["revoked"] } else { &[] },
             ["account changed", "account change failed"],
         ),
         other => panic!("unknown audit event {other:?}: {record}"),

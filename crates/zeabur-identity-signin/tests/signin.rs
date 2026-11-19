@@ -324,7 +324,11 @@ mod tests {
             audit: audit.first().map(|r| (*r).clone()),
             diagnostics: records
                 .into_iter()
-                .filter(|record| record["target"] == "zeabur_identity_signin")
+                .filter(|record| {
+                    record["target"]
+                        .as_str()
+                        .is_some_and(|target| target.starts_with("zeabur_identity_signin"))
+                })
                 .collect(),
         }
     }
@@ -1236,7 +1240,7 @@ mod tests {
             assert_eq!(fields["subject"], ADMIN_UID);
             assert!(fields.get("error").is_none());
             let diagnostic = reply.diagnostics.first().unwrap();
-            assert_eq!(diagnostic["fields"]["reason"], "no-request");
+            assert_eq!(diagnostic["fields"]["reason"], "authorization_failed");
             let error = diagnostic["fields"]["error"].as_str().unwrap();
             assert!(!serde_json::to_string(fields).unwrap().contains(error));
             // A rejected authorization still consumed the verified passkey ceremony.

@@ -69,8 +69,7 @@ use zeabur_identity_core::crypto::{ct_eq, hex, random, sha256};
 use zeabur_identity_core::protocol::{
     ACCOUNT_PATH, UPSTREAM_CALLBACK_ROUTE, UPSTREAM_START_ROUTE, upstream_callback_path,
 };
-use zeabur_identity_oauth::authorize::Authentication;
-use zeabur_identity_oauth::endpoints::{FLOW_COOKIE, complete_authorization, open_flow};
+use zeabur_identity_oauth::endpoints::{FLOW_COOKIE, open_flow};
 use zeabur_identity_oauth::{OneTimeIds, Use};
 use zeabur_identity_store::{
     Consume, CreateCredential, CredentialStore, Directory, GrantStore, NewExternal, SetupStore,
@@ -81,8 +80,10 @@ use zeabur_identity_ui::pages::{ErrorReason, accept_language, error_page, notice
 
 use self::http::HttpClient;
 use self::provider::{Authorization, Exchange, Provider, UpstreamError};
-use crate::account::{Account, Audit, current, log_outcome, record, require_fresh, signed_in};
+use crate::account::{Account, Audit, current, record, require_fresh, signed_in};
+use crate::audit::Record;
 use crate::device::Requester;
+use crate::method::finish;
 use crate::problem::Problem;
 use crate::{
     NO_REQUEST, SignIn, check_account, check_request, clear_cookie, cookie, json, parse, redeemed,
@@ -239,7 +240,8 @@ where
             // leaves.
             let (_, user) =
                 valid_setup_token(&sign_in.setup, &sign_in.oauth.directory, token, now).await?;
-            check_account(&sign_in.oauth.directory, &user, provider.method()).await?;
+            let method = provider.sign_in_method().policy();
+            check_account(&sign_in.oauth.directory, &user, method).await?;
         } else {
             // Signing in: there must be a pending request.
             cookie(&headers, FLOW_COOKIE)
@@ -249,14 +251,14 @@ where
         begin(&service, &provider, request.token, None, now).await
     }
     .await;
-    match &result {
-        Ok(_) => {
-            tracing::info!(target: "zeabur_identity::audit", event = "auth.upstream_start", outcome = "success", method = "upstream", provider = normalized_provider, "upstream request started");
-        }
-        Err(problem) => {
-            tracing::warn!(target: "zeabur_identity::audit", event = "auth.upstream_start", outcome = "failure", method = "upstream", provider = normalized_provider, reason = problem.kind, "upstream request failed");
-        }
-    }
+    let record = Record {
+        event: "auth.upstream_start",
+        messages: ["upstream request started", "upstream request failed"],
+        method: Some("upstream"),
+        provider: normalized_provider,
+        ..Record::default()
+    };
+    record.log(result.as_ref().err().map(|p| p.kind));
     result.unwrap_or_else(IntoResponse::into_response)
 }
 
@@ -359,7 +361,8 @@ where
             .provider(&request.provider)
             .ok_or(UNKNOWN_PROVIDER)?;
         require_fresh(&account, now)?;
-        check_account(&sign_in.oauth.directory, &account.user, provider.method()).await?;
+        let method = provider.sign_in_method().policy();
+        check_account(&sign_in.oauth.directory, &account.user, method).await?;
         let bound = Bound {
             session: account.token.name().to_owned(),
             user: account.user.name.clone(),
@@ -368,12 +371,8 @@ where
         begin(&service, &provider, None, Some(bound), now).await
     }
     .await;
-    log_outcome(
-        "account.upstream_link_started",
-        user.as_ref(),
-        &audit,
-        &result,
-    );
+    let record = Record::account("account.upstream_link_started", user.as_ref(), &audit);
+    record.log(result.as_ref().err().map(|p| p.kind));
     result.unwrap_or_else(IntoResponse::into_response)
 }
 
@@ -453,7 +452,7 @@ async fn refuse_admin<D: Directory>(
     user: &User,
     provider: &Provider,
 ) -> Result<(), Failure> {
-    check_account(directory, user, provider.method())
+    check_account(directory, user, provider.sign_in_method().policy())
         .await
         .map_err(|problem| match problem.kind {
             "admin-needs-passkey" | "admin-needs-two-factor" | "device-passkey-needed" => {
@@ -651,20 +650,9 @@ where
             }
             refuse_admin(&oauth.directory, user, &provider).await?;
             let flow = cookie(&headers, FLOW_COOKIE).ok_or(("missing_flow", ErrorReason::RequestExpired, None))?;
-            let authentication = Authentication {
-                user: user.name.clone(),
-                subject: user.subject.clone(),
-                auth_time: now,
-                amr: provider.amr(),
-                credential: Some(name.clone()),
-                user_verified: false,
-                device_bound: false,
-            };
-            let location = complete_authorization(oauth, flow, authentication)
-                .map_err(|error| {
-                    tracing::warn!(reason = "authorization_failed", ?error, "upstream authorization failed");
-                    ("authorization_failed", ErrorReason::RequestExpired, None)
-                })?;
+            let authentication = provider.sign_in_method().authentication(user, name.clone(), now);
+            let location = finish(oauth, flow, authentication)
+                .ok_or(("authorization_failed", ErrorReason::RequestExpired, None))?;
             let mut response = StatusCode::SEE_OTHER.into_response();
             if let Ok(value) = HeaderValue::try_from(location) {
                 response.headers_mut().insert(header::LOCATION, value);
@@ -745,13 +733,19 @@ where
         .map(|u| u.name.as_str())
         .or(link_user.as_deref());
     let subject = identity.as_ref().map(|u| u.subject.as_str());
+    let record = Record {
+        event,
+        messages: ["upstream operation completed", "upstream operation failed"],
+        method: Some("upstream"),
+        provider: normalized_provider,
+        user,
+        subject,
+        ..Record::default()
+    };
+    record.log(result.as_ref().err().map(|(reason, ..)| *reason));
     match result {
-        Ok(response) => {
-            tracing::info!(target: "zeabur_identity::audit", event, outcome = "success", method = "upstream", provider = normalized_provider, user, subject, "upstream operation completed");
-            response
-        }
+        Ok(response) => response,
         Err((reason, kind, note)) => {
-            tracing::warn!(target: "zeabur_identity::audit", event, outcome = "failure", method = "upstream", provider = normalized_provider, reason, user, subject, "upstream operation failed");
             let provider = normalized_provider.unwrap_or("unknown");
             let mut detail = format!("{reason} ({provider})");
             if let Some(note) = note {

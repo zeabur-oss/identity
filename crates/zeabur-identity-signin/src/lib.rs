@@ -1,7 +1,9 @@
 #![doc = include_str!("../README.md")]
 
 pub mod account;
+mod audit;
 pub mod device;
+mod method;
 pub mod pages;
 pub mod passkeys;
 pub mod password;
@@ -34,8 +36,7 @@ use zeabur_identity_core::account::{Method, Refusal, allows};
 use zeabur_identity_core::clock::{Clock, UnixTime};
 use zeabur_identity_core::crypto::{ct_eq, hex, random};
 use zeabur_identity_core::protocol::SETUP_PATH;
-use zeabur_identity_oauth::authorize::Authentication;
-use zeabur_identity_oauth::endpoints::{FLOW_COOKIE, complete_authorization};
+use zeabur_identity_oauth::endpoints::FLOW_COOKIE;
 use zeabur_identity_oauth::{AuthorizationServer, OneTimeIds, Use};
 use zeabur_identity_store::{
     Consume, CreateCredential, CredentialStore, Directory, GrantStore, NewPasskey, SetupStore,
@@ -43,7 +44,9 @@ use zeabur_identity_store::{
 };
 
 use crate::account::{Audit, record};
+use crate::audit::Record;
 use crate::device::Requester;
+use crate::method::{SignInMethod, finish};
 use crate::passkeys::{Passkeys, aaguid, backup_flags, credential_name};
 use crate::password::Passwords;
 use crate::problem::{Extensions, Problem, Step, UnknownCredential};
@@ -60,13 +63,6 @@ const REGISTRATION_PURPOSE: &str = "zeabur-identity/registration/v1";
 const SIGN_IN_PURPOSE: &str = "zeabur-identity/sign-in/v1";
 /// How long a ceremony may take (WebAuthn Level 3 recommends 300 s for UV-required ceremonies).
 pub(crate) const CEREMONY_LIFETIME: std::time::Duration = std::time::Duration::from_mins(5);
-/// Authentication methods asserted by a passkey sign-in (RFC 8176).
-///
-/// `swk`: proof of possession of a key. Attestation is `none`, so a hardware-backed key cannot be
-/// claimed and `hwk` is not used. `mfa`: the authenticator verified the user with a PIN or
-/// biometric in addition to possession, a multi-factor cryptographic authenticator in NIST SP
-/// 800-63B-4 terms.
-pub const PASSKEY_AMR: [&str; 2] = ["swk", "mfa"];
 
 /// Sign-in state shared by the handlers.
 #[derive(Debug)]
@@ -639,14 +635,16 @@ where
         Ok(response)
     }
     .await;
-    match &result {
-        Ok(_) => {
-            tracing::info!(target: "zeabur_identity::audit", event = "auth.passkey_enrollment", phase = "start", outcome = "success", method = "passkey", user = identity.as_ref().map(|u| u.name.as_str()), subject = identity.as_ref().map(|u| u.subject.as_str()), "passkey enrollment started");
-        }
-        Err(problem) => {
-            tracing::warn!(target: "zeabur_identity::audit", event = "auth.passkey_enrollment", phase = "start", outcome = "failure", method = "passkey", reason = problem.kind, user = identity.as_ref().map(|u| u.name.as_str()), subject = identity.as_ref().map(|u| u.subject.as_str()), "passkey enrollment failed");
-        }
-    }
+    let record = Record {
+        event: "auth.passkey_enrollment",
+        messages: ["passkey enrollment started", "passkey enrollment failed"],
+        phase: Some("start"),
+        method: Some("passkey"),
+        user: identity.as_ref().map(|u| u.name.as_str()),
+        subject: identity.as_ref().map(|u| u.subject.as_str()),
+        ..Record::default()
+    };
+    record.log(result.as_ref().err().map(|p| p.kind));
     result.unwrap_or_else(IntoResponse::into_response)
 }
 
@@ -744,14 +742,15 @@ where
         Ok(response)
     }
     .await;
-    match &result {
-        Ok(_) => {
-            tracing::info!(target: "zeabur_identity::audit", event = "auth.passkey_enrollment", phase = "finish", outcome = "success", method = "passkey", user = user.as_deref(), "passkey enrolled");
-        }
-        Err(problem) => {
-            tracing::warn!(target: "zeabur_identity::audit", event = "auth.passkey_enrollment", phase = "finish", outcome = "failure", method = "passkey", reason = problem.kind, user = user.as_deref(), "passkey enrollment failed");
-        }
-    }
+    let record = Record {
+        event: "auth.passkey_enrollment",
+        messages: ["passkey enrolled", "passkey enrollment failed"],
+        phase: Some("finish"),
+        method: Some("passkey"),
+        user: user.as_deref(),
+        ..Record::default()
+    };
+    record.log(result.as_ref().err().map(|p| p.kind));
     result.unwrap_or_else(IntoResponse::into_response)
 }
 
@@ -794,14 +793,13 @@ where
         );
         Ok(response)
     })();
-    match &result {
-        Ok(_) => {
-            tracing::info!(target: "zeabur_identity::audit", event = "auth.passkey_options", outcome = "success", method = "passkey", "passkey options accepted");
-        }
-        Err(problem) => {
-            tracing::warn!(target: "zeabur_identity::audit", event = "auth.passkey_options", outcome = "failure", method = "passkey", reason = problem.kind, "passkey options failed");
-        }
-    }
+    let record = Record {
+        event: "auth.passkey_options",
+        messages: ["passkey options accepted", "passkey options failed"],
+        method: Some("passkey"),
+        ..Record::default()
+    };
+    record.log(result.as_ref().err().map(|p| p.kind));
     result.unwrap_or_else(IntoResponse::into_response)
 }
 
@@ -845,24 +843,11 @@ where
             return Err(CEREMONY_EXPIRED.into());
         }
 
-        let authentication = Authentication {
-            user: user.name.clone(),
-            subject: user.subject.clone(),
-            auth_time: now,
-            amr: PASSKEY_AMR.iter().map(|m| (*m).to_owned()).collect(),
-            credential: Some(verified.credential.clone()),
-            user_verified: true,
+        let method = SignInMethod::Passkey {
             device_bound: verified.device_bound,
         };
-        let location =
-            complete_authorization(&service.oauth, &flow, authentication).map_err(|error| {
-                tracing::warn!(
-                    reason = NO_REQUEST.kind,
-                    ?error,
-                    "passkey authorization failed"
-                );
-                NO_REQUEST
-            })?;
+        let authentication = method.authentication(user, verified.credential.clone(), now);
+        let location = finish(&service.oauth, &flow, authentication).ok_or(NO_REQUEST)?;
         touch(&service, &verified, now).await;
         let mut response = json(
             StatusCode::OK,
@@ -879,14 +864,15 @@ where
         Ok(response)
     }
     .await;
-    match &result {
-        Ok(_) => {
-            tracing::info!(target: "zeabur_identity::audit", event = "auth.sign_in", outcome = "success", method = "passkey", user = identity.as_ref().map(|u| u.name.as_str()), subject = identity.as_ref().map(|u| u.subject.as_str()), "signed in with a passkey");
-        }
-        Err(refused) => {
-            tracing::warn!(target: "zeabur_identity::audit", event = "auth.sign_in", outcome = "failure", method = "passkey", reason = refused.problem.kind, user = identity.as_ref().map(|u| u.name.as_str()), subject = identity.as_ref().map(|u| u.subject.as_str()), "passkey sign-in failed");
-        }
-    }
+    let record = Record {
+        event: "auth.sign_in",
+        messages: ["signed in with a passkey", "passkey sign-in failed"],
+        method: Some("passkey"),
+        user: identity.as_ref().map(|u| u.name.as_str()),
+        subject: identity.as_ref().map(|u| u.subject.as_str()),
+        ..Record::default()
+    };
+    record.log(result.as_ref().err().map(|r| r.problem.kind));
     result.unwrap_or_else(|refused| refused.respond(service.passkeys.rp_id()))
 }
 
