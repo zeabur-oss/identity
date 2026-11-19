@@ -789,6 +789,8 @@ pub(crate) struct SetupOptions {
 struct Enrolment {
     /// The secret in base32, for typing into the app.
     secret: String,
+    /// The same secret in groups of four, as the page shows it.
+    secret_display: String,
     /// The `otpauth://` URI the QR code holds.
     uri: String,
     qr: Qr,
@@ -921,6 +923,7 @@ where
         .map_err(Problem::internal)?;
     let enrolment = Enrolment {
         secret: secret.base32(),
+        secret_display: secret.grouped(),
         qr: qr(&uri)?,
         uri,
         sealed,

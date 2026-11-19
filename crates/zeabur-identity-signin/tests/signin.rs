@@ -2160,6 +2160,10 @@ mod tests {
             assert!(totp["uri"].as_str().unwrap().starts_with("otpauth://totp/"));
             assert!(totp["qr"]["path"].as_str().unwrap().starts_with('M'));
             let secret = Secret::from_bytes(&base32(totp["secret"].as_str().unwrap())).unwrap();
+            assert_eq!(
+                totp["secret_display"].as_str().unwrap().replace(' ', ""),
+                totp["secret"].as_str().unwrap()
+            );
             let sealed = totp["sealed"].clone();
             let setup = |code: String| {
                 let body = json!({

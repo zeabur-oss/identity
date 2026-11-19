@@ -68,6 +68,8 @@ export type Step = "code" | "ended" | "new-link" | "reauth"
 export type TotpEnrolment = {
   /** The secret in base32, for typing into the app. */
   secret: string
+  /** The same secret in groups of four, as the page shows it. */
+  secret_display: string
   /** The `otpauth://` URI the QR code holds. */
   uri: string
   qr: Qr

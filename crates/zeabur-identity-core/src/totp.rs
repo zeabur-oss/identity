@@ -68,6 +68,17 @@ impl Secret {
         base32(&self.0)
     }
 
+    /// The base32 secret in groups of four, to read and type.
+    #[must_use]
+    pub fn grouped(&self) -> String {
+        let characters: Vec<char> = self.base32().chars().collect();
+        let groups: Vec<String> = characters
+            .chunks(4)
+            .map(|group| group.iter().collect())
+            .collect();
+        groups.join(" ")
+    }
+
     /// The `otpauth://` URI that a QR code carries.
     ///
     /// The format is the de facto Key URI Format: `otpauth://totp/<issuer>:<account>` with the
@@ -268,6 +279,14 @@ mod tests {
         assert_eq!(secret.check(code, now, Some(step - 1)), Some(step));
         assert_eq!(secret.check("05924", now, None), None);
         assert_eq!(secret.check("00592a", now, None), None);
+    }
+
+    #[test]
+    fn the_grouped_secret_has_four_characters_to_a_group() {
+        assert_eq!(
+            rfc_secret().grouped(),
+            "GEZD GNBV GY3T QOJQ GEZD GNBV GY3T QOJQ"
+        );
     }
 
     #[test]
