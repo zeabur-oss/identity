@@ -41,6 +41,7 @@ mod tests {
     };
     use zeabur_identity_test_support::logging::Capture;
     use zeabur_identity_test_support::{Device, device};
+    use zeabur_identity_ui::i18n::Lang;
 
     const ISSUER: &str = "https://login.example.com";
     const SETUP_TOKEN: &str = "setup-token-with-plenty-of-entropy-for-tests";
@@ -1031,6 +1032,29 @@ mod tests {
         assert_eq!(reply.kind(), "urn:zeabur-identity:problem:no-request");
     }
 
+    /// A refusal says why in the language the page asks for, and names the step the page moves
+    /// to, so the page needs no table of problem codes.
+    #[tokio::test]
+    async fn a_refusal_says_why_in_the_page_language() {
+        let h = harness().await;
+        for (lang, messages) in [("zh-TW", Lang::ZhTw), ("en", Lang::En), ("", Lang::En)] {
+            let request = Request::post("/setup/options")
+                .header(header::ORIGIN, ISSUER)
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::ACCEPT_LANGUAGE, lang)
+                .body(Body::from(json!({ "token": "wrong" }).to_string()))
+                .unwrap();
+            let response = h.app.clone().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            let body: Value =
+                serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                    .unwrap();
+            assert_eq!(body["detail"], messages.messages().setup_invalid, "{lang}");
+            assert_eq!(body["next"], "new-link");
+            assert!(body.get("refresh").is_none());
+        }
+    }
+
     use zeabur_identity_store::Directory as _;
 
     #[tokio::test]
@@ -1432,6 +1456,62 @@ mod tests {
             enrol(&h, &mut first).await;
             let session = sign_in_to_account(&h, &mut first).await;
             (h, first, session)
+        }
+
+        /// Every endpoint a page names is a route: a rename on either side would leave a
+        /// control that posts nowhere.
+        #[tokio::test]
+        async fn each_endpoint_a_page_names_is_a_route() {
+            let (h, _device, session) = signed_in().await;
+            let signed_in = page(&h, Some(&session.cookie)).await;
+            let pages = zeabur_identity_signin::pages::router(
+                Arc::clone(&h.service.oauth),
+                Arc::clone(&h.service.providers),
+            );
+            let app = h.app.clone().merge(pages);
+            let setup = app
+                .clone()
+                .oneshot(Request::get("/setup").body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            let setup = setup.into_body().collect().await.unwrap().to_bytes();
+            for html in [
+                String::from_utf8(setup.to_vec()).unwrap(),
+                page(&h, None).await,
+                signed_in,
+            ] {
+                let endpoints = named_endpoints(&html);
+                assert_ne!(endpoints, Vec::<String>::new());
+                for endpoint in endpoints {
+                    let request = Request::post(&endpoint)
+                        .header(header::ORIGIN, ISSUER)
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(Body::from("{}"))
+                        .unwrap();
+                    let response = app.clone().oneshot(request).await.unwrap();
+                    let routed = !matches!(
+                        response.status(),
+                        StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED
+                    ) || response.headers()[header::CONTENT_TYPE]
+                        == "application/problem+json";
+                    assert!(routed, "{endpoint} answered {}", response.status());
+                }
+            }
+        }
+
+        /// The `data-post`, `data-options`, `data-start` and `data-reauth*` values of `html`.
+        fn named_endpoints(html: &str) -> Vec<String> {
+            html.split(" data-")
+                .skip(1)
+                .filter_map(|attribute| {
+                    let (name, rest) = attribute.split_once("=\"")?;
+                    matches!(
+                        name,
+                        "post" | "options" | "start" | "reauth" | "reauth-options"
+                    )
+                    .then(|| rest.get(..rest.find('"')?).map(str::to_owned))?
+                })
+                .collect()
         }
 
         async fn enrol_dana(h: &Harness) -> Device {
@@ -2257,6 +2337,35 @@ mod tests {
             assert_eq!(reply.status, StatusCode::TOO_MANY_REQUESTS);
             let reply = sign_in(&h, "dana", GOOD, None).await;
             assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        }
+
+        #[tokio::test]
+        async fn a_hold_in_another_language_still_says_when_to_retry() {
+            let h = harness().await;
+            let device = dana_with_password(&h).await;
+            for _ in 0..=LIMIT {
+                sign_in(&h, "dana", "a wrong guess, again and again", Some(&device)).await;
+            }
+            let flow = flow(&h).await;
+            let request = Request::post("/login/password")
+                .header(header::ORIGIN, ISSUER)
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::ACCEPT_LANGUAGE, "zh-TW")
+                .header(
+                    header::COOKIE,
+                    format!("{FLOW_COOKIE}={flow}; {DEVICE_COOKIE}={device}"),
+                )
+                .body(Body::from(
+                    json!({ "username": "dana", "password": GOOD }).to_string(),
+                ))
+                .unwrap();
+            let response = h.app.clone().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+            assert!(response.headers().contains_key(header::RETRY_AFTER));
+            let body: Value =
+                serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                    .unwrap();
+            assert_eq!(body["detail"], Lang::ZhTw.messages().password_held);
         }
 
         #[tokio::test]

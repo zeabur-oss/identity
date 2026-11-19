@@ -70,13 +70,17 @@ mod tests {
     }
 
     /// The upstream buttons of `html` in page order: the provider ID each starts (the script
-    /// posts to `/upstream/{id}/start`) and its text, with markup removed and entities decoded.
+    /// posts to its `data-start`, `/upstream/{id}/start`) and its text, with markup removed and
+    /// entities decoded.
     fn provider_buttons(html: &str) -> Vec<(String, String)> {
         let mut buttons = Vec::new();
         let mut rest = html;
-        while let Some(at) = rest.find("data-provider=\"") {
-            rest = rest.get(at + "data-provider=\"".len()..).unwrap();
-            let id = rest.get(..rest.find('"').unwrap()).unwrap().to_owned();
+        while let Some(at) = rest.find("data-start=\"/upstream/") {
+            rest = rest.get(at + "data-start=\"/upstream/".len()..).unwrap();
+            let id = rest
+                .get(..rest.find("/start\"").unwrap())
+                .unwrap()
+                .to_owned();
             let inner = rest.get(rest.find('>').unwrap() + 1..rest.find("</button>").unwrap());
             let mut text = String::new();
             let mut in_tag = false;
@@ -111,7 +115,7 @@ mod tests {
             .body
             .find(passkey)
             .unwrap_or_else(|| panic!("no {passkey}"));
-        if let Some(first) = page.body.find("data-provider=") {
+        if let Some(first) = page.body.find("data-start=") {
             assert!(passkey_at < first, "a provider comes before the passkey");
         }
     }
@@ -419,8 +423,8 @@ mod tests {
         assert!(!page.body.contains("href=\"/login\""));
     }
 
-    /// The script acts on this problem and these elements; a rename on either side leaves only
-    /// the generic error.
+    /// The script acts on this step and these elements; a rename on either side leaves only the
+    /// server's message.
     #[tokio::test]
     async fn login_script_handles_an_ended_request() {
         if !built() {
@@ -429,7 +433,7 @@ mod tests {
         let app = app().await;
         let login = get(&app, "/assets/login.js", &[]).await.body;
         for needle in [
-            "\"no-request\"",
+            "\"code\"",
             "\"ended\"",
             "\"request\"",
             "expiresIn",
@@ -488,34 +492,7 @@ mod tests {
             assert!(setup.contains(&format!("\"{id}\"")), "setup.js: {id}");
             assert!(page.body.contains(&format!("id=\"{id}\"")), "page: {id}");
         }
-        assert!(setup.contains("\"setup-invalid\""));
         assert!(page.body.contains("<div id=\"new-link\" hidden>"));
-        assert!(page.body.contains("data-msg-invalid="));
-    }
-
-    /// Each problem the setup API returns has its own message; a rename on either side leaves
-    /// only the generic error.
-    #[tokio::test]
-    async fn setup_script_explains_each_refusal() {
-        if !built() {
-            return;
-        }
-        let app = app_with(registry(&["github"])).await;
-        let setup = get(&app, "/assets/setup.js", &[]).await.body;
-        let page = get(&app, "/setup", &[]).await;
-        for (kind, message) in [
-            ("account-disabled", "disabled"),
-            ("ceremony-expired", "expired"),
-            ("passkey-exists", "exists"),
-            ("passkey-failed", "failed"),
-            ("device-passkey-needed", "device-passkey"),
-        ] {
-            assert!(setup.contains(&format!("\"{kind}\"")), "setup.js: {kind}");
-            assert!(
-                page.body.contains(&format!("data-msg-{message}=")),
-                "page: {message}"
-            );
-        }
     }
 
     #[tokio::test]
@@ -526,16 +503,12 @@ mod tests {
         let app = app().await;
         let account = get(&app, "/assets/account.js", &[]).await.body;
         for needle in [
-            "/account/links/start",
-            "/account/links/remove",
             "redirect_to",
-            "\"last-credential\"",
-            "\"admin-needs-passkey\"",
+            "\"reauth\"",
+            "\"code\"",
             "#notice=linked",
-            "/account/password",
-            "/account/password/remove",
-            "\"current-password-wrong\"",
-            "\"password-held\"",
+            "data-link",
+            "minLength",
         ] {
             assert!(account.contains(needle), "account.js: {needle}");
         }
@@ -645,12 +618,12 @@ mod tests {
     async fn provider_buttons_appear_only_when_configured() {
         let plain = app().await;
         let page = get(&plain, "/setup", &[]).await;
-        assert!(!page.body.contains("data-provider"));
+        assert!(!page.body.contains("data-start"));
 
         let app = app_with(registry(&["github", "google"])).await;
         let page = get(&app, "/setup", &[]).await;
         assert_hardened(&page);
-        assert!(page.body.contains(r#"data-provider="github""#));
+        assert!(page.body.contains(r#"data-start="/upstream/github/start""#));
         assert!(page.body.contains("Continue with Google"));
 
         let reply = get(
@@ -670,7 +643,7 @@ mod tests {
             .unwrap()
             .to_owned();
         let page = get(&app, "/login", &[("cookie", &cookie)]).await;
-        assert!(page.body.contains("data-provider"));
+        assert!(page.body.contains("data-start"));
     }
 
     /// The login and setup pages offer exactly the configured providers, by display name, in

@@ -44,6 +44,12 @@ export type Problem = {
   type: string
   title: string
   status: number
+  /** The message to show, in the language of the request's `Accept-Language`. */
+  detail: string
+  /** The page shows a list that changed in the meantime: reload it, then show `detail`. */
+  refresh?: boolean
+  /** The step the page moves to, in place of showing `detail`. */
+  next?: Step
   /** Why a new password was refused (`password-weak`). */
   weakness?: Weakness
   /** The credential the relying party does not know (`passkey-failed`), for `signalUnknownCredential` (WebAuthn Level 3 §5.1.10.1). */
@@ -55,6 +61,9 @@ export type Qr = {
   size: number
   path: string
 }
+
+/** The step a page moves to after a problem, in place of showing it. */
+export type Step = "code" | "ended" | "new-link" | "reauth"
 
 export type TotpEnrolment = {
   /** The secret in base32, for typing into the app. */

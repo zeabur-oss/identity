@@ -8,6 +8,7 @@ import type {
   PasskeySignedIn,
   PasswordSignedIn,
   Problem,
+  Step,
   UnknownCredential,
   UpstreamStarted,
 } from "./contract"
@@ -113,12 +114,23 @@ export function assertionJson(credential: PublicKeyCredential): Json {
 
 export type Reply = { ok: boolean; status: number; body: Json }
 
-/** POSTs JSON to the issuer. Same-origin only; the server also checks Fetch Metadata. */
+/** The endpoint a control posts to, from its `data-<name>` attribute. */
+export function endpoint(element: Element | null | undefined, name = "post"): string {
+  return element instanceof HTMLElement ? (element.dataset[name] ?? "") : ""
+}
+
+/**
+ * POSTs JSON to the issuer. Same-origin only; the server also checks Fetch Metadata. A refusal
+ * comes back in the page's language.
+ */
 export async function post(path: string, body: Json): Promise<Reply> {
   const response = await fetch(path, {
     method: "POST",
     credentials: "same-origin",
-    headers: { "content-type": "application/json" },
+    headers: {
+      "content-type": "application/json",
+      "accept-language": document.documentElement.lang || "en",
+    },
     body: JSON.stringify(body),
   })
   let json: Json = {}
@@ -133,10 +145,19 @@ export async function post(path: string, body: Json): Promise<Reply> {
 /** The reply for a request that never reached the server. */
 const unreachable = (): Reply => ({ ok: false, status: 0, body: {} })
 
-/** The problem type suffix from an RFC 9457 response, for example "setup-invalid". */
-export function problem(reply: Reply): string {
-  const type = (reply.body as Problem).type ?? ""
-  return type.replace("urn:zeabur-identity:problem:", "")
+/** The step the server named for a refused request, if any. */
+export function next(reply: Reply): Step | undefined {
+  return (reply.body as Partial<Problem>).next
+}
+
+/** Whether the server says the page shows a list that changed in the meantime. */
+export function stale(reply: Reply): boolean {
+  return (reply.body as Partial<Problem>).refresh === true
+}
+
+/** The server's message for a refused request, or the generic one when there is none. */
+export function explain(reply: Reply, text: Text): string {
+  return (reply.body as Partial<Problem>).detail || text("msgError")
 }
 
 export function supported(): boolean {
@@ -164,35 +185,36 @@ export function redirect(reply: Reply): string | null {
 
 /**
  * Wires the "Continue with <provider>" buttons: each starts an upstream sign-in (or, with a
- * token, linking) and follows the provider URL the server returns. `handlers` take over named
- * problems from the generic error.
+ * token, linking) at its `data-start` endpoint and follows the provider URL the server returns.
+ * `steps` take over the steps the server names; otherwise its message shows.
  */
 export function upstreamButtons(
   body: () => Json,
   text: Text,
-  handlers: Record<string, () => void> = {},
+  steps: Partial<Record<Step, (reply: Reply) => void>> = {},
 ): void {
-  for (const button of document.querySelectorAll<HTMLButtonElement>("button[data-provider]")) {
-    const provider = button.dataset.provider ?? ""
-    button.addEventListener("click", () => void startUpstream(provider, body(), text, handlers))
+  for (const button of document.querySelectorAll<HTMLButtonElement>("button[data-start]")) {
+    const start = endpoint(button, "start")
+    button.addEventListener("click", () => void startUpstream(start, body(), text, steps))
   }
 }
 
 async function startUpstream(
-  provider: string,
+  start: string,
   body: Json,
   text: Text,
-  handlers: Record<string, () => void>,
+  steps: Partial<Record<Step, (reply: Reply) => void>>,
 ): Promise<void> {
   say("error", "")
   say("status", text("msgWorking"))
-  const reply = await post(`/upstream/${provider}/start`, body).catch(unreachable)
+  const reply = await post(start, body).catch(unreachable)
   const to = redirect(reply)
   if (to) return window.location.assign(to)
   say("status", "")
-  const handler = handlers[problem(reply)]
-  if (handler) handler()
-  else say("error", text("msgError"))
+  const step = next(reply)
+  const handler = step && steps[step]
+  if (handler) handler(reply)
+  else say("error", explain(reply, text))
 }
 
 /** Whether an error is the user cancelling or the browser's timeout. */

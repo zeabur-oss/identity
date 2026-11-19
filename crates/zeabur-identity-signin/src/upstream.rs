@@ -160,6 +160,7 @@ where
             "/account/links/start",
             post(account_start::<D, G, C, K, S, H>),
         )
+        .layer(axum::middleware::from_fn(crate::problem::localize))
         .with_state(service)
 }
 

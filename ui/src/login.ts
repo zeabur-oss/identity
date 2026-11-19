@@ -3,9 +3,11 @@
 import {
   assertionJson,
   cancelled,
+  endpoint,
+  explain,
   messages,
+  next,
   post,
-  problem,
   type Reply,
   redirect,
   requestOptions,
@@ -18,6 +20,7 @@ import { codeStep, entered, wireOtherAccount } from "./password"
 
 const form = document.getElementById("sign-in") as HTMLFormElement | null
 const text = messages(form)
+const passkey = document.getElementById("passkey")
 let autofill: AbortController | null = null
 // Set while an assertion is being checked or the page is on its way out, so autofill and the
 // button never send two: the second answer would reach the app after the first had used it up.
@@ -31,17 +34,6 @@ function ended(): void {
   document.getElementById("request")?.setAttribute("hidden", "")
   view.hidden = false
   view.focus()
-}
-
-const failures: Record<string, string> = {
-  "passkey-failed": "msgFailed",
-  "device-passkey-needed": "msgDevicePasskey",
-  "admin-needs-passkey": "msgAdminPasskey",
-  "admin-needs-two-factor": "msgAdminTwoFactor",
-  "code-failed": "msgCodeFailed",
-  "password-failed": "msgPasswordFailed",
-  "password-held": "msgPasswordHeld",
-  busy: "msgBusy",
 }
 
 async function finish(credential: Credential | null): Promise<void> {
@@ -59,7 +51,7 @@ async function finish(credential: Credential | null): Promise<void> {
 
 /** Sends the assertion; true when the page is on its way to the app. */
 async function send(credential: PublicKeyCredential): Promise<boolean> {
-  const reply = await post("/login", { credential: assertionJson(credential) })
+  const reply = await post(endpoint(passkey), { credential: assertionJson(credential) })
   await signal(reply.body)
   say("status", "")
   const to = redirect(reply)
@@ -67,14 +59,15 @@ async function send(credential: PublicKeyCredential): Promise<boolean> {
     window.location.assign(to)
     return true
   }
-  failed(problem(reply))
+  failed(reply)
   return false
 }
 
-function failed(kind: string): void {
-  if (kind === "no-request") ended()
-  else if (kind === "code-needed") askForCode()
-  else say("error", text(failures[kind] ?? "msgError"))
+function failed(reply: Reply): void {
+  const step = next(reply)
+  if (step === "ended") ended()
+  else if (step === "code") askForCode()
+  else say("error", explain(reply, text))
 }
 
 /** The password was right: the code step takes the place of the username and password. */
@@ -86,7 +79,7 @@ function askForCode(): void {
 function secondStep(shown: boolean): void {
   codeStep(shown)
   document.getElementById("lost-passkey")?.toggleAttribute("hidden", shown)
-  for (const button of document.querySelectorAll("[data-provider]"))
+  for (const button of document.querySelectorAll("[data-start]"))
     button.toggleAttribute("hidden", shown)
   alternatives()
 }
@@ -99,7 +92,7 @@ function alternatives(): void {
 }
 
 async function options(): Promise<PublicKeyCredentialRequestOptions | null> {
-  const reply = await post("/login/options", {})
+  const reply = await post(endpoint(passkey, "options"), {})
   if (!reply.ok) {
     say("error", text("msgError"))
     return null
@@ -143,9 +136,9 @@ async function sendPassword(
   code: string | null,
 ): Promise<void> {
   try {
-    const reply = await post("/login/password", { username, password, code })
+    const reply = await post(endpoint(form), { username, password, code })
     finishing = leave(reply)
-    if (!finishing) failed(problem(reply))
+    if (!finishing) failed(reply)
   } catch {
     finishing = false
     say("error", text("msgError"))
@@ -195,14 +188,13 @@ if (form) {
       return {}
     },
     text,
-    { "no-request": ended },
+    { ended },
   )
   form.addEventListener("submit", signInWithPassword)
   wireOtherAccount(() => {
     say("error", "")
     secondStep(false)
   })
-  const passkey = document.getElementById("passkey")
   if (!supported()) {
     passkey?.setAttribute("hidden", "")
     alternatives()

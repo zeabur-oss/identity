@@ -44,7 +44,7 @@ use crate::account::{Audit, record};
 use crate::device::Requester;
 use crate::passkeys::{Passkeys, aaguid, backup_flags, credential_name};
 use crate::password::Passwords;
-use crate::problem::{Extensions, Problem, UnknownCredential};
+use crate::problem::{Extensions, Problem, Step, UnknownCredential};
 use crate::upstream::provider::Providers;
 
 /// Cookie holding the sealed WebAuthn ceremony state (`SameSite=Strict`).
@@ -108,6 +108,7 @@ where
             post(password::set_up_options::<D, G, C, K, S>),
         )
         .merge(account::routes::<D, G, C, K, S>())
+        .layer(axum::middleware::from_fn(problem::localize))
         .with_state(service)
 }
 
@@ -130,42 +131,48 @@ pub(crate) const SETUP_INVALID: Problem = Problem::new(
     StatusCode::UNAUTHORIZED,
     "setup-invalid",
     "This setup link is invalid, already used, or expired. Ask your cluster administrator for a new link.",
-);
+).detail(|m| m.setup_invalid).next(Step::NewLink);
 pub(crate) const ACCOUNT_DISABLED: Problem = Problem::new(
     StatusCode::FORBIDDEN,
     "account-disabled",
     "This account is disabled, so the link does not work. Ask your cluster administrator to enable it.",
-);
+).detail(|m| m.account_disabled);
 pub(crate) const CEREMONY_EXPIRED: Problem = Problem::new(
     StatusCode::BAD_REQUEST,
     "ceremony-expired",
     "The passkey prompt expired. Start again.",
-);
+)
+.detail(|m| m.ceremony_expired);
 pub(crate) const PASSKEY_FAILED: Problem = Problem::new(
     StatusCode::UNAUTHORIZED,
     "passkey-failed",
     "Unable to verify the passkey.",
-);
+)
+.detail(|m| m.passkey_failed);
 pub(crate) const ADMIN_NEEDS_PASSKEY: Problem = Problem::new(
     StatusCode::FORBIDDEN,
     "admin-needs-passkey",
     "Admin accounts sign in with a passkey only.",
-);
+)
+.detail(|m| m.admin_passkey_only);
 pub(crate) const DEVICE_PASSKEY_NEEDED: Problem = Problem::new(
     StatusCode::FORBIDDEN,
     "device-passkey-needed",
     "Admin accounts need a security key or a passkey that stays on one device.",
-);
+)
+.detail(|m| m.device_passkey_needed);
 pub(crate) const ADMIN_NEEDS_TWO_FACTOR: Problem = Problem::new(
     StatusCode::FORBIDDEN,
     "admin-needs-two-factor",
     "Admin accounts sign in with a passkey, or a password and an authenticator code.",
-);
+)
+.detail(|m| m.admin_two_factor);
 pub(crate) const NO_REQUEST: Problem = Problem::new(
     StatusCode::BAD_REQUEST,
     "no-request",
     "No sign-in is in progress. Go back to the app and start again.",
-);
+)
+.next(Step::Ended);
 
 /// Cross-site request protection for the JSON endpoints: `Sec-Fetch-Site: same-origin`, or, for
 /// browsers that do not send Fetch Metadata, an `Origin` equal to the issuer. Requests with
@@ -717,7 +724,8 @@ where
                     StatusCode::CONFLICT,
                     "passkey-exists",
                     "This passkey is already registered. Sign in with it instead.",
-                ));
+                )
+                .detail(|m| m.setup_passkey_exists));
             }
         }
         let audit = Audit {

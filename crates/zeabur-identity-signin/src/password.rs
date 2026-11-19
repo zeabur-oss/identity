@@ -41,7 +41,7 @@ use crate::account::{
     with_cookie,
 };
 use crate::device::Requester;
-use crate::problem::{Extensions, Problem};
+use crate::problem::{Extensions, Problem, Step};
 use crate::{
     NO_REQUEST, SETUP_INVALID, Shared, SignIn, check_account, check_request, cookie, json, parse,
     redeemed, refused, set_cookie_with, valid_setup_token,
@@ -71,12 +71,16 @@ pub(crate) const PASSWORD_FAILED: Problem = Problem::new(
     StatusCode::UNAUTHORIZED,
     "password-failed",
     "Unable to sign in with this username and password.",
-);
+)
+.detail(|m| m.password_failed);
 const PASSWORD_HELD: Problem = Problem::new(
     StatusCode::TOO_MANY_REQUESTS,
     "password-held",
     "Too many failed attempts from this browser. Try again later, or sign in another way.",
-);
+)
+.detail(|m| m.password_held);
+/// The same hold, where signing in another way is no way out: changing or removing the password.
+const PASSWORD_HELD_HERE: Problem = PASSWORD_HELD.detail(|m| m.password_held_here);
 const PASSWORD_WEAK: Problem = Problem::new(
     StatusCode::UNPROCESSABLE_ENTITY,
     "password-weak",
@@ -86,34 +90,41 @@ const CODE_NEEDED: Problem = Problem::new(
     StatusCode::UNAUTHORIZED,
     "code-needed",
     "Enter the code from your authenticator app.",
-);
+)
+.next(Step::Code);
 const CODE_FAILED: Problem = Problem::new(
     StatusCode::UNAUTHORIZED,
     "code-failed",
     "This code does not work. Enter the current code, or a recovery code.",
-);
+)
+.detail(|m| m.code_failed);
 const ENROL_CODE_FAILED: Problem = Problem::new(
     StatusCode::UNPROCESSABLE_ENTITY,
     "code-failed",
     "This code does not match. Enter the current code from your authenticator app.",
-);
+)
+.detail(|m| m.setup_code_failed);
 const CURRENT_WRONG: Problem = Problem::new(
     StatusCode::FORBIDDEN,
     "current-password-wrong",
     "This is not your current password.",
-);
+)
+.detail(|m| m.password_wrong);
 const NO_PASSWORD: Problem =
-    Problem::new(StatusCode::NOT_FOUND, "not-found", "You have no password.");
+    Problem::new(StatusCode::NOT_FOUND, "not-found", "You have no password.").refresh();
 const PASSWORD_CONFLICT: Problem = Problem::new(
     StatusCode::CONFLICT,
     "password-conflict",
     "Your password changed in the meantime. Reload and try again.",
-);
+)
+.detail(|m| m.password_conflict)
+.refresh();
 const BUSY: Problem = Problem::new(
     StatusCode::SERVICE_UNAVAILABLE,
     "busy",
     "Too many sign-ins at once. Try again in a moment.",
-);
+)
+.detail(|m| m.busy);
 
 /// The password hasher, the device key, the TOTP keys, and a cap on hashes running at once.
 pub struct Passwords {
@@ -1084,7 +1095,7 @@ where
     let device = device.as_deref();
     if let Some(until) = stored.state.guesses.held(device, now) {
         let seconds = until.as_secs().saturating_sub(now.as_secs()).max(1);
-        return Err(Failure::Retry(PASSWORD_HELD, seconds));
+        return Err(Failure::Retry(PASSWORD_HELD_HERE, seconds));
     }
     let entered = Normalized::new(entered).ok_or(CURRENT_WRONG)?;
     let hash = stored.hash.clone();

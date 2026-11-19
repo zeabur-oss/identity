@@ -1,57 +1,29 @@
 // Account page: sign in with a password or a passkey, then rename, add and remove passkeys, link and unlink GitHub or Google
 // accounts, change or remove a password, and end sessions. Adding, linking and removing need a passkey confirmation from the
-// last five minutes. The server says when one is due ("reauth-required"), and the page asks for
+// last five minutes. The server says when one is due (next step "reauth"), and the page asks for
 // it, then retries once.
 import {
   assertionJson,
   cancelled,
   creationOptions,
+  endpoint,
+  explain,
   messages,
+  next,
   post,
-  problem,
   redirect,
   type Reply,
   registrationJson,
   requestOptions,
   signal,
+  stale,
   supported,
   write,
 } from "./webauthn"
-import { codeStep, entered, wireOtherAccount } from "./password"
-import type { Problem } from "./contract"
+import { codeStep, entered, longEnough, wireOtherAccount } from "./password"
 
 const root = document.getElementById("account")
 const text = messages(root)
-
-const errors: Record<string, string> = {
-  "passkey-failed": "msgFailed",
-  "passkey-exists": "msgExists",
-  "last-passkey": "msgLast",
-  conflict: "msgChanged",
-  "not-found": "msgGone",
-  "signed-out": "msgSignedOut",
-  "device-passkey-needed": "msgDevicePasskey",
-  "last-credential": "msgLastCredential",
-  "admin-needs-passkey": "msgAdminPasskey",
-  "ceremony-expired": "msgExpired",
-  "current-password-wrong": "msgPasswordWrong",
-  "password-held": "msgPasswordHeld",
-  "password-conflict": "msgPasswordConflict",
-  busy: "msgBusy",
-  "password-failed": "msgPasswordFailed",
-  "code-failed": "msgCodeFailed",
-  "admin-needs-two-factor": "msgAdminTwoFactor",
-}
-
-const weaknesses: Record<string, string> = {
-  "too-short": "msgTooShort",
-  "too-long": "msgTooLong",
-  common: "msgCommon",
-  context: "msgContext",
-}
-
-/** The message for a problem code, or the generic one. */
-const explain = (code: string): string => text(errors[code] ?? "msgError")
 
 /** Where a task reports progress and failure: the page header, or a passkey's row. */
 type Place = { status: HTMLElement | null; error: HTMLElement | null }
@@ -61,33 +33,31 @@ const header: Place = {
   error: document.getElementById("error"),
 }
 
-/** Problems that mean the page shows a stale list: reload it from the server, then explain. */
-const stale = new Set(["last-passkey", "conflict", "not-found", "password-conflict"])
-
 function fail(place: Place, message: string): void {
   write(place.status, "")
   write(place.error, message)
 }
 
-function refresh(code: string, passkey: string): void {
-  if (code === "not-found" && !passkey) return window.location.reload()
-  const notice = new URLSearchParams({ notice: code })
-  if (passkey) notice.set("passkey", passkey)
-  window.location.hash = notice.toString()
+type Notice = { message: string; passkey: string }
+
+/**
+ * Reloads a list that changed in the meantime; the reloaded page shows `message`. The message
+ * rides in the history entry, which survives the reload and which no link can set.
+ */
+function refresh(message: string, passkey: string): void {
+  window.history.replaceState({ notice: { message, passkey } satisfies Notice }, "")
   window.location.reload()
 }
 
 /** After `refresh`: shows its message on the passkey's row if it is still listed, else at the top. */
 function showNotice(): void {
-  const notice = new URLSearchParams(window.location.hash.slice(1))
-  const code = notice.get("notice")
-  if (!code || !stale.has(code)) return
-  window.history.replaceState(null, "", window.location.pathname + window.location.search)
-  const name = notice.get("passkey")
+  const notice = (window.history.state as { notice?: Notice } | null)?.notice
+  if (!notice) return
+  window.history.replaceState(null, "")
   const row = [...document.querySelectorAll<HTMLElement>("[data-passkey]")].find(
-    (item) => item.dataset.passkey === name,
+    (item) => item.dataset.passkey === notice.passkey,
   )
-  write((row ? rowPlace(row) : header).error, explain(code))
+  write((row ? rowPlace(row) : header).error, notice.message)
 }
 
 /** Notices for a change that worked, set in the hash before a reload. */
@@ -123,14 +93,14 @@ async function assertion(
 
 async function reauthenticate(place: Place): Promise<Reply> {
   write(place.status, text("msgConfirm"))
-  const credential = await assertion("/account/reauth/options", {})
-  return post("/account/reauth", { credential: assertionJson(credential) })
+  const credential = await assertion(endpoint(root, "reauthOptions"), {})
+  return post(endpoint(root, "reauth"), { credential: assertionJson(credential) })
 }
 
 /** Runs `action`; if the server wants a fresh confirmation, gets one and runs it again. */
 async function fresh(place: Place, action: () => Promise<Reply>): Promise<Reply> {
   const first = await action()
-  if (problem(first) !== "reauth-required") return first
+  if (next(first) !== "reauth") return first
   const confirmed = await reauthenticate(place)
   return confirmed.ok ? action() : confirmed
 }
@@ -169,36 +139,34 @@ async function settle(reply: Reply, place: Place, passkey: string): Promise<void
 }
 
 function refused(reply: Reply, place: Place, passkey: string): void {
-  const code = problem(reply)
-  if (stale.has(code)) refresh(code, passkey)
-  else if (code === "password-weak")
-    fail(place, text(weaknesses[String((reply.body as Problem).weakness)] ?? "msgCommon"))
-  else fail(place, explain(code))
+  if (stale(reply)) refresh(explain(reply, text), passkey)
+  else fail(place, explain(reply, text))
 }
 
 function signInWithPassword(event: SubmitEvent): void {
   event.preventDefault()
   const { username, password, code } = entered()
   if (!username || !password) return fail(header, text("msgPasswordMissing"))
+  const path = endpoint(event.currentTarget as Element)
   run(async () => {
-    const reply = await post("/account/session/password", { username, password, code })
-    if (problem(reply) !== "code-needed") return reply
+    const reply = await post(path, { username, password, code })
+    if (next(reply) !== "code") return reply
     write(header.status, "")
     codeStep(true)
     return null
   })
 }
 
-function signIn(): void {
+function signIn(button: HTMLElement): void {
   run(async () => {
-    const credential = await assertion("/account/session/options", {})
-    return post("/account/session", { credential: assertionJson(credential) })
+    const credential = await assertion(endpoint(button, "options"), {})
+    return post(endpoint(button), { credential: assertionJson(credential) })
   })
 }
 
-function addPasskey(label: string): void {
+function addPasskey(button: Element | null, label: string): void {
   run(async () => {
-    const started = await fresh(header, () => post("/account/passkeys/options", {}))
+    const started = await fresh(header, () => post(endpoint(button, "options"), {}))
     if (!started.ok) return started
     write(header.status, text("msgWorking"))
     const credential = await navigator.credentials.create({
@@ -206,7 +174,7 @@ function addPasskey(label: string): void {
     })
     if (!(credential instanceof PublicKeyCredential))
       throw new DOMException("no credential", "NotAllowedError")
-    return post("/account/passkeys", {
+    return post(endpoint(button), {
       credential: registrationJson(credential),
       label: label || null,
     })
@@ -214,30 +182,31 @@ function addPasskey(label: string): void {
 }
 
 /**
- * Opens a row's dialog (`dialog[data-<name>]`) from its `data-opens` button. `confirmed` runs when
- * the dialog closes through its confirm button; cancel, Escape and the backdrop leave things as
- * they were.
+ * Opens a row's dialog (`dialog[data-<name>]`) from its `data-opens` button. `confirmed` runs with
+ * the button's endpoint when the dialog closes through its confirm button; cancel, Escape and the
+ * backdrop leave things as they were.
  */
 function wireDialog(
   item: HTMLElement,
   name: string,
-  confirmed: (dialog: HTMLDialogElement) => void,
+  confirmed: (dialog: HTMLDialogElement, path: string) => void,
 ): void {
   const dialog = item.querySelector<HTMLDialogElement>(`dialog[data-${name}]`)
+  const opener = item.querySelector(`[data-opens=${name}]`)
   if (!dialog) return
-  item.querySelector(`[data-opens=${name}]`)?.addEventListener("click", () => {
+  opener?.addEventListener("click", () => {
     dialog.returnValue = ""
     dialog.showModal()
   })
   dialog.querySelector("[data-close]")?.addEventListener("click", () => dialog.close())
   dialog.addEventListener("close", () => {
-    if (dialog.returnValue === "confirm") confirmed(dialog)
+    if (dialog.returnValue === "confirm") confirmed(dialog, endpoint(opener))
   })
 }
 
 /** Wires a row's remove confirmation. `passkey` names the row's passkey, if any. */
-function wireRemove(item: HTMLElement, path: string, name: string, passkey: string): void {
-  wireDialog(item, "confirm", () => {
+function wireRemove(item: HTMLElement, name: string, passkey: string): void {
+  wireDialog(item, "confirm", (_dialog, path) => {
     const place = rowPlace(item)
     run(() => fresh(place, () => post(path, { name })), place, passkey)
   })
@@ -245,17 +214,18 @@ function wireRemove(item: HTMLElement, path: string, name: string, passkey: stri
 
 function wirePasskey(item: HTMLElement): void {
   const name = item.dataset.passkey ?? ""
-  wireRemove(item, "/account/passkeys/remove", name, name)
-  wireDialog(item, "rename", (dialog) => {
+  wireRemove(item, name, name)
+  wireDialog(item, "rename", (dialog, path) => {
     const label = dialog.querySelector("input")?.value.trim() ?? ""
-    if (label) run(() => post("/account/passkeys/rename", { name, label }), rowPlace(item), name)
+    if (label) run(() => post(path, { name, label }), rowPlace(item), name)
   })
 }
 
 /** Starts linking: after a fresh confirmation, the server answers with the provider's URL. */
-function link(provider: string): void {
+function link(button: HTMLElement): void {
+  const provider = button.dataset.link ?? ""
   run(async () => {
-    const reply = await fresh(header, () => post("/account/links/start", { provider }))
+    const reply = await fresh(header, () => post(endpoint(button), { provider }))
     const to = redirect(reply)
     if (!to) return reply
     window.location.assign(to)
@@ -276,19 +246,16 @@ async function password(
 
 function wirePassword(section: HTMLElement): void {
   const place = rowPlace(section)
-  wireDialog(section, "change", (dialog) => {
-    const field = (name: string) =>
-      dialog.querySelector<HTMLInputElement>(`[name=${name}]`)?.value ?? ""
-    const current = field("current")
-    const next = field("new")
+  wireDialog(section, "change", (dialog, path) => {
+    const current = dialog.querySelector<HTMLInputElement>("[name=current]")?.value
+    const chosen = dialog.querySelector<HTMLInputElement>("[name=new]")
     if (!current) return
-    if (next.length < 15) return fail(place, text("msgTooShort"))
-    run(() => password("/account/password", { current, new: next }, "password-changed"), place)
+    if (!longEnough(chosen)) return fail(place, text("msgTooShort"))
+    run(() => password(path, { current, new: chosen.value }, "password-changed"), place)
   })
-  wireDialog(section, "confirm", (dialog) => {
+  wireDialog(section, "confirm", (dialog, path) => {
     const current = dialog.querySelector("input")?.value ?? ""
-    if (current)
-      run(() => password("/account/password/remove", { current }, "password-removed"), place)
+    if (current) run(() => password(path, { current }, "password-removed"), place)
   })
 }
 
@@ -303,17 +270,16 @@ function localizeDates(): void {
 
 if (root) {
   localizeDates()
-  document
-    .getElementById("sign-out")
-    ?.addEventListener("click", () => run(() => post("/account/sign-out", {})))
-  document.getElementById("sign-out-others")?.addEventListener("click", () => {
-    run(() => post("/account/sessions/revoke-others", {}))
-  })
+  for (const id of ["sign-out", "sign-out-others"]) {
+    const button = document.getElementById(id)
+    button?.addEventListener("click", () => run(() => post(endpoint(button), {})))
+  }
   const passwordSection = document.getElementById("password")
   if (passwordSection) wirePassword(passwordSection)
   for (const item of document.querySelectorAll<HTMLElement>("[data-session]")) {
-    item.querySelector("[data-action=revoke]")?.addEventListener("click", () => {
-      run(() => post("/account/sessions/revoke", { name: item.dataset.session ?? "" }))
+    const button = item.querySelector("[data-action=revoke]")
+    button?.addEventListener("click", () => {
+      run(() => post(endpoint(button), { name: item.dataset.session ?? "" }))
     })
   }
   document.getElementById("sign-in")?.addEventListener("submit", signInWithPassword)
@@ -328,16 +294,19 @@ if (root) {
     document.getElementById("passkey-sign-in")?.setAttribute("hidden", "")
     document.getElementById("add")?.setAttribute("hidden", "")
   } else {
-    signInButton?.addEventListener("click", signIn)
+    signInButton?.addEventListener("click", () => signIn(signInButton))
     if (passkeys)
       wireDialog(passkeys, "add", (dialog) => {
-        addPasskey(dialog.querySelector("input")?.value.trim() ?? "")
+        addPasskey(
+          document.getElementById("add"),
+          dialog.querySelector("input")?.value.trim() ?? "",
+        )
       })
     for (const item of document.querySelectorAll<HTMLElement>("[data-passkey]")) wirePasskey(item)
     for (const item of document.querySelectorAll<HTMLElement>("[data-linked]"))
-      wireRemove(item, "/account/links/remove", item.dataset.linked ?? "", "")
+      wireRemove(item, item.dataset.linked ?? "", "")
     for (const button of document.querySelectorAll<HTMLButtonElement>("button[data-link]"))
-      button.addEventListener("click", () => link(button.dataset.link ?? ""))
+      button.addEventListener("click", () => link(button))
     if (window.location.hash === "#add") document.getElementById("add")?.click()
   }
   showNotice()

@@ -22,18 +22,12 @@
 {%- block head %}<script type="module" src="/assets/account.js?v={{ assets.account_js }}"></script>{% endblock -%}
 {%- block content %}
 <div id="account" class="flex flex-col gap-5" data-lang="{{ lang.tag() }}"
+     data-reauth-options="/account/reauth/options" data-reauth="/account/reauth"
      data-msg-failed="{{ m.passkey_failed }}" data-msg-cancelled="{{ m.passkey_cancelled }}"
      data-msg-working="{{ m.working }}" data-msg-error="{{ m.generic_error }}" data-msg-confirm="{{ m.confirm_working }}"
-     data-msg-exists="{{ m.passkey_exists }}" data-msg-last="{{ m.last_passkey_error }}"
-     data-msg-changed="{{ m.changed_error }}" data-msg-gone="{{ m.passkey_gone_error }}" data-msg-signed-out="{{ m.signed_out_error }}"
-     data-msg-device-passkey="{{ m.device_passkey_needed }}" data-msg-last-credential="{{ m.last_credential_error }}"
-     data-msg-admin-passkey="{{ m.admin_passkey_only }}" data-msg-expired="{{ m.ceremony_expired }}" data-msg-linked="{{ m.upstream_linked_title }}"
-     data-msg-busy="{{ m.busy }}" data-msg-password-wrong="{{ m.password_wrong }}" data-msg-password-held="{{ m.password_held_here }}"
-     data-msg-password-conflict="{{ m.password_conflict }}" data-msg-password-changed="{{ m.password_changed }}" data-msg-password-removed="{{ m.password_removed }}"
-     data-msg-too-short="{{ m.weak_too_short }}" data-msg-too-long="{{ m.weak_too_long }}"
-     data-msg-common="{{ m.weak_common }}" data-msg-context="{{ m.weak_context }}"
-     data-msg-password-failed="{{ m.password_failed }}" data-msg-password-missing="{{ m.password_missing }}"
-     data-msg-code-failed="{{ m.code_failed }}" data-msg-admin-two-factor="{{ m.admin_two_factor }}">
+     data-msg-linked="{{ m.upstream_linked_title }}" data-msg-password-changed="{{ m.password_changed }}"
+     data-msg-password-removed="{{ m.password_removed }}" data-msg-too-short="{{ m.too_short() }}"
+     data-msg-password-missing="{{ m.password_missing }}">
 {%- match view %}
 {%- when None %}
 {% call ui::card() %}
@@ -47,13 +41,13 @@
       {% call ui::alert(m.passkey_unsupported_title, "default", "Key", live = "") %}{{ m.passkey_unsupported_body }}{% endcall %}
     </div>
     <noscript>{% call ui::alert(m.noscript_title, "default", "Key", live = "") %}{{ m.noscript_body }}{% endcall %}</noscript>
-    <form id="sign-in" class="flex flex-col gap-5" novalidate>
+    <form id="sign-in" data-post="/account/session/password" class="flex flex-col gap-5" novalidate>
       {{ password::steps(m, "") }}
       <button type="submit" class="{{ ds::button("primary", "lg") }} w-full">{{ m.login_submit }}</button>
     </form>
     <div id="passkey-sign-in" class="flex flex-col gap-5">
       {{ ui::field_separator(m.upstream_or) }}
-      <button type="button" id="account-sign-in" class="{{ ds::button("secondary", "lg") }} w-full">{{ icons::icon("Fingerprint") }}{{ m.login_passkey }}</button>
+      <button type="button" id="account-sign-in" data-options="/account/session/options" data-post="/account/session" class="{{ ds::button("secondary", "lg") }} w-full">{{ icons::icon("Fingerprint") }}{{ m.login_passkey }}</button>
     </div>
     {% call ui::disclosure(m.lost_passkey_title, center = true) %}
     <p>{{ m.lost_passkey_body }}</p>
@@ -71,7 +65,7 @@
         <h1 class="text-base leading-6 font-semibold text-main">{{ m.account_title }}</h1>
         <p class="text-[0.8125rem] leading-5 break-words text-secondary">{{ m.signed_in_as.replace("%user%", view.username) }}</p>
       </div>
-      <button type="button" id="sign-out" class="{{ ds::button("secondary", "sm") }}">{{ m.sign_out }}</button>
+      <button type="button" id="sign-out" data-post="/account/sign-out" class="{{ ds::button("secondary", "sm") }}">{{ m.sign_out }}</button>
     </div>
     {#- Present and empty from first paint, so screen readers announce what the script writes. -#}
     <div id="status" role="status" aria-live="polite" class="empty:sr-only text-[0.8125rem] leading-5 text-secondary"></div>
@@ -99,7 +93,7 @@
             </p>
           </div>
           {%- if view.passkey_confirms %}
-          <button type="button" id="add" data-opens="add" class="{{ ds::button("secondary", "sm") }}">{{ m.add }}</button>
+          <button type="button" id="add" data-opens="add" data-options="/account/passkeys/options" data-post="/account/passkeys" class="{{ ds::button("secondary", "sm") }}">{{ m.add }}</button>
           {%- endif %}
         </div>
         <p data-status role="status" aria-live="polite" class="empty:sr-only text-[0.8125rem] leading-5 text-secondary"></p>
@@ -138,9 +132,9 @@
                 </p>
               </div>
               <div class="flex gap-2">
-                <button type="button" data-opens="rename" class="{{ ds::button("secondary", "sm") }}">{{ m.rename }}</button>
+                <button type="button" data-opens="rename" data-post="/account/passkeys/rename" class="{{ ds::button("secondary", "sm") }}">{{ m.rename }}</button>
                 {%- if view.passkeys.len() > 1 %}
-                <button type="button" data-opens="confirm" class="{{ ds::button("secondary-destructive", "sm") }}">{{ m.remove }}</button>
+                <button type="button" data-opens="confirm" data-post="/account/passkeys/remove" class="{{ ds::button("secondary-destructive", "sm") }}">{{ m.remove }}</button>
                 {%- endif %}
               </div>
             </div>
@@ -170,8 +164,8 @@
             <p class="text-[0.8125rem] leading-5 text-secondary">{% if password.authenticator %}{{ m.password_on_authenticator }}{% else %}{{ m.password_on }}{% endif %}</p>
           </div>
           <div class="flex gap-2">
-            <button type="button" data-opens="change" class="{{ ds::button("secondary", "sm") }}">{{ m.change }}</button>
-            <button type="button" data-opens="confirm" class="{{ ds::button("secondary-destructive", "sm") }}">{{ m.remove }}</button>
+            <button type="button" data-opens="change" data-post="/account/password" class="{{ ds::button("secondary", "sm") }}">{{ m.change }}</button>
+            <button type="button" data-opens="confirm" data-post="/account/password/remove" class="{{ ds::button("secondary-destructive", "sm") }}">{{ m.remove }}</button>
           </div>
         </div>
         {% call ui::dialog("change", "password-change-title", m.password_change, m.save, m.cancel, form_id = "password-change") %}
@@ -182,9 +176,9 @@
         {% call ui::field("current-password", m.password_current) %}
         <input id="current-password" name="current" type="password" maxlength="1024" required autofocus class="{{ ds::input() }}" autocomplete="current-password">
         {% endcall %}
-        {% call ui::field("new-password", m.password_new, m.setup_password_hint) %}
-        <input id="new-password" name="new" type="password" minlength="15" maxlength="1024" required class="{{ ds::input() }}" autocomplete="new-password"
-               {{- ui::field_describedby("new-password", m.setup_password_hint) }}>
+        {% call ui::field("new-password", m.password_new, m.password_hint()) %}
+        <input id="new-password" name="new" type="password" minlength="{{ zeabur_identity_core::password::MIN_CHARS }}" maxlength="1024" required class="{{ ds::input() }}" autocomplete="new-password"
+               {{- ui::field_describedby("new-password", m.password_hint()) }}>
         {% endcall %}
         </div>
         {%- endcall %}
@@ -212,7 +206,7 @@
             </p>
           </div>
           {%- if view.passkey_confirms %}
-          <button type="button" data-opens="confirm" class="{{ ds::button("secondary-destructive", "sm") }}">{{ m.remove }}</button>
+          <button type="button" data-opens="confirm" data-post="/account/links/remove" class="{{ ds::button("secondary-destructive", "sm") }}">{{ m.remove }}</button>
           {%- endif %}
         </div>
         {%- if view.passkey_confirms %}
@@ -233,7 +227,7 @@
           <p class="text-[0.8125rem] leading-5 text-secondary">{{ m.not_linked }}</p>
         </div>
         {%- if view.passkey_confirms %}
-        <button type="button" data-link="{{ p.id }}" aria-label="{{ m.link_with.replace("%provider%", p.label) }}" class="{{ ds::button("secondary", "sm") }}">{{ m.link }}</button>
+        <button type="button" data-link="{{ p.id }}" data-post="/account/links/start" aria-label="{{ m.link_with.replace("%provider%", p.label) }}" class="{{ ds::button("secondary", "sm") }}">{{ m.link }}</button>
         {%- endif %}
       </li>
       {%- endfor %}
@@ -254,7 +248,7 @@
         <p class="text-[0.8125rem] leading-5 text-pretty text-secondary">{{ m.sessions_note }}</p>
       </div>
       {%- if !view.other_sessions.is_empty() %}
-      <button type="button" id="sign-out-others" class="{{ ds::button("secondary", "sm") }}">{{ m.sign_out_others }}</button>
+      <button type="button" id="sign-out-others" data-post="/account/sessions/revoke-others" class="{{ ds::button("secondary", "sm") }}">{{ m.sign_out_others }}</button>
       {%- endif %}
     </div>
     {%- if let Some(s) = view.this_session %}
@@ -266,7 +260,7 @@
       {%- for s in view.other_sessions %}
       <li data-session="{{ s.name }}" class="flex flex-wrap items-center gap-x-3 gap-y-2 py-3 first:pt-0 last:pb-0">
         {{ session_row(s, m) }}
-        <button type="button" data-action="revoke" class="{{ ds::button("secondary", "sm") }}">{{ m.sign_out }}</button>
+        <button type="button" data-action="revoke" data-post="/account/sessions/revoke" class="{{ ds::button("secondary", "sm") }}">{{ m.sign_out }}</button>
       </li>
       {%- endfor %}
     </ul>

@@ -2,6 +2,8 @@
 //!
 //! Wording and terms follow `docs/internal/wording.md` in the Zeabur repository.
 
+use zeabur_identity_core::password::MIN_CHARS;
+
 /// A supported interface language.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Lang {
@@ -298,6 +300,21 @@ pub struct Messages {
     pub err_server: ErrorText,
 }
 
+impl Messages {
+    /// The hint under a new password field, with the minimum length.
+    #[must_use]
+    pub fn password_hint(&self) -> String {
+        self.setup_password_hint
+            .replace("%min%", &MIN_CHARS.to_string())
+    }
+
+    /// The refusal of a password that is too short, with the minimum length.
+    #[must_use]
+    pub fn too_short(&self) -> String {
+        self.weak_too_short.replace("%min%", &MIN_CHARS.to_string())
+    }
+}
+
 /// English.
 pub const EN: Messages = Messages {
     language_name: "English",
@@ -328,11 +345,11 @@ pub const EN: Messages = Messages {
     password_missing: "Enter your username and password, or sign in with a passkey.",
     busy: "Too many people are signing in right now. Try again in a moment.",
     setup_password: "Password",
-    setup_password_hint: "At least 15 characters. A few unrelated words are easy to remember and hard to guess.",
+    setup_password_hint: "At least %min% characters. A few unrelated words are easy to remember and hard to guess.",
     setup_password_submit: "Use a password",
     setup_password_set: "Set password",
     setup_other_ways: "Choose another way",
-    weak_too_short: "Use at least 15 characters.",
+    weak_too_short: "Use at least %min% characters.",
     weak_too_long: "Use at most 256 characters.",
     weak_common: "This password is too common or too easy to guess. Choose another.",
     weak_context: "Don’t put your username or this site’s name in the password.",
@@ -556,11 +573,11 @@ pub const ZH_TW: Messages = Messages {
     password_missing: "請輸入使用者名稱和密碼，或改用通行密鑰登入。",
     busy: "現在登入的人太多，請稍後再試。",
     setup_password: "密碼",
-    setup_password_hint: "至少 15 個字元。把幾個不相關的詞連在一起，好記又難猜。",
+    setup_password_hint: "至少 %min% 個字元。把幾個不相關的詞連在一起，好記又難猜。",
     setup_password_submit: "使用密碼",
     setup_password_set: "設定密碼",
     setup_other_ways: "改用其他方式",
-    weak_too_short: "密碼至少要 15 個字元。",
+    weak_too_short: "密碼至少要 %min% 個字元。",
     weak_too_long: "密碼最多 256 個字元。",
     weak_common: "這個密碼太常見或太好猜，請換一個。",
     weak_context: "密碼裡不要用到使用者名稱或這個網站的名稱。",
@@ -784,11 +801,11 @@ pub const ZH_CN: Messages = Messages {
     password_missing: "请输入用户名和密码，或改用通行密钥登录。",
     busy: "当前登录的人太多，请稍后再试。",
     setup_password: "密码",
-    setup_password_hint: "至少 15 个字符。把几个不相关的词连在一起，好记又难猜。",
+    setup_password_hint: "至少 %min% 个字符。把几个不相关的词连在一起，好记又难猜。",
     setup_password_submit: "使用密码",
     setup_password_set: "设置密码",
     setup_other_ways: "改用其他方式",
-    weak_too_short: "密码至少要 15 个字符。",
+    weak_too_short: "密码至少要 %min% 个字符。",
     weak_too_long: "密码最多 256 个字符。",
     weak_common: "这个密码太常见或太容易猜到，请换一个。",
     weak_context: "密码中不要包含用户名或此网站的名称。",
