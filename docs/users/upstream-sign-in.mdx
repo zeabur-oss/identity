@@ -173,7 +173,7 @@ The sign-in page shows the new button at the next page load. You don't need to r
 
 Choose by the user's situation:
 
-- A regular account that can already sign in: the user opens the account page, confirms with a passkey and selects **Link** and the provider's name.
+- A regular account that can already sign in: the user opens the account page, selects **Link** next to the provider under **Sign-in methods**, and confirms with a passkey.
 - A new user: send an invitation as described in [Manage users](./manage-users.mdx). Invitations need the `--invitations` option from [Install and sign in on k3s](../get-started/quickstart.mdx). After opening the link, the user selects **Continue with** and the provider's name instead of creating a passkey.
 - A user who has an account but can't sign in: send another invitation for the same username. If the account already has a passkey or a linked account, the invitation needs `--reset`. See [Sign out, recover, and remove users](./offboarding.mdx).
 

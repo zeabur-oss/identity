@@ -39,6 +39,8 @@ const MANY: [ProviderButton<'static>; 4] = [
         icon: "SignIn",
     },
 ];
+/// `MANY` without GitHub, which `LINKED` links already.
+const MANY_UNLINKED: [ProviderButton<'static>; 3] = [MANY[0], MANY[2], MANY[3]];
 const LINKED: [LinkedRow<'static>; 1] = [LinkedRow {
     name: "cred-github",
     provider: GITHUB,
@@ -272,11 +274,15 @@ const PASSWORD_SESSIONS: [SessionRow<'static>; 2] = [
 
 async fn account(Path(state): Path<String>, RawQuery(q): RawQuery, h: HeaderMap) -> Response {
     let lang = lang(q.as_deref(), &h);
-    let view = |passkeys, linked, admin| AccountView {
+    let view = |passkeys, linked: &'static [LinkedRow<'static>], admin| AccountView {
         username: "admin",
         passkeys,
         linked,
-        providers: &MANY,
+        providers: if linked.is_empty() {
+            &MANY
+        } else {
+            &MANY_UNLINKED
+        },
         admin,
         password: admin.then_some(PasswordView {
             authenticator: true,
