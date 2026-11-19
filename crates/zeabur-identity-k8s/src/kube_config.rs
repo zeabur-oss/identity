@@ -98,6 +98,7 @@ use zeabur_identity_core::protocol::OPENID_CONFIGURATION_PATH;
 
 use crate::cert_manager::{Certificate, Issuer};
 use crate::internal_tls::{self, TlsError};
+use crate::objects::status_code;
 use crate::rbac::NAME;
 
 /// Prefix of the `extra` keys Zeabur Identity maps into Kubernetes user info.
@@ -490,7 +491,7 @@ where
     let params = PatchParams::apply(FIELD_MANAGER).force();
     match api.patch(name, &params, &Patch::Apply(object)).await {
         Ok(_) => Ok(()),
-        Err(kube::Error::Api(status)) if status.code == 404 => Err(KubeConfigError::NoCertManager),
+        Err(error) if status_code(&error) == Some(404) => Err(KubeConfigError::NoCertManager),
         Err(error) => Err(error.into()),
     }
 }

@@ -4550,6 +4550,7 @@ dependencies = [
  "schemars 1.2.3",
  "serde",
  "thiserror 2.0.21",
+ "tokio",
 ]
 
 [[package]]
@@ -4692,7 +4693,6 @@ dependencies = [
 name = "zeabur-identity-store"
 version = "0.3.1"
 dependencies = [
- "thiserror 2.0.21",
  "zeabur-identity-api",
  "zeabur-identity-core",
  "zeabur-identity-keys",

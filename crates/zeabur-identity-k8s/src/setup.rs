@@ -111,21 +111,21 @@ impl KubeSetupStore {
     }
 }
 
-fn backend(error: &kube::Error) -> StoreError {
-    StoreError(error.to_string())
-}
-
 fn data(secret: &Secret, key: &str) -> Option<String> {
     let bytes = secret.data.as_ref()?.get(key)?;
     String::from_utf8(bytes.0.clone()).ok()
 }
 
 async fn load_setup(api: &Api<Secret>) -> Result<Option<SetupToken>, StoreError> {
-    let Some(secret) = api.get_opt(SETUP_SECRET).await.map_err(|e| backend(&e))? else {
+    let Some(secret) = api
+        .get_opt(SETUP_SECRET)
+        .await
+        .map_err(StoreError::backend)?
+    else {
         return Ok(None);
     };
     if secret.type_.as_deref() != Some(SECRET_TYPE) {
-        return Err(StoreError(format!(
+        return Err(StoreError::Backend(format!(
             "Secret {SETUP_SECRET} has the wrong type"
         )));
     }
@@ -141,7 +141,9 @@ async fn load_setup(api: &Api<Secret>) -> Result<Option<SetupToken>, StoreError>
         secret.uid(),
         secret.resource_version(),
     ) else {
-        return Err(StoreError(format!("Secret {SETUP_SECRET} is malformed")));
+        return Err(StoreError::Backend(format!(
+            "Secret {SETUP_SECRET} is malformed"
+        )));
     };
     Ok(Some(SetupToken {
         user,
@@ -156,7 +158,7 @@ async fn load_invitation(
     api: &Api<Invitation>,
     name: &str,
 ) -> Result<Option<SetupToken>, StoreError> {
-    let Some(invitation) = api.get_opt(name).await.map_err(|e| backend(&e))? else {
+    let Some(invitation) = api.get_opt(name).await.map_err(StoreError::backend)? else {
         return Ok(None);
     };
     let (Some(uid), Some(rv)) = (invitation.uid(), invitation.resource_version()) else {
@@ -200,7 +202,7 @@ impl SetupStore for KubeSetupStore {
         let invitations = self.invitations.clone();
         let version = token.version.clone();
         async move {
-            let malformed = || StoreError("malformed enrolment token version".to_owned());
+            let malformed = || StoreError::Backend("malformed enrolment token version".to_owned());
             let (name, rest) = version.split_once('/').ok_or_else(malformed)?;
             let (uid, rv) = rest.split_once('/').ok_or_else(malformed)?;
             // The delete is the single-use gate: with uid and resourceVersion preconditions,
@@ -216,7 +218,7 @@ impl SetupStore for KubeSetupStore {
                 }
                 None => return Err(malformed()),
             };
-            match outcome.map_err(|e| backend(&e))? {
+            match outcome.map_err(StoreError::backend)? {
                 DeleteOutcome::Deleted => Ok(Consume::Consumed),
                 DeleteOutcome::Changed | DeleteOutcome::NotFound => Ok(Consume::AlreadyUsed),
             }

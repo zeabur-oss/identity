@@ -33,7 +33,7 @@ use zeabur_identity_oauth::authorize::Authentication;
 use zeabur_identity_oauth::endpoints::{FLOW_COOKIE, complete_authorization};
 use zeabur_identity_store::{
     Consume, CredentialStore, Directory, GrantStore, PasswordRemoval, PasswordState, Saved,
-    SetupStore, StoredPassword, StoredTotp, User,
+    SetupStore, StoreError, StoredPassword, StoredTotp, User, retry_on_conflict,
 };
 
 use crate::account::{
@@ -43,8 +43,8 @@ use crate::account::{
 use crate::device::Requester;
 use crate::problem::{Extensions, Problem};
 use crate::{
-    NO_REQUEST, SETUP_INVALID, Shared, SignIn, check_account, check_request, cookie, internal,
-    json, parse, redeemed, refused, set_cookie_with, valid_setup_token,
+    NO_REQUEST, SETUP_INVALID, Shared, SignIn, check_account, check_request, cookie, json, parse,
+    redeemed, refused, set_cookie_with, valid_setup_token,
 };
 
 /// Cookie holding the browser's device entries, one per user who signed in here.
@@ -66,8 +66,6 @@ pub const PASSWORD_AMR: [&str; 1] = ["pwd"];
 pub const TOTP_AMR: [&str; 3] = ["pwd", "otp", "mfa"];
 /// A password, then a recovery code.
 pub const RECOVERY_AMR: [&str; 2] = ["pwd", "mfa"];
-/// How many times a guess count is read again when another sign-in changed it first.
-const SAVE_ATTEMPTS: usize = 5;
 
 pub(crate) const PASSWORD_FAILED: Problem = Problem::new(
     StatusCode::UNAUTHORIZED,
@@ -190,11 +188,11 @@ impl Passwords {
         secret: &Secret,
         enrolled_step: u64,
     ) -> Result<(StoredTotp, Vec<String>), Problem> {
-        let (shown, recovery) = self.recovery.generate().map_err(internal)?;
+        let (shown, recovery) = self.recovery.generate().map_err(Problem::internal)?;
         let secret = self
             .totp
             .seal(&stored_purpose(subject), secret.as_bytes())
-            .map_err(internal)?;
+            .map_err(Problem::internal)?;
         Ok((
             StoredTotp {
                 secret,
@@ -243,7 +241,7 @@ impl Passwords {
             work(&hasher)
         })
         .await
-        .map_err(|error| Failure::Problem(internal(error)))
+        .map_err(|error| Failure::Problem(Problem::internal(error)))
     }
 
     /// The device this browser has for `subject`, if its cookie holds a valid entry.
@@ -397,43 +395,43 @@ enum Update {
 async fn update_state<K: CredentialStore>(
     credentials: &K,
     user: &User,
-    mut stored: StoredPassword,
+    stored: StoredPassword,
     change: impl Fn(&mut PasswordState) -> bool,
 ) -> Update {
     let (hash, totp) = (stored.hash.clone(), stored.totp.clone());
-    for _ in 0..SAVE_ATTEMPTS {
-        if stored.hash != hash || stored.totp != totp {
-            return Update::Refused;
-        }
-        let mut state = stored.state.clone();
-        if !change(&mut state) {
-            return Update::Refused;
-        }
-        if state == stored.state {
-            return Update::Saved;
-        }
-        match credentials.save_state(&stored, &state).await {
-            Ok(Saved::Saved) => return Update::Saved,
-            Ok(Saved::Conflict) => {}
-            Err(error) => {
-                tracing::warn!(reason = "password_state_unsaved", %error, "saving the password state failed");
-                return Update::Failed;
+    let (hash, totp, change) = (&hash, &totp, &change);
+    let mut first = Some(stored);
+    let saved = retry_on_conflict(|| {
+        let first = first.take();
+        async move {
+            let stored = match first {
+                Some(stored) => stored,
+                None => match credentials.password(user).await? {
+                    Some(again) => again,
+                    None => return Ok(Some(Update::Refused)),
+                },
+            };
+            if stored.hash != *hash || stored.totp != *totp {
+                return Ok(Some(Update::Refused));
             }
-        }
-        match credentials.password(user).await {
-            Ok(Some(again)) => stored = again,
-            Ok(None) => return Update::Refused,
-            Err(error) => {
-                tracing::warn!(reason = "password_state_unsaved", %error, "reading the password state failed");
-                return Update::Failed;
+            let mut state = stored.state.clone();
+            if !change(&mut state) {
+                return Ok(Some(Update::Refused));
             }
+            if state == stored.state {
+                return Ok(Some(Update::Saved));
+            }
+            Ok(match credentials.save_state(&stored, &state).await? {
+                Saved::Saved => Some(Update::Saved),
+                Saved::Conflict => None,
+            })
         }
-    }
-    tracing::warn!(
-        reason = "password_state_unsaved",
-        "saving the password state kept conflicting"
-    );
-    Update::Failed
+    })
+    .await;
+    saved.unwrap_or_else(|error: StoreError| {
+        tracing::warn!(reason = "password_state_unsaved", %error, "saving the password state failed");
+        Update::Failed
+    })
 }
 
 #[derive(Deserialize)]
@@ -544,10 +542,14 @@ where
         .directory
         .user(&request.username)
         .await
-        .map_err(internal)?
+        .map_err(Problem::internal)?
         .filter(|user| user.username == request.username && !user.disabled);
     let stored = match &user {
-        Some(user) => service.credentials.password(user).await.map_err(internal)?,
+        Some(user) => service
+            .credentials
+            .password(user)
+            .await
+            .map_err(Problem::internal)?,
         None => None,
     };
     let (Some(user), Some(stored)) = (user, stored) else {
@@ -688,7 +690,9 @@ where
         // Another sign-in used the code first.
         (Update::Refused, Some(_)) => return Err(CODE_FAILED.into()),
         (Update::Failed, Some(_)) => {
-            return Err(internal("the use of a second factor could not be recorded").into());
+            return Err(
+                Problem::internal("the use of a second factor could not be recorded").into(),
+            );
         }
     }
     Ok(())
@@ -792,7 +796,7 @@ struct Qr {
 fn qr(text: &str) -> Result<Qr, Problem> {
     use std::fmt::Write as _;
     const QUIET: usize = 4;
-    let code = qrcode::QrCode::new(text.as_bytes()).map_err(internal)?;
+    let code = qrcode::QrCode::new(text.as_bytes()).map_err(Problem::internal)?;
     let width = code.width();
     let colors = code.to_colors();
     let mut path = String::new();
@@ -823,7 +827,7 @@ fn qr(text: &str) -> Result<Qr, Problem> {
 
 /// Whether the settings need a second factor after a password for `owner`.
 async fn needs_second_factor<D: Directory>(directory: &D, owner: &User) -> Result<bool, Problem> {
-    let settings = directory.settings().await.map_err(internal)?;
+    let settings = directory.settings().await.map_err(Problem::internal)?;
     let without = Method::Password {
         second_factor: false,
     };
@@ -896,14 +900,14 @@ where
     if !needs_second_factor(directory, &owner).await? {
         return Ok(json(StatusCode::OK, &SetupOptions { totp: None }));
     }
-    let secret = Secret::generate().map_err(internal)?;
+    let secret = Secret::generate().map_err(Problem::internal)?;
     let host = issuer_host(service.oauth.issuer.as_str());
     let uri = secret.uri(&host, &owner.username);
     let sealed = service
         .passwords
         .totp
         .seal(&enrol_purpose(&request.token), secret.as_bytes())
-        .map_err(internal)?;
+        .map_err(Problem::internal)?;
     let enrolment = Enrolment {
         secret: secret.base32(),
         qr: qr(&uri)?,
@@ -987,7 +991,7 @@ where
     let hash = passwords
         .run(move |hasher| hasher.hash(&entered))
         .await?
-        .map_err(internal)?;
+        .map_err(Problem::internal)?;
     let (totp, recovery_codes) = match &enrolled {
         Some((secret, step)) => {
             let (totp, shown) = passwords.store(&owner.subject, secret, *step)?;
@@ -996,23 +1000,27 @@ where
         None => (None, None),
     };
     // Consume the token before storing the password, as for a passkey.
-    if service.setup.consume(&token).await.map_err(internal)? == Consume::AlreadyUsed {
+    if service
+        .setup
+        .consume(&token)
+        .await
+        .map_err(Problem::internal)?
+        == Consume::AlreadyUsed
+    {
         return Err(SETUP_INVALID.into());
     }
     // Another setup of this user can write between the read and the write; the later one wins.
-    let mut saved = Saved::Conflict;
-    for _ in 0..3 {
-        saved = service
-            .credentials
-            .set_password(&owner, &hash, totp.as_ref(), None)
-            .await
-            .map_err(internal)?;
-        if saved == Saved::Saved {
-            break;
-        }
-    }
-    if saved == Saved::Conflict {
-        return Err(internal("the password credential kept changing during setup").into());
+    {
+        let (owner, hash, totp) = (&owner, &hash, totp.as_ref());
+        retry_on_conflict(|| async move {
+            let saved = service
+                .credentials
+                .set_password(owner, hash, totp, None)
+                .await?;
+            Ok::<_, StoreError>((saved == Saved::Saved).then_some(()))
+        })
+        .await
+        .map_err(Problem::internal)?;
     }
     let audit = Audit {
         credential: Some(zeabur_identity_store::password_credential_name(
@@ -1069,7 +1077,7 @@ where
         .credentials
         .password(user)
         .await
-        .map_err(internal)?
+        .map_err(Problem::internal)?
         .ok_or(NO_PASSWORD)?;
     let passwords = &service.passwords;
     let device = passwords.device(headers, &user.subject);
@@ -1144,13 +1152,13 @@ where
             .passwords
             .run(move |hasher| hasher.hash(&entered))
             .await?
-            .map_err(internal)?;
+            .map_err(Problem::internal)?;
         let totp = stored.totp.as_ref().map(|t| carried(t, &stored.state));
         match service
             .credentials
             .set_password(owner, &hash, totp.as_ref(), Some(&stored))
             .await
-            .map_err(internal)?
+            .map_err(Problem::internal)?
         {
             Saved::Saved => {}
             Saved::Conflict => return Err(PASSWORD_CONFLICT.into()),
@@ -1200,7 +1208,7 @@ where
             .credentials
             .remove_password(owner, &stored)
             .await
-            .map_err(internal)?
+            .map_err(Problem::internal)?
         {
             PasswordRemoval::Removed => {}
             PasswordRemoval::LastCredential => return Err(LAST_CREDENTIAL.into()),

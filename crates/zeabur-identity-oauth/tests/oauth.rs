@@ -91,7 +91,7 @@ mod tests {
 
         async fn revoke(&self, name: &str) -> Result<(), StoreError> {
             if self.fail_revoke.load(Ordering::SeqCst) {
-                Err(StoreError("oauth-storage-secret-sentinel".into()))
+                Err(StoreError::backend("oauth-storage-secret-sentinel"))
             } else {
                 self.memory.revoke(name).await
             }

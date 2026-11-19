@@ -241,11 +241,6 @@ pub(crate) fn json<T: Serialize>(status: StatusCode, body: &T) -> Response {
     response
 }
 
-pub(crate) fn internal(error: impl std::fmt::Display) -> Problem {
-    tracing::error!(reason = "internal_error", %error, "sign-in failed");
-    Problem::internal()
-}
-
 /// Sealed ceremony state.
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct Ceremony<T> {
@@ -264,13 +259,13 @@ pub(crate) fn seal<T: Serialize, D, G, C>(
     now: UnixTime,
 ) -> Result<String, Problem> {
     let ceremony = Ceremony {
-        id: hex(&random::<16>().map_err(internal)?),
+        id: hex(&random::<16>().map_err(Problem::internal)?),
         state,
         user,
         expires_at: now.saturating_add(CEREMONY_LIFETIME),
     };
-    let json = serde_json::to_vec(&ceremony).map_err(internal)?;
-    oauth.sealer.seal(purpose, &json).map_err(internal)
+    let json = serde_json::to_vec(&ceremony).map_err(Problem::internal)?;
+    oauth.sealer.seal(purpose, &json).map_err(Problem::internal)
 }
 
 pub(crate) fn open<T: DeserializeOwned, D, G, C>(
@@ -316,7 +311,7 @@ pub(crate) fn new_passkey(
         name: credential_name(&credential_id),
         user: user.to_owned(),
         credential_id: URL_SAFE_NO_PAD.encode(&credential_id),
-        record: serde_json::to_string(passkey).map_err(internal)?,
+        record: serde_json::to_string(passkey).map_err(Problem::internal)?,
         label: clean_label(label),
         aaguid: aaguid(response),
         backup_eligible: backup_flags(passkey).eligible,
@@ -331,7 +326,7 @@ pub(crate) async fn check_account<D: Directory>(
     user: &User,
     method: Method,
 ) -> Result<(), Problem> {
-    let settings = directory.settings().await.map_err(internal)?;
+    let settings = directory.settings().await.map_err(Problem::internal)?;
     allows(user.account_type, settings, method).map_err(|refusal| refused(user, refusal))
 }
 
@@ -394,7 +389,7 @@ where
         .credentials
         .get(&credential)
         .await
-        .map_err(internal)?
+        .map_err(Problem::internal)?
     else {
         return Err(Refused {
             problem: PASSKEY_FAILED,
@@ -406,13 +401,13 @@ where
         .directory
         .user(&stored.user)
         .await
-        .map_err(internal)?
+        .map_err(Problem::internal)?
         .ok_or(PASSKEY_FAILED)?;
     // The user handle in the assertion must be the credential owner's (WebAuthn Level 3 §7.2).
     if user.disabled || user.subject != handle.to_string() {
         return Err(PASSKEY_FAILED.into());
     }
-    let passkey: Passkey = serde_json::from_str(&stored.record).map_err(internal)?;
+    let passkey: Passkey = serde_json::from_str(&stored.record).map_err(Problem::internal)?;
     let result = service
         .passkeys
         .finish_sign_in(response, state, &passkey)
@@ -556,7 +551,7 @@ pub(crate) async fn valid_setup_token<S: SetupStore, D: Directory>(
     let stored = setup
         .load(presented)
         .await
-        .map_err(internal)?
+        .map_err(Problem::internal)?
         .ok_or(SETUP_INVALID)?;
     let matches = ct_eq(
         token_hash(presented.as_bytes()).as_bytes(),
@@ -568,7 +563,7 @@ pub(crate) async fn valid_setup_token<S: SetupStore, D: Directory>(
     let user = directory
         .user(&stored.user)
         .await
-        .map_err(internal)?
+        .map_err(Problem::internal)?
         .ok_or_else(|| {
             tracing::error!(
                 reason = "user_unavailable",
@@ -615,12 +610,12 @@ where
         .await?;
         identity = Some(user);
         let user = identity.as_ref().ok_or(SETUP_INVALID)?;
-        let handle = Uuid::parse_str(&user.subject).map_err(internal)?;
+        let handle = Uuid::parse_str(&user.subject).map_err(Problem::internal)?;
         let display = user.display_name.as_deref().unwrap_or(&user.username);
         let (options, state) = service
             .passkeys
             .begin_registration(handle, &user.username, display, Vec::new())
-            .map_err(internal)?;
+            .map_err(Problem::internal)?;
         let sealed = seal::<PasskeyRegistration, _, _, _>(
             &service.oauth,
             REGISTRATION_PURPOSE,
@@ -700,7 +695,7 @@ where
         }
         // Consume the token before storing the passkey: if two registrations race, only the one
         // that consumed the token may add a credential.
-        if service.setup.consume(&token).await.map_err(internal)? == Consume::AlreadyUsed {
+        if service.setup.consume(&token).await.map_err(Problem::internal)? == Consume::AlreadyUsed {
             return Err(SETUP_INVALID);
         }
         let stored = new_passkey(
@@ -714,7 +709,7 @@ where
             .credentials
             .create(&stored)
             .await
-            .map_err(internal)?
+            .map_err(Problem::internal)?
         {
             CreateCredential::Created => {}
             CreateCredential::AlreadyExists => {
@@ -772,7 +767,10 @@ where
     let result: Result<Response, Problem> = (|| {
         check_request(&headers, service.oauth.issuer.as_str())?;
         let now = service.oauth.now();
-        let (options, state) = service.passkeys.begin_sign_in().map_err(internal)?;
+        let (options, state) = service
+            .passkeys
+            .begin_sign_in()
+            .map_err(Problem::internal)?;
         let sealed = seal::<DiscoverableAuthentication, _, _, _>(
             &service.oauth,
             SIGN_IN_PURPOSE,

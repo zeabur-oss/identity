@@ -15,6 +15,8 @@ Primitives every Zeabur Identity crate shares. Nothing here performs I/O.
 - [`protocol`](crate::protocol): endpoint paths that several crates must agree on.
 - [`account`](crate::account): account types, the install-wide settings, and which sign-in
   methods each account type may use.
+- [`store`](crate::store): [`StoreError`](crate::store::StoreError), which every storage backend
+  returns, and the retry of a lost compare-and-swap.
 
 ## Place in the workspace
 

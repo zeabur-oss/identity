@@ -7,10 +7,6 @@ use kube::api::{Api, ObjectMeta, Patch, PatchParams};
 use zeabur_identity_api::user::{AccountType, User};
 use zeabur_identity_store::StoreError;
 
-fn backend(error: &kube::Error) -> StoreError {
-    StoreError(error.to_string())
-}
-
 /// An `ownerReference` to the current `User` named `name`, so that Kubernetes' garbage
 /// collector deletes the dependent with that User ([Owners and Dependents]).
 ///
@@ -32,11 +28,11 @@ pub(crate) async fn user_owner<K>(
 where
     K: Resource + Clone,
 {
-    let namespace = api
-        .namespace()
-        .ok_or_else(|| StoreError("User dependents require a namespaced API".to_owned()))?;
+    let namespace = api.namespace().ok_or_else(|| {
+        StoreError::Backend("User dependents require a namespaced API".to_owned())
+    })?;
     let users: Api<User> = Api::namespaced(api.clone().into_client(), namespace);
-    let user = users.get(name).await.map_err(|error| backend(&error))?;
+    let user = users.get(name).await.map_err(StoreError::backend)?;
     Ok(user.owner_ref(&()))
 }
 

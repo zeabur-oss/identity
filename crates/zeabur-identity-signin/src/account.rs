@@ -63,7 +63,7 @@ use crate::upstream::provider::{Descriptor, GITHUB_ISSUER, GOOGLE_ISSUER};
 use crate::{
     Accepted, BAD_REQUEST, CEREMONY_COOKIE, CEREMONY_EXPIRED, CEREMONY_LIFETIME, Ceremony,
     PASSKEY_AMR, PASSKEY_FAILED, Refused, SignIn, Verified, accepted, check_account, check_request,
-    clean_label, clear_cookie, cookie, internal, json, new_passkey, open, parse, seal, set_cookie,
+    clean_label, clear_cookie, cookie, json, new_passkey, open, parse, seal, set_cookie,
     set_cookie_with, touch, verify_assertion,
 };
 
@@ -259,7 +259,7 @@ where
         .grants
         .get(&token.name)
         .await
-        .map_err(internal)?
+        .map_err(Problem::internal)?
     else {
         return Ok(None);
     };
@@ -277,7 +277,7 @@ where
         .directory
         .user(&session.spec.user)
         .await
-        .map_err(internal)?
+        .map_err(Problem::internal)?
     else {
         return Ok(None);
     };
@@ -578,7 +578,7 @@ where
         .grants
         .list(user)
         .await
-        .map_err(internal)?
+        .map_err(Problem::internal)?
         .into_iter()
         .filter(|grant| now < grant.spec.expires_at && now < grant.idle_expires_at)
         .collect();
@@ -625,20 +625,25 @@ where
             .credentials
             .passkeys(&account.user)
             .await
-            .map_err(internal)?;
+            .map_err(Problem::internal)?;
         let linked = service
             .credentials
             .linked_accounts(&account.user)
             .await
-            .map_err(internal)?;
+            .map_err(Problem::internal)?;
         let password = service
             .credentials
             .password(&account.user)
             .await
-            .map_err(internal)?;
+            .map_err(Problem::internal)?;
         let (sessions, apps) =
             live_sessions(&service, &account.user, &account.session.spec.name, now).await?;
-        let settings = service.oauth.directory.settings().await.map_err(internal)?;
+        let settings = service
+            .oauth
+            .directory
+            .settings()
+            .await
+            .map_err(Problem::internal)?;
         Ok(Some((
             account, passkeys, linked, password, sessions, apps, settings,
         )))
@@ -744,7 +749,10 @@ where
     K: CredentialStore,
     S: SetupStore,
 {
-    let (options, state) = service.passkeys.begin_sign_in().map_err(internal)?;
+    let (options, state) = service
+        .passkeys
+        .begin_sign_in()
+        .map_err(Problem::internal)?;
     let sealed =
         seal::<DiscoverableAuthentication, _, _, _>(&service.oauth, purpose, state, session, now)?;
     let mut response = json(StatusCode::OK, &options);
@@ -824,7 +832,7 @@ where
     K: CredentialStore,
     S: SetupStore,
 {
-    let token = SessionToken::generate().map_err(internal)?;
+    let token = SessionToken::generate().map_err(Problem::internal)?;
     let expires_at = authentication.auth_time.saturating_add(SESSION_LIFETIME);
     let grant = NewGrant {
         name: token.name.clone(),
@@ -846,10 +854,10 @@ where
         .grants
         .create(&grant, expires_at)
         .await
-        .map_err(internal)?
+        .map_err(Problem::internal)?
     {
         CreateGrant::Created => Ok(token),
-        CreateGrant::AlreadyExists => Err(internal("session name collision")),
+        CreateGrant::AlreadyExists => Err(Problem::internal("session name collision")),
     }
 }
 
@@ -935,7 +943,7 @@ where
             .grants
             .revoke(&account.token.name)
             .await
-            .map_err(internal)?;
+            .map_err(Problem::internal)?;
         user = Some(account.user);
         Ok(done(true, None))
     }
@@ -1012,7 +1020,7 @@ where
             .grants
             .reauthenticate(&account.token.name, &account.token.hash(), &verification)
             .await
-            .map_err(internal)?;
+            .map_err(Problem::internal)?;
         if !recorded {
             return Err(SIGNED_OUT.into());
         }
@@ -1047,17 +1055,17 @@ where
             .credentials
             .passkeys(&account.user)
             .await
-            .map_err(internal)?
+            .map_err(Problem::internal)?
             .iter()
             .filter_map(|p| URL_SAFE_NO_PAD.decode(&p.credential_id).ok())
             .collect();
         let user = &account.user;
-        let handle = Uuid::parse_str(&user.subject).map_err(internal)?;
+        let handle = Uuid::parse_str(&user.subject).map_err(Problem::internal)?;
         let display = user.display_name.as_deref().unwrap_or(&user.username);
         let (options, state) = service
             .passkeys
             .begin_registration(handle, &user.username, display, exclude)
-            .map_err(internal)?;
+            .map_err(Problem::internal)?;
         let sealed = seal::<PasskeyRegistration, _, _, _>(
             &service.oauth,
             REGISTRATION_PURPOSE,
@@ -1141,7 +1149,7 @@ where
             .credentials
             .create(&stored)
             .await
-            .map_err(internal)?
+            .map_err(Problem::internal)?
         {
             CreateCredential::Created => {}
             CreateCredential::AlreadyExists => return Err(PASSKEY_EXISTS),
@@ -1185,7 +1193,7 @@ where
             .credentials
             .passkeys(&account.user)
             .await
-            .map_err(internal)?;
+            .map_err(Problem::internal)?;
         let target = passkeys
             .iter()
             .find(|p| p.name == request.name)
@@ -1196,7 +1204,7 @@ where
             .credentials
             .rename(&account.user, &target.name, &label)
             .await
-            .map_err(internal)?
+            .map_err(Problem::internal)?
         {
             Rename::Renamed => {}
             Rename::NotFound => return Err(NOT_FOUND),
@@ -1225,7 +1233,12 @@ where
     K: CredentialStore,
     S: SetupStore,
 {
-    let grants = service.oauth.grants.list(user).await.map_err(internal)?;
+    let grants = service
+        .oauth
+        .grants
+        .list(user)
+        .await
+        .map_err(Problem::internal)?;
     let mut revoked = 0;
     let mut signed_out = false;
     for grant in grants {
@@ -1240,7 +1253,7 @@ where
                 .grants
                 .revoke(&grant.spec.name)
                 .await
-                .map_err(internal)?;
+                .map_err(Problem::internal)?;
             revoked += 1;
             signed_out |= grant.spec.name == current;
         }
@@ -1276,7 +1289,7 @@ where
             .credentials
             .passkeys(&account.user)
             .await
-            .map_err(internal)?;
+            .map_err(Problem::internal)?;
         let target = passkeys
             .iter()
             .find(|p| p.name == request.name)
@@ -1287,7 +1300,7 @@ where
             .credentials
             .remove(&account.user, &target.name)
             .await
-            .map_err(internal)?
+            .map_err(Problem::internal)?
         {
             Removal::Removed => {}
             Removal::LastPasskey => return Err(LAST_PASSKEY),
@@ -1336,7 +1349,7 @@ where
             .credentials
             .linked_accounts(&account.user)
             .await
-            .map_err(internal)?;
+            .map_err(Problem::internal)?;
         let target = linked
             .iter()
             .find(|l| l.name == request.name)
@@ -1346,7 +1359,7 @@ where
             .credentials
             .unlink(&account.user, &target.name)
             .await
-            .map_err(internal)?
+            .map_err(Problem::internal)?
         {
             Unlink::Unlinked => {}
             Unlink::LastCredential => return Err(LAST_CREDENTIAL),
@@ -1393,7 +1406,7 @@ where
             .grants
             .list(&account.user)
             .await
-            .map_err(internal)?;
+            .map_err(Problem::internal)?;
         let target = grants
             .iter()
             .find(|g| g.spec.name == request.name)
@@ -1405,7 +1418,7 @@ where
             .grants
             .revoke(&target.spec.name)
             .await
-            .map_err(internal)?;
+            .map_err(Problem::internal)?;
         audit.revoked = 1;
         record(&service, &account.user, "SessionRevoked", &audit, now).await;
         let signed_out = target.spec.name == account.token.name;
@@ -1430,7 +1443,12 @@ where
     K: CredentialStore,
     S: SetupStore,
 {
-    let grants = service.oauth.grants.list(user).await.map_err(internal)?;
+    let grants = service
+        .oauth
+        .grants
+        .list(user)
+        .await
+        .map_err(Problem::internal)?;
     let mut revoked = 0;
     for grant in grants.iter().filter(|g| g.spec.name != current) {
         service
@@ -1438,7 +1456,7 @@ where
             .grants
             .revoke(&grant.spec.name)
             .await
-            .map_err(internal)?;
+            .map_err(Problem::internal)?;
         revoked += 1;
     }
     Ok(revoked)

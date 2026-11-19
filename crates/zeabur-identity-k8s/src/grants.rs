@@ -15,16 +15,13 @@ use zeabur_identity_core::clock::UnixTime;
 use zeabur_identity_core::crypto::ct_eq;
 use zeabur_identity_store::{
     Classification, CreateGrant, Grant, GrantStore, NewGrant, Rotation, StoreError, User,
-    Verification, classify, rotated,
+    Verification, classify, retry_on_conflict, rotated,
 };
 
 use super::objects::{
-    CreateOutcome, ReplaceOutcome, create_once, list_all, replace_status_if_unchanged,
+    CreateOutcome, ReplaceOutcome, create_once, list_all, replace_status_if_unchanged, status_code,
 };
 use super::users::{owned_by_another, user_owner};
-
-/// How many times a rotation re-reads after losing a compare-and-swap.
-const MAX_ATTEMPTS: usize = 4;
 
 /// Refresh-token families as `Grant` objects.
 #[derive(Clone)]
@@ -52,10 +49,6 @@ fn secs(time: UnixTime) -> i64 {
 
 fn time(secs: i64) -> UnixTime {
     UnixTime::from_secs(u64::try_from(secs).unwrap_or(0))
-}
-
-fn backend(error: &kube::Error) -> StoreError {
-    StoreError(error.to_string())
 }
 
 fn to_object(grant: &NewGrant, idle_expires_at: UnixTime) -> GrantObject {
@@ -165,7 +158,10 @@ impl GrantStore for KubeGrantStore {
             object.metadata.owner_references = user_owner(&api, &object.spec.user)
                 .await?
                 .map(|owner| vec![owner]);
-            match create_once(&api, &object).await.map_err(|e| backend(&e))? {
+            match create_once(&api, &object)
+                .await
+                .map_err(StoreError::backend)?
+            {
                 CreateOutcome::Created(_) => Ok(CreateGrant::Created),
                 CreateOutcome::AlreadyExists => Ok(CreateGrant::AlreadyExists),
             }
@@ -179,7 +175,7 @@ impl GrantStore for KubeGrantStore {
             Ok(api
                 .get_opt(&name)
                 .await
-                .map_err(|e| backend(&e))?
+                .map_err(StoreError::backend)?
                 .as_ref()
                 .map(from_object))
         }
@@ -200,32 +196,31 @@ impl GrantStore for KubeGrantStore {
             next_hash.to_owned(),
         );
         async move {
-            for _ in 0..MAX_ATTEMPTS {
-                let Some(mut object) = api.get_opt(&name).await.map_err(|e| backend(&e))? else {
-                    return Ok(Rotation::NotFound);
+            let (api, name, presented, next) = (&api, &name, &presented, &next);
+            retry_on_conflict(|| async move {
+                let Some(mut object) = api.get_opt(name).await.map_err(StoreError::backend)? else {
+                    return Ok(Some(Rotation::NotFound));
                 };
                 let current = from_object(&object);
-                match classify(&current, &presented, now) {
-                    Classification::Expired => return Ok(Rotation::Expired),
-                    Classification::Previous => return Ok(Rotation::Replay),
-                    Classification::Unknown => return Ok(Rotation::Invalid),
+                match classify(&current, presented, now) {
+                    Classification::Expired => return Ok(Some(Rotation::Expired)),
+                    Classification::Previous => return Ok(Some(Rotation::Replay)),
+                    Classification::Unknown => return Ok(Some(Rotation::Invalid)),
                     Classification::Current => {}
                 }
-                let after = rotated(&current, &next, idle_expires_at);
+                let after = rotated(&current, next, idle_expires_at);
                 object.status = Some(status(&after));
-                match replace_status_if_unchanged(&api, &object)
+                match replace_status_if_unchanged(api, &object)
                     .await
-                    .map_err(|e| backend(&e))?
+                    .map_err(StoreError::backend)?
                 {
-                    ReplaceOutcome::Replaced(_) => return Ok(Rotation::Rotated(Box::new(after))),
-                    ReplaceOutcome::NotFound => return Ok(Rotation::NotFound),
+                    ReplaceOutcome::Replaced(_) => Ok(Some(Rotation::Rotated(Box::new(after)))),
+                    ReplaceOutcome::NotFound => Ok(Some(Rotation::NotFound)),
                     // Someone rotated first; re-read and classify the presented token again.
-                    ReplaceOutcome::Conflict => {}
+                    ReplaceOutcome::Conflict => Ok(None),
                 }
-            }
-            Err(StoreError(
-                "refresh token rotation kept conflicting".to_owned(),
-            ))
+            })
+            .await
         }
     }
 
@@ -235,8 +230,8 @@ impl GrantStore for KubeGrantStore {
         async move {
             match api.delete(&name, &DeleteParams::background()).await {
                 Ok(_) => Ok(()),
-                Err(kube::Error::Api(status)) if status.code == 404 => Ok(()),
-                Err(error) => Err(backend(&error)),
+                Err(error) if status_code(&error) == Some(404) => Ok(()),
+                Err(error) => Err(StoreError::backend(error)),
             }
         }
     }
@@ -246,7 +241,7 @@ impl GrantStore for KubeGrantStore {
         let user = user.clone();
         async move {
             let params = ListParams::default().labels(&format!("{USER_LABEL}={}", user.name));
-            let objects = list_all(&api, params).await.map_err(|e| backend(&e))?;
+            let objects = list_all(&api, params).await.map_err(StoreError::backend)?;
             let mut grants: Vec<Grant> = objects
                 .iter()
                 .filter(|object| !owned_by_another(&object.metadata, &user.subject))
@@ -271,26 +266,28 @@ impl GrantStore for KubeGrantStore {
             verification.clone(),
         );
         async move {
-            for _ in 0..MAX_ATTEMPTS {
-                let Some(mut object) = api.get_opt(&name).await.map_err(|e| backend(&e))? else {
-                    return Ok(false);
+            let (api, name, current_hash, verification) =
+                (&api, &name, &current_hash, &verification);
+            retry_on_conflict(|| async move {
+                let Some(mut object) = api.get_opt(name).await.map_err(StoreError::backend)? else {
+                    return Ok(Some(false));
                 };
                 let mut grant = from_object(&object);
                 if !ct_eq(grant.current_hash.as_bytes(), current_hash.as_bytes()) {
-                    return Ok(false);
+                    return Ok(Some(false));
                 }
                 grant.reauth = Some(verification.clone());
                 object.status = Some(status(&grant));
-                match replace_status_if_unchanged(&api, &object)
+                match replace_status_if_unchanged(api, &object)
                     .await
-                    .map_err(|e| backend(&e))?
+                    .map_err(StoreError::backend)?
                 {
-                    ReplaceOutcome::Replaced(_) => return Ok(true),
-                    ReplaceOutcome::NotFound => return Ok(false),
-                    ReplaceOutcome::Conflict => {}
+                    ReplaceOutcome::Replaced(_) => Ok(Some(true)),
+                    ReplaceOutcome::NotFound => Ok(Some(false)),
+                    ReplaceOutcome::Conflict => Ok(None),
                 }
-            }
-            Err(StoreError("re-authentication kept conflicting".to_owned()))
+            })
+            .await
         }
     }
 }

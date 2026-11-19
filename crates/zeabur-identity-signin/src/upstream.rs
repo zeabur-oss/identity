@@ -89,8 +89,8 @@ use crate::account::{Account, Audit, current, log_outcome, record, require_fresh
 use crate::device::Requester;
 use crate::problem::Problem;
 use crate::{
-    NO_REQUEST, SignIn, check_account, check_request, clear_cookie, cookie, internal, json, parse,
-    redeemed, valid_setup_token,
+    NO_REQUEST, SignIn, check_account, check_request, clear_cookie, cookie, json, parse, redeemed,
+    valid_setup_token,
 };
 
 /// Cookie holding the sealed pending upstream request.
@@ -217,7 +217,7 @@ fn redirect_uri(issuer: &str, provider: &ProviderId) -> String {
 }
 
 fn random_text<const N: usize>() -> Result<String, Problem> {
-    Ok(URL_SAFE_NO_PAD.encode(random::<N>().map_err(internal)?))
+    Ok(URL_SAFE_NO_PAD.encode(random::<N>().map_err(Problem::internal)?))
 }
 
 async fn start<D, G, C, K, S, H>(
@@ -288,7 +288,7 @@ where
 {
     let sign_in = &service.sign_in;
     let pending = Pending {
-        id: hex(&random::<16>().map_err(internal)?),
+        id: hex(&random::<16>().map_err(Problem::internal)?),
         provider: provider.id().clone(),
         issuer: provider.issuer().clone(),
         state: random_text::<32>()?,
@@ -313,8 +313,14 @@ where
             PROVIDER_UNAVAILABLE
         })?;
     let sealed = serde_json::to_vec(&pending)
-        .map_err(internal)
-        .and_then(|json| sign_in.oauth.sealer.seal(PURPOSE, &json).map_err(internal))?;
+        .map_err(Problem::internal)
+        .and_then(|json| {
+            sign_in
+                .oauth
+                .sealer
+                .seal(PURPOSE, &json)
+                .map_err(Problem::internal)
+        })?;
     let mut response = json(StatusCode::OK, &StartResponse { redirect_to: url });
     let cookie = format!(
         "{UPSTREAM_COOKIE}={sealed}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age={}",

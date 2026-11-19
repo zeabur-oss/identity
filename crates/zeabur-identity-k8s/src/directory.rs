@@ -121,10 +121,10 @@ impl KubeDirectory {
         })
         .await
         .map_err(|_elapsed| {
-            StoreError("directory metadata initial synchronization timed out".into())
+            StoreError::Backend("directory metadata initial synchronization timed out".into())
         })?
         .map_err(|error| {
-            StoreError(format!(
+            StoreError::Backend(format!(
                 "directory metadata index did not initialize: {error}"
             ))
         })?;
@@ -141,7 +141,7 @@ impl KubeDirectory {
         Ok(api
             .get_opt(name)
             .await
-            .map_err(|e| backend(&e))?
+            .map_err(StoreError::backend)?
             .and_then(convert))
     }
 
@@ -224,17 +224,13 @@ async fn run_index<K>(
         .await;
 }
 
-fn backend(error: &kube::Error) -> StoreError {
-    StoreError(error.to_string())
-}
-
 impl Directory for KubeDirectory {
     async fn settings(&self) -> Result<Settings, StoreError> {
         let object = self
             .config_maps()
             .get_opt(SETTINGS_CONFIG_MAP)
             .await
-            .map_err(|e| backend(&e))?;
+            .map_err(StoreError::backend)?;
         let data = object.and_then(|object| object.data).unwrap_or_default();
         let (settings, bad) = Settings::from_data(&data);
         if !bad.is_empty() {
@@ -256,7 +252,7 @@ impl Directory for KubeDirectory {
             return Ok(None);
         };
         let result = api.get_opt(id).await;
-        Ok(result.map_err(|e| backend(&e))?.map(client))
+        Ok(result.map_err(StoreError::backend)?.map(client))
     }
 
     fn client_name(&self, id: &str) -> Option<String> {

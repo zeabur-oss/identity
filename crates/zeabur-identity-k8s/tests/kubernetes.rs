@@ -29,7 +29,7 @@ mod tests {
     use zeabur_identity_k8s::keys::SecretKeyStore;
     use zeabur_identity_k8s::objects::{
         CreateOutcome, DeleteOutcome, ReplaceOutcome, create_once, delete_if_unchanged,
-        replace_status_if_unchanged,
+        replace_status_if_unchanged, status_code,
     };
     use zeabur_identity_k8s::{KEY_SECRET, gc, rbac};
     use zeabur_identity_keys::manager::KeyManager;
@@ -232,14 +232,6 @@ mod tests {
                 ..UserSpec::default()
             },
         )
-    }
-
-    fn status_code(error: &kube::Error) -> Option<u16> {
-        if let kube::Error::Api(status) = error {
-            Some(status.code)
-        } else {
-            None
-        }
     }
 
     fn now() -> u64 {

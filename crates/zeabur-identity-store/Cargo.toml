@@ -15,4 +15,3 @@ workspace = true
 zeabur-identity-api.workspace = true
 zeabur-identity-core.workspace = true
 zeabur-identity-keys.workspace = true
-thiserror.workspace = true
