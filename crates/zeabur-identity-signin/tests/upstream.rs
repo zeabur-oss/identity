@@ -3,6 +3,9 @@
 //! names test endpoints, and its ID token is signed with a test key published in a test JWK set.
 
 #[cfg(test)]
+mod common;
+
+#[cfg(test)]
 mod tests {
     use std::collections::HashMap;
     use std::fmt::Write as _;
@@ -454,6 +457,9 @@ mod tests {
             .iter()
             .filter(|r| r["target"] == "zeabur_identity::audit")
             .collect();
+        for record in &audits {
+            super::common::assert_audit_shape(record);
+        }
         if path.starts_with("/upstream/") {
             assert_eq!(audits.len(), 1, "{records:?}");
             let fields = &audits[0]["fields"];
