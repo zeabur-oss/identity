@@ -28,6 +28,15 @@ name = "prepare-release"
 [[workflows.steps]]
 type = "PrepareRelease"
 
+# knope writes package.json through its JSON serializer, which drops the final newline.
+[[workflows.steps]]
+type = "Command"
+command = "bun install --cwd ui --frozen-lockfile"
+
+[[workflows.steps]]
+type = "Command"
+command = "bun run --cwd ui fmt package.json"
+
 [[workflows]]
 name = "document-change"
 
