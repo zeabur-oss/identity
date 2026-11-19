@@ -2,6 +2,38 @@
 
 All notable changes to Zeabur Identity. Versions follow [Semantic Versioning](https://semver.org/); each section comes from the change files in `.changeset/` (docs/internal/releasing.md).
 
+## 0.3.1 (2026-11-19)
+
+### Features
+
+#### A shorter account page
+
+The account page lists passkeys, the password and each upstream provider as rows under one **Sign-in methods** heading. Each row shows its state and its actions; adding a passkey and changing the password open in a dialog. Other sessions are behind a disclosure. A provider that already has a linked account no longer offers **Link**; to link another account from it, unlink the current one first.
+
+#### Change or remove a password on the account page
+
+Users can sign in to the account page with their username and password, and change or remove the password there. Both need the current password. A change keeps the authenticator app and the unused recovery codes. A removal also removes the authenticator app, and is refused when the password is the user's only way to sign in. After either one, the user's other sessions end.
+
+#### Choose how admin accounts sign in
+
+The new `admin-sign-in` key in the ConfigMap `zeabur-identity-settings` replaces `admin-aal3`. It takes `any`, `two-factor`, `passkey` or `device-bound-passkey`. The default, `two-factor`, lets admins sign in with a passkey, or with a password and a code from an authenticator app. An admin who sets a password scans a QR code on the setup page, enters a code, and gets 10 recovery codes. Each code and each recovery code works once, and wrong codes count as wrong passwords.
+
+Zeabur Identity no longer reads `admin-aal3`. If you set it to `"true"`, set `admin-sign-in` to `device-bound-passkey` before you upgrade, or admins can sign in with any passkey or a password and code. To keep admins on passkeys only, set `admin-sign-in` to `passkey`.
+
+#### Admins sign in through an OpenID provider that enforces a second factor
+
+An `UpstreamProvider` with `openid` takes `mfa: Enforced` for a provider you run that asks every sign-in for a second factor, such as Microsoft Entra ID or Keycloak. Under the default `admin-sign-in: two-factor`, admin accounts can sign in with and link accounts from such a provider; its tokens carry `amr: ["mfa"]`. Zeabur Identity does not check the setting. Providers without it, GitHub and Google included, still sign admins in only under `any`. The account page now offers admins the providers they may link.
+
+#### Releases are signed by identity's own release workflow
+
+From this release on, the signing certificate of the image, its SBOM attestations and `SHA256SUMS` names `zeabur-oss/identity/.github/workflows/release.yml`, not `zeabur-oss/.github/.github/workflows/release.yml`. Verify with `--certificate-identity-regexp '^https://github\.com/zeabur-oss/identity/\.github/workflows/release\.yml@'` and `gh attestation verify --signer-workflow zeabur-oss/identity/.github/workflows/release.yml`. Releases up to v0.3.0 keep the old identity.
+
+#### Regular users can sign in with a password
+
+The setup page leads with **Create passkey** and offers **Use a password** among the other ways; it no longer asks for a passkey name, which users can set on the account page. The sign-in page asks for a username and password, with the passkey and the providers below. Passwords have at least 15 characters and are checked against a list of common passwords. Each browser where the user has signed in keeps its own count of wrong guesses, so guesses from elsewhere can't lock the user out.
+
+Zeabur Identity keeps the key it mixes into password hashes in the new Secret `zeabur-identity-password-key`. The installer creates it empty, Zeabur Identity fills it at startup, and the Role lets Zeabur Identity read and update it. Back it up with the signing keys.
+
 ## 0.3.0 (2026-11-16)
 
 ### Breaking Changes
