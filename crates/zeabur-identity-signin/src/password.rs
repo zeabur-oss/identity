@@ -24,7 +24,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Semaphore;
 use zeabur_identity_core::account::{Method, allows};
-use zeabur_identity_core::clock::{Clock, UnixTime};
+use zeabur_identity_core::clock::UnixTime;
 use zeabur_identity_core::crypto::{CryptoError, Sealer, hmac_sha256};
 use zeabur_identity_core::guessing::DeviceKey;
 use zeabur_identity_core::password::{self, Hasher, ITERATIONS, Normalized, Verdict, Weakness};
@@ -32,8 +32,8 @@ use zeabur_identity_core::totp::{RecoveryKey, Secret};
 use zeabur_identity_oauth::authorize::Authentication;
 use zeabur_identity_oauth::endpoints::FLOW_COOKIE;
 use zeabur_identity_store::{
-    Consume, CredentialStore, Directory, GrantStore, PasswordRemoval, PasswordState, Saved,
-    SetupStore, StoreError, StoredPassword, StoredTotp, User, retry_on_conflict,
+    Consume, CredentialStore, Directory, PasswordRemoval, PasswordState, Saved, SetupStore,
+    StoreError, StoredPassword, StoredTotp, User, retry_on_conflict,
 };
 
 use crate::account::{
@@ -44,8 +44,8 @@ use crate::device::Requester;
 use crate::method::{SignInMethod, finish};
 use crate::problem::{Extensions, Problem, Step};
 use crate::{
-    NO_REQUEST, SETUP_INVALID, Shared, SignIn, check_account, check_request, cookie, json, parse,
-    redeemed, refused, set_cookie_with, valid_setup_token,
+    Backend, NO_REQUEST, SETUP_INVALID, Shared, SignIn, check_account, check_request, cookie, json,
+    parse, redeemed, refused, set_cookie_with, valid_setup_token,
 };
 
 /// Cookie holding the browser's device entries, one per user who signed in here.
@@ -449,18 +449,11 @@ pub(crate) struct SignedIn {
 }
 
 /// `POST /login/password`: signs in with a username and password.
-pub(crate) async fn sign_in<D, G, C, K, S>(
-    State(service): State<Shared<D, G, C, K, S>>,
+pub(crate) async fn sign_in<B: Backend>(
+    State(service): State<Shared<B>>,
     headers: HeaderMap,
     body: Bytes,
-) -> Response
-where
-    D: Directory,
-    G: GrantStore,
-    C: Clock,
-    K: CredentialStore,
-    S: SetupStore,
-{
+) -> Response {
     let mut identity = None;
     let result = sign_in_with(&service, &headers, &body, &mut identity).await;
     let (user, subject) = (
@@ -479,19 +472,12 @@ where
     result.unwrap_or_else(Failure::respond)
 }
 
-async fn sign_in_with<D, G, C, K, S>(
-    service: &SignIn<D, G, C, K, S>,
+async fn sign_in_with<B: Backend>(
+    service: &SignIn<B>,
     headers: &HeaderMap,
     body: &[u8],
     identity: &mut Option<User>,
-) -> Result<Response, Failure>
-where
-    D: Directory,
-    G: GrantStore,
-    C: Clock,
-    K: CredentialStore,
-    S: SetupStore,
-{
+) -> Result<Response, Failure> {
     check_request(headers, service.oauth.issuer.as_str())?;
     let request: SignInRequest = parse(body)?;
     let flow = cookie(headers, FLOW_COOKIE).ok_or(NO_REQUEST)?;
@@ -512,19 +498,12 @@ where
 /// Checks a username, a password and, for a user with an authenticator, a code. Every password
 /// sign-in uses it: an unknown user and a held browser get the answer of a wrong password, and a
 /// wrong password or code counts against this browser.
-async fn authenticate<D, G, C, K, S>(
-    service: &SignIn<D, G, C, K, S>,
+async fn authenticate<B: Backend>(
+    service: &SignIn<B>,
     headers: &HeaderMap,
     request: &SignInRequest,
     identity: &mut Option<User>,
-) -> Result<Authentication, Failure>
-where
-    D: Directory,
-    G: GrantStore,
-    C: Clock,
-    K: CredentialStore,
-    S: SetupStore,
-{
+) -> Result<Authentication, Failure> {
     let entered = Normalized::new(&request.password).ok_or(PASSWORD_FAILED)?;
     let now = service.oauth.now();
     let passwords = &service.passwords;
@@ -595,19 +574,12 @@ where
 
 /// `POST /account/session/password`: signs in to the account page with a username and password.
 /// The session is not user-verified, so changes that need a fresh passkey still ask for one.
-pub(crate) async fn account_session<D, G, C, K, S>(
-    State(service): State<Shared<D, G, C, K, S>>,
+pub(crate) async fn account_session<B: Backend>(
+    State(service): State<Shared<B>>,
     requester: Requester,
     headers: HeaderMap,
     body: Bytes,
-) -> Response
-where
-    D: Directory,
-    G: GrantStore,
-    C: Clock,
-    K: CredentialStore,
-    S: SetupStore,
-{
+) -> Response {
     let mut identity = None;
     let mut audit = Audit {
         requester: Some(&requester),
@@ -633,21 +605,14 @@ where
 }
 
 /// Clears this browser's count, marks the second factor used, and stores a stronger hash.
-async fn record_success<D, G, C, K, S>(
-    service: &SignIn<D, G, C, K, S>,
+async fn record_success<B: Backend>(
+    service: &SignIn<B>,
     user: &User,
     stored: StoredPassword,
     rehashed: Option<String>,
     device: Option<&str>,
     second: Option<SecondFactor>,
-) -> Result<(), Failure>
-where
-    D: Directory,
-    G: GrantStore,
-    C: Clock,
-    K: CredentialStore,
-    S: SetupStore,
-{
+) -> Result<(), Failure> {
     // Replacing the credential starts a new state, which would let used codes work again. A user
     // with an authenticator keeps the old hash until the password is set again.
     if let Some(hash) = rehashed
@@ -681,21 +646,14 @@ where
 
 /// The second factor `code` gives, for a user with an authenticator. A missing code is asked
 /// for and changes no count, since the password was right; a wrong one counts as a failure.
-async fn check_second_factor<D, G, C, K, S>(
-    service: &SignIn<D, G, C, K, S>,
+async fn check_second_factor<B: Backend>(
+    service: &SignIn<B>,
     user: &User,
     stored: &StoredPassword,
     code: Option<&str>,
     device: Option<&str>,
     now: UnixTime,
-) -> Result<Option<SecondFactor>, Failure>
-where
-    D: Directory,
-    G: GrantStore,
-    C: Clock,
-    K: CredentialStore,
-    S: SetupStore,
-{
+) -> Result<Option<SecondFactor>, Failure> {
     let Some(totp) = &stored.totp else {
         return Ok(None);
     };
@@ -846,35 +804,21 @@ fn strong(entered: &str, owner: &User, issuer: &str) -> Result<Normalized, Failu
 }
 
 /// `POST /setup/password/options`: what setting a password with this setup link asks for.
-pub(crate) async fn set_up_options<D, G, C, K, S>(
-    State(service): State<Shared<D, G, C, K, S>>,
+pub(crate) async fn set_up_options<B: Backend>(
+    State(service): State<Shared<B>>,
     headers: HeaderMap,
     body: Bytes,
-) -> Response
-where
-    D: Directory,
-    G: GrantStore,
-    C: Clock,
-    K: CredentialStore,
-    S: SetupStore,
-{
+) -> Response {
     options_with(&service, &headers, &body)
         .await
         .unwrap_or_else(IntoResponse::into_response)
 }
 
-async fn options_with<D, G, C, K, S>(
-    service: &SignIn<D, G, C, K, S>,
+async fn options_with<B: Backend>(
+    service: &SignIn<B>,
     headers: &HeaderMap,
     body: &[u8],
-) -> Result<Response, Problem>
-where
-    D: Directory,
-    G: GrantStore,
-    C: Clock,
-    K: CredentialStore,
-    S: SetupStore,
-{
+) -> Result<Response, Problem> {
     check_request(headers, service.oauth.issuer.as_str())?;
     let request: OptionsRequest = parse(body)?;
     let now = service.oauth.now();
@@ -911,19 +855,12 @@ where
 }
 
 /// `POST /setup/password`: sets the password of the user a setup link is for.
-pub(crate) async fn set_up<D, G, C, K, S>(
-    State(service): State<Shared<D, G, C, K, S>>,
+pub(crate) async fn set_up<B: Backend>(
+    State(service): State<Shared<B>>,
     headers: HeaderMap,
     requester: Requester,
     body: Bytes,
-) -> Response
-where
-    D: Directory,
-    G: GrantStore,
-    C: Clock,
-    K: CredentialStore,
-    S: SetupStore,
-{
+) -> Response {
     let mut user = None;
     let result = set_up_with(&service, &headers, &requester, &body, &mut user).await;
     let record = Record {
@@ -937,20 +874,13 @@ where
     result.unwrap_or_else(Failure::respond)
 }
 
-async fn set_up_with<D, G, C, K, S>(
-    service: &SignIn<D, G, C, K, S>,
+async fn set_up_with<B: Backend>(
+    service: &SignIn<B>,
     headers: &HeaderMap,
     requester: &Requester,
     body: &[u8],
     user: &mut Option<String>,
-) -> Result<Response, Failure>
-where
-    D: Directory,
-    G: GrantStore,
-    C: Clock,
-    K: CredentialStore,
-    S: SetupStore,
-{
+) -> Result<Response, Failure> {
     check_request(headers, service.oauth.issuer.as_str())?;
     let request: SetupRequest = parse(body)?;
     let now = service.oauth.now();
@@ -1043,20 +973,13 @@ struct RemoveRequest {
 
 /// The stored password of `user`, if `entered` is it. As at sign-in, a held browser is refused
 /// and a wrong password counts against this browser.
-async fn check_current<D, G, C, K, S>(
-    service: &SignIn<D, G, C, K, S>,
+async fn check_current<B: Backend>(
+    service: &SignIn<B>,
     headers: &HeaderMap,
     user: &User,
     entered: &str,
     now: UnixTime,
-) -> Result<StoredPassword, Failure>
-where
-    D: Directory,
-    G: GrantStore,
-    C: Clock,
-    K: CredentialStore,
-    S: SetupStore,
-{
+) -> Result<StoredPassword, Failure> {
     let stored = service
         .credentials
         .password(user)
@@ -1105,19 +1028,12 @@ fn carried(totp: &StoredTotp, state: &PasswordState) -> StoredTotp {
 }
 
 /// `POST /account/password`: replaces the signed-in user's password.
-pub(crate) async fn change<D, G, C, K, S>(
-    State(service): State<Shared<D, G, C, K, S>>,
+pub(crate) async fn change<B: Backend>(
+    State(service): State<Shared<B>>,
     requester: Requester,
     headers: HeaderMap,
     body: Bytes,
-) -> Response
-where
-    D: Directory,
-    G: GrantStore,
-    C: Clock,
-    K: CredentialStore,
-    S: SetupStore,
-{
+) -> Response {
     let now = service.oauth.now();
     let mut user = None;
     let mut audit = Audit {
@@ -1162,19 +1078,12 @@ where
 }
 
 /// `POST /account/password/remove`: deletes the signed-in user's password and authenticator.
-pub(crate) async fn remove<D, G, C, K, S>(
-    State(service): State<Shared<D, G, C, K, S>>,
+pub(crate) async fn remove<B: Backend>(
+    State(service): State<Shared<B>>,
     requester: Requester,
     headers: HeaderMap,
     body: Bytes,
-) -> Response
-where
-    D: Directory,
-    G: GrantStore,
-    C: Clock,
-    K: CredentialStore,
-    S: SetupStore,
-{
+) -> Response {
     let now = service.oauth.now();
     let mut user = None;
     let mut audit = Audit {

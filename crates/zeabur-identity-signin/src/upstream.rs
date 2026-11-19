@@ -64,7 +64,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use zeabur_identity_api::upstream::{Issuer, ProviderId};
-use zeabur_identity_core::clock::{Clock, UnixTime};
+use zeabur_identity_core::clock::UnixTime;
 use zeabur_identity_core::crypto::{ct_eq, hex, random, sha256};
 use zeabur_identity_core::protocol::{
     ACCOUNT_PATH, UPSTREAM_CALLBACK_ROUTE, UPSTREAM_START_ROUTE, upstream_callback_path,
@@ -72,8 +72,8 @@ use zeabur_identity_core::protocol::{
 use zeabur_identity_oauth::endpoints::{FLOW_COOKIE, open_flow};
 use zeabur_identity_oauth::{OneTimeIds, Use};
 use zeabur_identity_store::{
-    Consume, CreateCredential, CredentialStore, Directory, GrantStore, NewExternal, SetupStore,
-    User, external_credential_name,
+    Consume, CreateCredential, CredentialStore, Directory, NewExternal, SetupStore, User,
+    external_credential_name,
 };
 use zeabur_identity_ui::i18n::Lang;
 use zeabur_identity_ui::pages::{ErrorReason, accept_language, error_page, notice_page};
@@ -86,8 +86,8 @@ use crate::device::Requester;
 use crate::method::finish;
 use crate::problem::Problem;
 use crate::{
-    NO_REQUEST, SignIn, check_account, check_request, clear_cookie, cookie, json, parse, redeemed,
-    valid_setup_token,
+    Backend, NO_REQUEST, SignIn, check_account, check_request, clear_cookie, cookie, json, parse,
+    redeemed, valid_setup_token,
 };
 
 /// Cookie holding the sealed pending upstream request.
@@ -108,16 +108,16 @@ const PROVIDER_UNAVAILABLE: Problem = Problem::new(
 );
 
 /// Upstream sign-in state shared by the handlers.
-pub struct Upstream<D, G, C, K, S, H> {
+pub struct Upstream<B: Backend, H> {
     /// Passkey sign-in (its authorization server, credentials and enrolment tokens).
-    pub sign_in: Arc<SignIn<D, G, C, K, S>>,
+    pub sign_in: Arc<SignIn<B>>,
     /// Outgoing HTTPS.
     pub http: H,
     /// `state` values already returned by a provider.
     pub used_states: OneTimeIds,
 }
 
-impl<D, G, C, K, S, H> std::fmt::Debug for Upstream<D, G, C, K, S, H> {
+impl<B: Backend, H> std::fmt::Debug for Upstream<B, H> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Upstream")
             .field("providers", &self.sign_in.providers)
@@ -125,32 +125,21 @@ impl<D, G, C, K, S, H> std::fmt::Debug for Upstream<D, G, C, K, S, H> {
     }
 }
 
-impl<D, G, C, K, S, H> Upstream<D, G, C, K, S, H> {
+impl<B: Backend, H> Upstream<B, H> {
     /// The provider with this [`Provider::id`] now.
     fn provider(&self, id: &str) -> Option<Arc<Provider>> {
         self.sign_in.providers.get(id)
     }
 }
 
-type Shared<D, G, C, K, S, H> = Arc<Upstream<D, G, C, K, S, H>>;
+type Shared<B, H> = Arc<Upstream<B, H>>;
 
 /// The upstream routes.
-pub fn router<D, G, C, K, S, H>(service: Shared<D, G, C, K, S, H>) -> Router
-where
-    D: Directory,
-    G: GrantStore,
-    C: Clock,
-    K: CredentialStore,
-    S: SetupStore,
-    H: HttpClient,
-{
+pub fn router<B: Backend, H: HttpClient>(service: Shared<B, H>) -> Router {
     Router::new()
-        .route(UPSTREAM_START_ROUTE, post(start::<D, G, C, K, S, H>))
-        .route(UPSTREAM_CALLBACK_ROUTE, get(callback::<D, G, C, K, S, H>))
-        .route(
-            "/account/links/start",
-            post(account_start::<D, G, C, K, S, H>),
-        )
+        .route(UPSTREAM_START_ROUTE, post(start::<B, H>))
+        .route(UPSTREAM_CALLBACK_ROUTE, get(callback::<B, H>))
+        .route("/account/links/start", post(account_start::<B, H>))
         .layer(axum::middleware::from_fn(crate::problem::localize))
         .with_state(service)
 }
@@ -212,20 +201,12 @@ fn random_text<const N: usize>() -> Result<String, Problem> {
     Ok(URL_SAFE_NO_PAD.encode(random::<N>().map_err(Problem::internal)?))
 }
 
-async fn start<D, G, C, K, S, H>(
-    State(service): State<Shared<D, G, C, K, S, H>>,
+async fn start<B: Backend, H: HttpClient>(
+    State(service): State<Shared<B, H>>,
     Path(provider): Path<String>,
     headers: HeaderMap,
     body: Bytes,
-) -> Response
-where
-    D: Directory,
-    G: GrantStore,
-    C: Clock,
-    K: CredentialStore,
-    S: SetupStore,
-    H: HttpClient,
-{
+) -> Response {
     // Only a configured provider's ID is logged, never another path segment.
     let configured = service.provider(&provider);
     let normalized_provider = configured.as_ref().map(|p| p.id().as_str());
@@ -264,21 +245,13 @@ where
 
 /// Seals a new pending request into [`UPSTREAM_COOKIE`] and answers with the provider's
 /// authorization URL.
-async fn begin<D, G, C, K, S, H>(
-    service: &Upstream<D, G, C, K, S, H>,
+async fn begin<B: Backend, H: HttpClient>(
+    service: &Upstream<B, H>,
     provider: &Provider,
     link: Option<String>,
     account: Option<Bound>,
     now: UnixTime,
-) -> Result<Response, Problem>
-where
-    D: Directory,
-    G: GrantStore,
-    C: Clock,
-    K: CredentialStore,
-    S: SetupStore,
-    H: HttpClient,
-{
+) -> Result<Response, Problem> {
     let sign_in = &service.sign_in;
     let pending = Pending {
         id: hex(&random::<16>().map_err(Problem::internal)?),
@@ -331,20 +304,12 @@ struct AccountStartRequest {
 }
 
 /// `POST /account/links/start`: begins linking an upstream account to the signed-in user.
-async fn account_start<D, G, C, K, S, H>(
-    State(service): State<Shared<D, G, C, K, S, H>>,
+async fn account_start<B: Backend, H: HttpClient>(
+    State(service): State<Shared<B, H>>,
     requester: Requester,
     headers: HeaderMap,
     body: Bytes,
-) -> Response
-where
-    D: Directory,
-    G: GrantStore,
-    C: Clock,
-    K: CredentialStore,
-    S: SetupStore,
-    H: HttpClient,
-{
+) -> Response {
     let sign_in = &service.sign_in;
     let now = sign_in.oauth.now();
     let mut user = None;
@@ -378,22 +343,15 @@ where
 
 /// Links the verified upstream account to the account session's user, then returns to the
 /// account page.
-async fn finish_account_link<D, G, C, K, S>(
-    sign_in: &SignIn<D, G, C, K, S>,
+async fn finish_account_link<B: Backend>(
+    sign_in: &SignIn<B>,
     account: &Account,
     provider: &Provider,
     external: NewExternal,
     already_linked: bool,
     requester: &Requester,
     now: UnixTime,
-) -> Result<Response, Failure>
-where
-    D: Directory,
-    G: GrantStore,
-    C: Clock,
-    K: CredentialStore,
-    S: SetupStore,
-{
+) -> Result<Response, Failure> {
     if already_linked {
         return Err((
             "account_already_linked",
@@ -504,21 +462,13 @@ fn verification_failure(error: &UpstreamError) -> Failure {
     clippy::too_many_lines,
     reason = "the callback's checks run in protocol order; splitting them would hide the order"
 )]
-async fn callback<D, G, C, K, S, H>(
-    State(service): State<Shared<D, G, C, K, S, H>>,
+async fn callback<B: Backend, H: HttpClient>(
+    State(service): State<Shared<B, H>>,
     Path(provider): Path<String>,
     RawQuery(query): RawQuery,
     headers: HeaderMap,
     requester: Requester,
-) -> Response
-where
-    D: Directory,
-    G: GrantStore,
-    C: Clock,
-    K: CredentialStore,
-    S: SetupStore,
-    H: HttpClient,
-{
+) -> Response {
     let lang = Lang::negotiate(None, accept_language(&headers));
     let m = lang.messages();
     let sign_in = &service.sign_in;

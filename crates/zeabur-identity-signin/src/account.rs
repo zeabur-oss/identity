@@ -42,14 +42,14 @@ use webauthn_rs::prelude::{
 };
 use zeabur_identity_api::token_hash;
 use zeabur_identity_core::account::{Method, allows};
-use zeabur_identity_core::clock::{Clock, UnixTime};
+use zeabur_identity_core::clock::UnixTime;
 use zeabur_identity_core::crypto::{CryptoError, hex, random};
 use zeabur_identity_core::protocol::ACCOUNT_PATH;
 use zeabur_identity_oauth::Use;
 use zeabur_identity_oauth::authorize::Authentication;
 use zeabur_identity_store::{
     AccountEvent, Classification, CreateCredential, CreateGrant, CredentialStore, Directory, Grant,
-    GrantStore, LinkedSummary, NewGrant, PasskeySummary, Removal, Rename, SetupStore, Unlink, User,
+    GrantStore, LinkedSummary, NewGrant, PasskeySummary, Removal, Rename, Unlink, User,
     Verification, classify,
 };
 use zeabur_identity_ui::pages::{
@@ -64,7 +64,7 @@ use crate::passkeys::{BackupFlags, backup_flags};
 use crate::problem::{Problem, Step};
 use crate::upstream::provider::{Descriptor, GITHUB_ISSUER, GOOGLE_ISSUER};
 use crate::{
-    Accepted, BAD_REQUEST, CEREMONY_COOKIE, CEREMONY_EXPIRED, CEREMONY_LIFETIME, Ceremony,
+    Accepted, BAD_REQUEST, Backend, CEREMONY_COOKIE, CEREMONY_EXPIRED, CEREMONY_LIFETIME, Ceremony,
     PASSKEY_FAILED, Refused, SignIn, Verified, accepted, check_account, check_request, clean_label,
     clear_cookie, cookie, json, new_passkey, open, parse, seal, set_cookie, set_cookie_with, touch,
     verify_assertion,
@@ -131,58 +131,36 @@ pub(crate) const LAST_CREDENTIAL: Problem = Problem::new(
 )
 .detail(|m| m.last_credential_error);
 
-type Shared<D, G, C, K, S> = std::sync::Arc<SignIn<D, G, C, K, S>>;
+type Shared<B> = std::sync::Arc<SignIn<B>>;
 
 /// The account routes and `/.well-known/passkey-endpoints`.
-pub(crate) fn routes<D, G, C, K, S>() -> Router<Shared<D, G, C, K, S>>
-where
-    D: Directory,
-    G: GrantStore,
-    C: Clock,
-    K: CredentialStore,
-    S: SetupStore,
-{
+pub(crate) fn routes<B: Backend>() -> Router<Shared<B>> {
     Router::new()
-        .route(ACCOUNT_PATH, get(page::<D, G, C, K, S>))
+        .route(ACCOUNT_PATH, get(page::<B>))
         .route(
             "/.well-known/passkey-endpoints",
-            get(passkey_endpoints::<D, G, C, K, S>),
+            get(passkey_endpoints::<B>),
         )
-        .route(
-            "/account/session/options",
-            post(session_options::<D, G, C, K, S>),
-        )
-        .route("/account/session", post(session_create::<D, G, C, K, S>))
+        .route("/account/session/options", post(session_options::<B>))
+        .route("/account/session", post(session_create::<B>))
         .route(
             "/account/session/password",
-            post(crate::password::account_session::<D, G, C, K, S>),
+            post(crate::password::account_session::<B>),
         )
-        .route("/account/sign-out", post(sign_out::<D, G, C, K, S>))
-        .route(
-            "/account/reauth/options",
-            post(reauth_options::<D, G, C, K, S>),
-        )
-        .route("/account/reauth", post(reauth::<D, G, C, K, S>))
-        .route(
-            "/account/passkeys/options",
-            post(add_options::<D, G, C, K, S>),
-        )
-        .route("/account/passkeys", post(add::<D, G, C, K, S>))
-        .route("/account/passkeys/rename", post(rename::<D, G, C, K, S>))
-        .route("/account/passkeys/remove", post(remove::<D, G, C, K, S>))
-        .route("/account/sessions/revoke", post(revoke::<D, G, C, K, S>))
-        .route(
-            "/account/sessions/revoke-others",
-            post(revoke_others::<D, G, C, K, S>),
-        )
-        .route("/account/links/remove", post(unlink::<D, G, C, K, S>))
-        .route(
-            "/account/password",
-            post(crate::password::change::<D, G, C, K, S>),
-        )
+        .route("/account/sign-out", post(sign_out::<B>))
+        .route("/account/reauth/options", post(reauth_options::<B>))
+        .route("/account/reauth", post(reauth::<B>))
+        .route("/account/passkeys/options", post(add_options::<B>))
+        .route("/account/passkeys", post(add::<B>))
+        .route("/account/passkeys/rename", post(rename::<B>))
+        .route("/account/passkeys/remove", post(remove::<B>))
+        .route("/account/sessions/revoke", post(revoke::<B>))
+        .route("/account/sessions/revoke-others", post(revoke_others::<B>))
+        .route("/account/links/remove", post(unlink::<B>))
+        .route("/account/password", post(crate::password::change::<B>))
         .route(
             "/account/password/remove",
-            post(crate::password::remove::<D, G, C, K, S>),
+            post(crate::password::remove::<B>),
         )
 }
 
@@ -252,18 +230,11 @@ pub(crate) struct Account {
 
 /// The account session the request carries, if it is valid: current secret, not expired, an
 /// account session, and its user enabled with the UID recorded at sign-in.
-pub(crate) async fn current<D, G, C, K, S>(
-    service: &SignIn<D, G, C, K, S>,
+pub(crate) async fn current<B: Backend>(
+    service: &SignIn<B>,
     headers: &HeaderMap,
     now: UnixTime,
-) -> Result<Option<Account>, Problem>
-where
-    D: Directory,
-    G: GrantStore,
-    C: Clock,
-    K: CredentialStore,
-    S: SetupStore,
-{
+) -> Result<Option<Account>, Problem> {
     let Some(token) = cookie(headers, SESSION_COOKIE).and_then(SessionToken::parse) else {
         return Ok(None);
     };
@@ -305,18 +276,11 @@ where
 }
 
 /// A change request: same origin, JSON and a valid session.
-pub(crate) async fn signed_in<D, G, C, K, S>(
-    service: &SignIn<D, G, C, K, S>,
+pub(crate) async fn signed_in<B: Backend>(
+    service: &SignIn<B>,
     headers: &HeaderMap,
     now: UnixTime,
-) -> Result<Account, Problem>
-where
-    D: Directory,
-    G: GrantStore,
-    C: Clock,
-    K: CredentialStore,
-    S: SetupStore,
-{
+) -> Result<Account, Problem> {
     check_request(headers, service.oauth.issuer.as_str())?;
     current(service, headers, now).await?.ok_or(SIGNED_OUT)
 }
@@ -349,19 +313,13 @@ pub(crate) struct Audit<'a> {
 }
 
 /// Records an `Event` on the user. Best effort: the change is done, so a failure is logged.
-pub(crate) async fn record<D, G, C, K, S>(
-    service: &SignIn<D, G, C, K, S>,
+pub(crate) async fn record<B: Backend>(
+    service: &SignIn<B>,
     user: &User,
     reason: &'static str,
     audit: &Audit<'_>,
     now: UnixTime,
-) where
-    D: Directory,
-    G: GrantStore,
-    C: Clock,
-    K: CredentialStore,
-    S: SetupStore,
-{
+) {
     let requester = audit.requester.cloned().unwrap_or_default();
     let mut note = format!("actor={}", user.name);
     let fields = [
@@ -462,14 +420,7 @@ struct PasskeyEndpoints {
 /// `GET /.well-known/passkey-endpoints` (W3C, "A Well-Known URL for Relying Party Passkey
 /// Endpoints"): where a password manager sends people to add or manage passkeys. Served
 /// directly, never redirected.
-async fn passkey_endpoints<D, G, C, K, S>(State(service): State<Shared<D, G, C, K, S>>) -> Response
-where
-    D: Directory,
-    G: GrantStore,
-    C: Clock,
-    K: CredentialStore,
-    S: SetupStore,
-{
+async fn passkey_endpoints<B: Backend>(State(service): State<Shared<B>>) -> Response {
     let issuer = service.oauth.issuer.as_str().trim_end_matches('/');
     let body = PasskeyEndpoints {
         enroll: format!("{issuer}{ACCOUNT_PATH}#add"),
@@ -533,19 +484,12 @@ fn issuer_label(issuer: &str) -> String {
 
 /// The user's live sessions, the current one first, then the newest; and the name of each app
 /// they signed in to.
-async fn live_sessions<D, G, C, K, S>(
-    service: &SignIn<D, G, C, K, S>,
+async fn live_sessions<B: Backend>(
+    service: &SignIn<B>,
     user: &User,
     current: &str,
     now: UnixTime,
-) -> Result<(Vec<Grant>, Vec<(String, String)>), Problem>
-where
-    D: Directory,
-    G: GrantStore,
-    C: Clock,
-    K: CredentialStore,
-    S: SetupStore,
-{
+) -> Result<(Vec<Grant>, Vec<(String, String)>), Problem> {
     let mut sessions: Vec<Grant> = service
         .oauth
         .grants
@@ -576,18 +520,11 @@ where
     Ok((sessions, apps))
 }
 
-async fn page<D, G, C, K, S>(
-    State(service): State<Shared<D, G, C, K, S>>,
+async fn page<B: Backend>(
+    State(service): State<Shared<B>>,
     RawQuery(query): RawQuery,
     headers: HeaderMap,
-) -> Response
-where
-    D: Directory,
-    G: GrantStore,
-    C: Clock,
-    K: CredentialStore,
-    S: SetupStore,
-{
+) -> Response {
     let lang = page_lang(query.as_deref(), &headers);
     let now = service.oauth.now();
     let loaded = async {
@@ -709,19 +646,12 @@ fn passkey_row<'a>(passkey: &'a PasskeySummary, this_device: Option<&str>) -> Pa
 }
 
 /// Starts a discoverable assertion bound to `purpose` and, for re-authentication, the session.
-fn assertion_options<D, G, C, K, S>(
-    service: &SignIn<D, G, C, K, S>,
+fn assertion_options<B: Backend>(
+    service: &SignIn<B>,
     purpose: &str,
     session: Option<String>,
     now: UnixTime,
-) -> Result<Response, Problem>
-where
-    D: Directory,
-    G: GrantStore,
-    C: Clock,
-    K: CredentialStore,
-    S: SetupStore,
-{
+) -> Result<Response, Problem> {
     let (options, state) = service
         .passkeys
         .begin_sign_in()
@@ -739,21 +669,14 @@ where
 }
 
 /// Verifies an assertion against a ceremony started for `purpose`, then spends the ceremony.
-async fn finish_assertion<D, G, C, K, S>(
-    service: &SignIn<D, G, C, K, S>,
+async fn finish_assertion<B: Backend>(
+    service: &SignIn<B>,
     headers: &HeaderMap,
     purpose: &str,
     session: Option<&str>,
     credential: &PublicKeyCredential,
     now: UnixTime,
-) -> Result<Verified, Refused>
-where
-    D: Directory,
-    G: GrantStore,
-    C: Clock,
-    K: CredentialStore,
-    S: SetupStore,
-{
+) -> Result<Verified, Refused> {
     let ceremony: Ceremony<DiscoverableAuthentication> =
         open(&service.oauth, headers, purpose, now)?;
     if ceremony.user.as_deref() != session {
@@ -770,17 +693,10 @@ where
     Ok(verified)
 }
 
-async fn session_options<D, G, C, K, S>(
-    State(service): State<Shared<D, G, C, K, S>>,
+async fn session_options<B: Backend>(
+    State(service): State<Shared<B>>,
     headers: HeaderMap,
-) -> Response
-where
-    D: Directory,
-    G: GrantStore,
-    C: Clock,
-    K: CredentialStore,
-    S: SetupStore,
-{
+) -> Response {
     let result = check_request(&headers, service.oauth.issuer.as_str())
         .and_then(|()| assertion_options(&service, SIGN_IN_PURPOSE, None, service.oauth.now()));
     result.unwrap_or_else(IntoResponse::into_response)
@@ -794,17 +710,10 @@ pub(crate) struct SignedIn {
 }
 
 /// Creates the account session grant for `authentication` and returns its token.
-pub(crate) async fn start_session<D, G, C, K, S>(
-    service: &SignIn<D, G, C, K, S>,
+pub(crate) async fn start_session<B: Backend>(
+    service: &SignIn<B>,
     authentication: &Authentication,
-) -> Result<SessionToken, Problem>
-where
-    D: Directory,
-    G: GrantStore,
-    C: Clock,
-    K: CredentialStore,
-    S: SetupStore,
-{
+) -> Result<SessionToken, Problem> {
     let token = SessionToken::generate().map_err(Problem::internal)?;
     let expires_at = authentication.auth_time.saturating_add(SESSION_LIFETIME);
     let grant = NewGrant {
@@ -834,19 +743,12 @@ where
     }
 }
 
-async fn session_create<D, G, C, K, S>(
-    State(service): State<Shared<D, G, C, K, S>>,
+async fn session_create<B: Backend>(
+    State(service): State<Shared<B>>,
     requester: Requester,
     headers: HeaderMap,
     body: Bytes,
-) -> Response
-where
-    D: Directory,
-    G: GrantStore,
-    C: Clock,
-    K: CredentialStore,
-    S: SetupStore,
-{
+) -> Response {
     let now = service.oauth.now();
     let mut user = None;
     let mut audit = Audit {
@@ -886,18 +788,11 @@ where
     result.unwrap_or_else(|refused| refused.respond(service.passkeys.rp_id()))
 }
 
-async fn sign_out<D, G, C, K, S>(
-    State(service): State<Shared<D, G, C, K, S>>,
+async fn sign_out<B: Backend>(
+    State(service): State<Shared<B>>,
     requester: Requester,
     headers: HeaderMap,
-) -> Response
-where
-    D: Directory,
-    G: GrantStore,
-    C: Clock,
-    K: CredentialStore,
-    S: SetupStore,
-{
+) -> Response {
     let now = service.oauth.now();
     let mut user = None;
     let mut audit = Audit {
@@ -922,17 +817,10 @@ where
     result.unwrap_or_else(IntoResponse::into_response)
 }
 
-async fn reauth_options<D, G, C, K, S>(
-    State(service): State<Shared<D, G, C, K, S>>,
+async fn reauth_options<B: Backend>(
+    State(service): State<Shared<B>>,
     headers: HeaderMap,
-) -> Response
-where
-    D: Directory,
-    G: GrantStore,
-    C: Clock,
-    K: CredentialStore,
-    S: SetupStore,
-{
+) -> Response {
     let now = service.oauth.now();
     let result: Result<Response, Problem> = async {
         let account = signed_in(&service, &headers, now).await?;
@@ -942,19 +830,12 @@ where
     result.unwrap_or_else(IntoResponse::into_response)
 }
 
-async fn reauth<D, G, C, K, S>(
-    State(service): State<Shared<D, G, C, K, S>>,
+async fn reauth<B: Backend>(
+    State(service): State<Shared<B>>,
     requester: Requester,
     headers: HeaderMap,
     body: Bytes,
-) -> Response
-where
-    D: Directory,
-    G: GrantStore,
-    C: Clock,
-    K: CredentialStore,
-    S: SetupStore,
-{
+) -> Response {
     let now = service.oauth.now();
     let mut user = None;
     let mut audit = Audit {
@@ -1006,17 +887,7 @@ where
     result.unwrap_or_else(|refused| refused.respond(service.passkeys.rp_id()))
 }
 
-async fn add_options<D, G, C, K, S>(
-    State(service): State<Shared<D, G, C, K, S>>,
-    headers: HeaderMap,
-) -> Response
-where
-    D: Directory,
-    G: GrantStore,
-    C: Clock,
-    K: CredentialStore,
-    S: SetupStore,
-{
+async fn add_options<B: Backend>(State(service): State<Shared<B>>, headers: HeaderMap) -> Response {
     let now = service.oauth.now();
     let result: Result<Response, Problem> = async {
         let account = signed_in(&service, &headers, now).await?;
@@ -1056,19 +927,12 @@ where
     result.unwrap_or_else(IntoResponse::into_response)
 }
 
-async fn add<D, G, C, K, S>(
-    State(service): State<Shared<D, G, C, K, S>>,
+async fn add<B: Backend>(
+    State(service): State<Shared<B>>,
     requester: Requester,
     headers: HeaderMap,
     body: Bytes,
-) -> Response
-where
-    D: Directory,
-    G: GrantStore,
-    C: Clock,
-    K: CredentialStore,
-    S: SetupStore,
-{
+) -> Response {
     let now = service.oauth.now();
     let mut user = None;
     let mut audit = Audit {
@@ -1136,19 +1000,12 @@ where
     result.unwrap_or_else(IntoResponse::into_response)
 }
 
-async fn rename<D, G, C, K, S>(
-    State(service): State<Shared<D, G, C, K, S>>,
+async fn rename<B: Backend>(
+    State(service): State<Shared<B>>,
     requester: Requester,
     headers: HeaderMap,
     body: Bytes,
-) -> Response
-where
-    D: Directory,
-    G: GrantStore,
-    C: Clock,
-    K: CredentialStore,
-    S: SetupStore,
-{
+) -> Response {
     let now = service.oauth.now();
     let mut user = None;
     let mut audit = Audit {
@@ -1192,19 +1049,12 @@ where
 
 /// Revokes the user's sessions and grants that signed in, or last re-authenticated, with
 /// `credential`. Returns how many, and whether `current` was one of them.
-pub(crate) async fn revoke_by_credential<D, G, C, K, S>(
-    service: &SignIn<D, G, C, K, S>,
+pub(crate) async fn revoke_by_credential<B: Backend>(
+    service: &SignIn<B>,
     user: &User,
     credential: &str,
     current: &str,
-) -> Result<(usize, bool), Problem>
-where
-    D: Directory,
-    G: GrantStore,
-    C: Clock,
-    K: CredentialStore,
-    S: SetupStore,
-{
+) -> Result<(usize, bool), Problem> {
     let grants = service
         .oauth
         .grants
@@ -1233,19 +1083,12 @@ where
     Ok((revoked, signed_out))
 }
 
-async fn remove<D, G, C, K, S>(
-    State(service): State<Shared<D, G, C, K, S>>,
+async fn remove<B: Backend>(
+    State(service): State<Shared<B>>,
     requester: Requester,
     headers: HeaderMap,
     body: Bytes,
-) -> Response
-where
-    D: Directory,
-    G: GrantStore,
-    C: Clock,
-    K: CredentialStore,
-    S: SetupStore,
-{
+) -> Response {
     let now = service.oauth.now();
     let mut user = None;
     let mut audit = Audit {
@@ -1294,19 +1137,12 @@ where
     result.unwrap_or_else(IntoResponse::into_response)
 }
 
-async fn unlink<D, G, C, K, S>(
-    State(service): State<Shared<D, G, C, K, S>>,
+async fn unlink<B: Backend>(
+    State(service): State<Shared<B>>,
     requester: Requester,
     headers: HeaderMap,
     body: Bytes,
-) -> Response
-where
-    D: Directory,
-    G: GrantStore,
-    C: Clock,
-    K: CredentialStore,
-    S: SetupStore,
-{
+) -> Response {
     let now = service.oauth.now();
     let mut user = None;
     let mut audit = Audit {
@@ -1353,19 +1189,12 @@ where
     result.unwrap_or_else(IntoResponse::into_response)
 }
 
-async fn revoke<D, G, C, K, S>(
-    State(service): State<Shared<D, G, C, K, S>>,
+async fn revoke<B: Backend>(
+    State(service): State<Shared<B>>,
     requester: Requester,
     headers: HeaderMap,
     body: Bytes,
-) -> Response
-where
-    D: Directory,
-    G: GrantStore,
-    C: Clock,
-    K: CredentialStore,
-    S: SetupStore,
-{
+) -> Response {
     let now = service.oauth.now();
     let mut user = None;
     let mut audit = Audit {
@@ -1406,18 +1235,11 @@ where
 }
 
 /// Revokes every session and grant of `user` but the session `current`. Returns how many.
-pub(crate) async fn revoke_all_but<D, G, C, K, S>(
-    service: &SignIn<D, G, C, K, S>,
+pub(crate) async fn revoke_all_but<B: Backend>(
+    service: &SignIn<B>,
     user: &User,
     current: &str,
-) -> Result<usize, Problem>
-where
-    D: Directory,
-    G: GrantStore,
-    C: Clock,
-    K: CredentialStore,
-    S: SetupStore,
-{
+) -> Result<usize, Problem> {
     let grants = service
         .oauth
         .grants
@@ -1437,18 +1259,11 @@ where
     Ok(revoked)
 }
 
-async fn revoke_others<D, G, C, K, S>(
-    State(service): State<Shared<D, G, C, K, S>>,
+async fn revoke_others<B: Backend>(
+    State(service): State<Shared<B>>,
     requester: Requester,
     headers: HeaderMap,
-) -> Response
-where
-    D: Directory,
-    G: GrantStore,
-    C: Clock,
-    K: CredentialStore,
-    S: SetupStore,
-{
+) -> Response {
     let now = service.oauth.now();
     let mut user = None;
     let mut audit = Audit {

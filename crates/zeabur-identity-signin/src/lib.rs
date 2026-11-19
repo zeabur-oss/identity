@@ -64,17 +64,30 @@ const SIGN_IN_PURPOSE: &str = "zeabur-identity/sign-in/v1";
 /// How long a ceremony may take (WebAuthn Level 3 recommends 300 s for UV-required ceremonies).
 pub(crate) const CEREMONY_LIFETIME: std::time::Duration = std::time::Duration::from_mins(5);
 
+/// The stores and clock the sign-in routes use.
+pub trait Backend: Send + Sync + 'static {
+    /// Users, clients and settings.
+    type Directory: Directory;
+    /// Grants: OAuth refresh token families and account sessions.
+    type Grants: GrantStore;
+    /// The clock.
+    type Clock: Clock;
+    /// Passkeys, passwords and linked upstream accounts.
+    type Credentials: CredentialStore;
+    /// Setup links and invitations.
+    type Setup: SetupStore;
+}
+
 /// Sign-in state shared by the handlers.
-#[derive(Debug)]
-pub struct SignIn<D, G, C, K, S> {
+pub struct SignIn<B: Backend> {
     /// The authorization server whose pending requests sign-ins complete.
-    pub oauth: Arc<AuthorizationServer<D, G, C>>,
+    pub oauth: Arc<AuthorizationServer<B::Directory, B::Grants, B::Clock>>,
     /// The relying party.
     pub passkeys: Passkeys,
     /// Stored passkeys.
-    pub credentials: K,
+    pub credentials: B::Credentials,
     /// The setup token.
-    pub setup: S,
+    pub setup: B::Setup,
     /// Ceremony identifiers already used.
     pub used_ceremonies: OneTimeIds,
     /// The upstream providers, shared with the sign-in pages and the upstream routes.
@@ -83,29 +96,31 @@ pub struct SignIn<D, G, C, K, S> {
     pub passwords: Passwords,
 }
 
-pub(crate) type Shared<D, G, C, K, S> = Arc<SignIn<D, G, C, K, S>>;
+impl<B: Backend> std::fmt::Debug for SignIn<B> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SignIn")
+            .field("passkeys", &self.passkeys)
+            .field("providers", &self.providers)
+            .finish_non_exhaustive()
+    }
+}
+
+pub(crate) type Shared<B> = Arc<SignIn<B>>;
 
 /// The sign-in routes.
-pub fn router<D, G, C, K, S>(service: Shared<D, G, C, K, S>) -> Router
-where
-    D: Directory,
-    G: GrantStore,
-    C: Clock,
-    K: CredentialStore,
-    S: SetupStore,
-{
+pub fn router<B: Backend>(service: Shared<B>) -> Router {
     Router::new()
-        .route("/setup/options", post(setup_options::<D, G, C, K, S>))
-        .route(SETUP_PATH, post(setup_finish::<D, G, C, K, S>))
-        .route("/login/options", post(login_options::<D, G, C, K, S>))
-        .route("/login", post(login_finish::<D, G, C, K, S>))
-        .route("/login/password", post(password::sign_in::<D, G, C, K, S>))
-        .route("/setup/password", post(password::set_up::<D, G, C, K, S>))
+        .route("/setup/options", post(setup_options::<B>))
+        .route(SETUP_PATH, post(setup_finish::<B>))
+        .route("/login/options", post(login_options::<B>))
+        .route("/login", post(login_finish::<B>))
+        .route("/login/password", post(password::sign_in::<B>))
+        .route("/setup/password", post(password::set_up::<B>))
         .route(
             "/setup/password/options",
-            post(password::set_up_options::<D, G, C, K, S>),
+            post(password::set_up_options::<B>),
         )
-        .merge(account::routes::<D, G, C, K, S>())
+        .merge(account::routes::<B>())
         .layer(axum::middleware::from_fn(problem::localize))
         .with_state(service)
 }
@@ -370,18 +385,11 @@ impl From<Problem> for Refused {
 /// Verifies a discoverable assertion against the stored credential it names. Every failure
 /// gives the same answer, so responses do not reveal which users or credentials exist; only an
 /// unregistered credential ID is passed back, for `signalUnknownCredential`.
-pub(crate) async fn verify_assertion<D, G, C, K, S>(
-    service: &SignIn<D, G, C, K, S>,
+pub(crate) async fn verify_assertion<B: Backend>(
+    service: &SignIn<B>,
     response: &PublicKeyCredential,
     state: DiscoverableAuthentication,
-) -> Result<Verified, Refused>
-where
-    D: Directory,
-    G: GrantStore,
-    C: Clock,
-    K: CredentialStore,
-    S: SetupStore,
-{
+) -> Result<Verified, Refused> {
     let (handle, credential_id) = service.passkeys.identify(response).map_err(|error| {
         tracing::warn!(reason = PASSKEY_FAILED.kind, %error, "passkey identification failed");
         PASSKEY_FAILED
@@ -451,17 +459,7 @@ impl Refused {
 }
 
 /// Records when a passkey signed in, at most once a minute. Failures are only logged.
-pub(crate) async fn touch<D, G, C, K, S>(
-    service: &SignIn<D, G, C, K, S>,
-    verified: &Verified,
-    now: UnixTime,
-) where
-    D: Directory,
-    G: GrantStore,
-    C: Clock,
-    K: CredentialStore,
-    S: SetupStore,
-{
+pub(crate) async fn touch<B: Backend>(service: &SignIn<B>, verified: &Verified, now: UnixTime) {
     let recent = verified
         .last_used_at
         .is_some_and(|last| now.as_secs().saturating_sub(last.as_secs()) < 60);
@@ -484,17 +482,7 @@ pub(crate) struct Accepted {
     all_accepted_credential_ids: Vec<String>,
 }
 
-pub(crate) async fn accepted<D, G, C, K, S>(
-    service: &SignIn<D, G, C, K, S>,
-    user: &User,
-) -> Option<Accepted>
-where
-    D: Directory,
-    G: GrantStore,
-    C: Clock,
-    K: CredentialStore,
-    S: SetupStore,
-{
+pub(crate) async fn accepted<B: Backend>(service: &SignIn<B>, user: &User) -> Option<Accepted> {
     let passkeys = match service.credentials.passkeys(user).await {
         Ok(passkeys) => passkeys,
         Err(error) => {
@@ -586,18 +574,11 @@ pub(crate) async fn valid_setup_token<S: SetupStore, D: Directory>(
     Ok((stored, user))
 }
 
-async fn setup_options<D, G, C, K, S>(
-    State(service): State<Shared<D, G, C, K, S>>,
+async fn setup_options<B: Backend>(
+    State(service): State<Shared<B>>,
     headers: HeaderMap,
     body: Bytes,
-) -> Response
-where
-    D: Directory,
-    G: GrantStore,
-    C: Clock,
-    K: CredentialStore,
-    S: SetupStore,
-{
+) -> Response {
     let mut identity = None;
     let result: Result<Response, Problem> = async {
         check_request(&headers, service.oauth.issuer.as_str())?;
@@ -648,19 +629,12 @@ where
     result.unwrap_or_else(IntoResponse::into_response)
 }
 
-async fn setup_finish<D, G, C, K, S>(
-    State(service): State<Shared<D, G, C, K, S>>,
+async fn setup_finish<B: Backend>(
+    State(service): State<Shared<B>>,
     headers: HeaderMap,
     requester: Requester,
     body: Bytes,
-) -> Response
-where
-    D: Directory,
-    G: GrantStore,
-    C: Clock,
-    K: CredentialStore,
-    S: SetupStore,
-{
+) -> Response {
     let mut user = None;
     let result: Result<Response, Problem> = async {
         check_request(&headers, service.oauth.issuer.as_str())?;
@@ -759,17 +733,10 @@ struct SignInRequest {
     credential: PublicKeyCredential,
 }
 
-async fn login_options<D, G, C, K, S>(
-    State(service): State<Shared<D, G, C, K, S>>,
+async fn login_options<B: Backend>(
+    State(service): State<Shared<B>>,
     headers: HeaderMap,
-) -> Response
-where
-    D: Directory,
-    G: GrantStore,
-    C: Clock,
-    K: CredentialStore,
-    S: SetupStore,
-{
+) -> Response {
     let result: Result<Response, Problem> = (|| {
         check_request(&headers, service.oauth.issuer.as_str())?;
         let now = service.oauth.now();
@@ -811,18 +778,11 @@ pub(crate) struct SignInResponse {
     accepted: Option<Accepted>,
 }
 
-async fn login_finish<D, G, C, K, S>(
-    State(service): State<Shared<D, G, C, K, S>>,
+async fn login_finish<B: Backend>(
+    State(service): State<Shared<B>>,
     headers: HeaderMap,
     body: Bytes,
-) -> Response
-where
-    D: Directory,
-    G: GrantStore,
-    C: Clock,
-    K: CredentialStore,
-    S: SetupStore,
-{
+) -> Response {
     let mut identity = None;
     let result: Result<Response, Refused> = async {
         check_request(&headers, service.oauth.issuer.as_str())?;
