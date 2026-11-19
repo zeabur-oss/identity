@@ -1977,6 +1977,21 @@ mod tests {
             None,
         )
         .await;
+        // RFC 6749 §5.2: a grant type the server does not support. Grant type names are
+        // compared exactly.
+        assert_eq!(reply.status, StatusCode::BAD_REQUEST);
+        assert_eq!(reply.error(), "unsupported_grant_type");
+        assert_eq!(
+            reply.json()["error_description"],
+            "This grant_type is not supported. Use authorization_code or refresh_token."
+        );
+        let reply = post(
+            &h.app,
+            "/token",
+            &[("grant_type", "Refresh_Token"), ("client_id", "kubectl")],
+            None,
+        )
+        .await;
         assert_eq!(reply.error(), "unsupported_grant_type");
         let reply = post(&h.app, "/token", &[("client_id", "kubectl")], None).await;
         assert_eq!(reply.error(), "invalid_request");
@@ -2003,14 +2018,15 @@ mod tests {
         let events = audit_outcomes(
             &h,
             "oauth.token_request",
-            &["failure", "failure", "failure", "failure"],
+            &["failure", "failure", "failure", "failure", "failure"],
         );
         assert_eq!(events[0]["fields"]["reason"], "unsupported_grant_type");
         assert_eq!(events[0]["fields"]["client"], "kubectl");
-        assert_eq!(events[1]["fields"]["reason"], "invalid_request");
-        assert_eq!(events[2]["fields"]["reason"], "not_form");
-        assert!(events[2]["fields"].get("client").is_none());
+        assert_eq!(events[1]["fields"]["reason"], "unsupported_grant_type");
+        assert_eq!(events[2]["fields"]["reason"], "invalid_request");
+        assert_eq!(events[3]["fields"]["reason"], "not_form");
         assert!(events[3]["fields"].get("client").is_none());
+        assert!(events[4]["fields"].get("client").is_none());
         assert_no_secrets(&h, &["password", "duplicate-form-code-sentinel"]);
     }
 }

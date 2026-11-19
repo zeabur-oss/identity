@@ -30,17 +30,18 @@ use zeabur_identity_core::guessing::DeviceKey;
 use zeabur_identity_core::password::{self, Hasher, ITERATIONS, Normalized, Verdict, Weakness};
 use zeabur_identity_core::totp::{RecoveryKey, Secret};
 use zeabur_identity_oauth::authorize::Authentication;
-use zeabur_identity_oauth::endpoints::{FLOW_COOKIE, complete_authorization};
+use zeabur_identity_oauth::endpoints::FLOW_COOKIE;
 use zeabur_identity_store::{
     Consume, CredentialStore, Directory, GrantStore, PasswordRemoval, PasswordState, Saved,
     SetupStore, StoreError, StoredPassword, StoredTotp, User, retry_on_conflict,
 };
 
 use crate::account::{
-    Audit, LAST_CREDENTIAL, done, log_outcome, record, revoke_all_but, signed_in, start_session,
-    with_cookie,
+    Audit, LAST_CREDENTIAL, done, record, revoke_all_but, signed_in, start_session, with_cookie,
 };
+use crate::audit::Record;
 use crate::device::Requester;
+use crate::method::{SignInMethod, finish};
 use crate::problem::{Extensions, Problem, Step};
 use crate::{
     NO_REQUEST, SETUP_INVALID, Shared, SignIn, check_account, check_request, cookie, json, parse,
@@ -60,12 +61,6 @@ const ENTRY_SEPARATOR: &str = "~";
 const DEVICE_ENTRIES: usize = 4;
 /// 400 days, the longest lifetime browsers keep (RFC 6265bis §5.5).
 const DEVICE_MAX_AGE: u64 = 400 * 24 * 60 * 60;
-/// Authentication methods asserted by a password sign-in (RFC 8176).
-pub const PASSWORD_AMR: [&str; 1] = ["pwd"];
-/// A password, then a TOTP code.
-pub const TOTP_AMR: [&str; 3] = ["pwd", "otp", "mfa"];
-/// A password, then a recovery code.
-pub const RECOVERY_AMR: [&str; 2] = ["pwd", "mfa"];
 
 pub(crate) const PASSWORD_FAILED: Problem = Problem::new(
     StatusCode::UNAUTHORIZED,
@@ -311,7 +306,7 @@ fn enrol_purpose(token: &str) -> String {
 
 /// A second factor that was accepted.
 #[derive(Clone, Copy)]
-enum SecondFactor {
+pub(crate) enum SecondFactor {
     /// A TOTP code of this step.
     Totp(u64),
     /// The recovery code at this index.
@@ -336,13 +331,6 @@ impl SecondFactor {
                 }
                 fresh
             }
-        }
-    }
-
-    const fn amr(self) -> &'static [&'static str] {
-        match self {
-            Self::Totp(_) => &TOTP_AMR,
-            Self::Recovery(_) => &RECOVERY_AMR,
         }
     }
 }
@@ -479,14 +467,15 @@ where
         identity.as_ref().map(|u: &User| u.name.as_str()),
         identity.as_ref().map(|u| u.subject.as_str()),
     );
-    match &result {
-        Ok(_) => {
-            tracing::info!(target: "zeabur_identity::audit", event = "auth.sign_in", outcome = "success", method = "password", user, subject, "signed in with a password");
-        }
-        Err(failure) => {
-            tracing::warn!(target: "zeabur_identity::audit", event = "auth.sign_in", outcome = "failure", method = "password", reason = failure.kind(), user, subject, "password sign-in failed");
-        }
-    }
+    let record = Record {
+        event: "auth.sign_in",
+        messages: ["signed in with a password", "password sign-in failed"],
+        method: Some("password"),
+        user,
+        subject,
+        ..Record::default()
+    };
+    record.log(result.as_ref().err().map(Failure::kind));
     result.unwrap_or_else(Failure::respond)
 }
 
@@ -508,15 +497,7 @@ where
     let flow = cookie(headers, FLOW_COOKIE).ok_or(NO_REQUEST)?;
     let authentication = authenticate(service, headers, &request, identity).await?;
     let subject = authentication.subject.clone();
-    let location =
-        complete_authorization(&service.oauth, flow, authentication).map_err(|error| {
-            tracing::warn!(
-                reason = NO_REQUEST.kind,
-                ?error,
-                "password authorization failed"
-            );
-            NO_REQUEST
-        })?;
+    let location = finish(&service.oauth, flow, authentication).ok_or(NO_REQUEST)?;
     let mut response = json(
         StatusCode::OK,
         &SignedIn {
@@ -605,22 +586,11 @@ where
     let code = request.code.as_deref();
     let second = check_second_factor(service, user, &stored, code, device, now).await?;
     // Checked after the password matches, so the answer says nothing about unproven guesses.
-    let method = Method::Password {
-        second_factor: second.is_some(),
-    };
-    check_account(&service.oauth.directory, user, method).await?;
+    let method = SignInMethod::Password(second);
+    check_account(&service.oauth.directory, user, method.policy()).await?;
     let name = stored.name.clone();
     record_success(service, user, stored, rehashed, device, second).await?;
-    let amr = second.map_or(&PASSWORD_AMR[..], SecondFactor::amr);
-    Ok(Authentication {
-        user: user.name.clone(),
-        subject: user.subject.clone(),
-        auth_time: now,
-        amr: amr.iter().map(|m| (*m).to_owned()).collect(),
-        credential: Some(name),
-        user_verified: false,
-        device_bound: false,
-    })
+    Ok(method.authentication(user, name, now))
 }
 
 /// `POST /account/session/password`: signs in to the account page with a username and password.
@@ -657,8 +627,8 @@ where
         Ok(with_cookie(response, &token))
     }
     .await;
-    let logged = result.as_ref().map(|_| ()).map_err(Failure::problem);
-    log_outcome("account.sign_in", identity.as_ref(), &audit, &logged);
+    let record = Record::account("account.sign_in", identity.as_ref(), &audit);
+    record.log(result.as_ref().err().map(Failure::kind));
     result.unwrap_or_else(Failure::respond)
 }
 
@@ -956,14 +926,14 @@ where
 {
     let mut user = None;
     let result = set_up_with(&service, &headers, &requester, &body, &mut user).await;
-    match &result {
-        Ok(_) => {
-            tracing::info!(target: "zeabur_identity::audit", event = "auth.password_enrollment", outcome = "success", method = "password", user = user.as_deref(), "password set");
-        }
-        Err(failure) => {
-            tracing::warn!(target: "zeabur_identity::audit", event = "auth.password_enrollment", outcome = "failure", method = "password", reason = failure.kind(), user = user.as_deref(), "setting a password failed");
-        }
-    }
+    let record = Record {
+        event: "auth.password_enrollment",
+        messages: ["password set", "setting a password failed"],
+        method: Some("password"),
+        user: user.as_deref(),
+        ..Record::default()
+    };
+    record.log(result.as_ref().err().map(Failure::kind));
     result.unwrap_or_else(Failure::respond)
 }
 
@@ -1186,8 +1156,8 @@ where
         Ok(response)
     }
     .await;
-    let logged = result.as_ref().map(|_| ()).map_err(Failure::problem);
-    log_outcome("account.password_changed", user.as_ref(), &audit, &logged);
+    let record = Record::account("account.password_changed", user.as_ref(), &audit);
+    record.log(result.as_ref().err().map(Failure::kind));
     result.unwrap_or_else(Failure::respond)
 }
 
@@ -1233,8 +1203,8 @@ where
         Ok(done(false, None))
     }
     .await;
-    let logged = result.as_ref().map(|_| ()).map_err(Failure::problem);
-    log_outcome("account.password_removed", user.as_ref(), &audit, &logged);
+    let record = Record::account("account.password_removed", user.as_ref(), &audit);
+    record.log(result.as_ref().err().map(Failure::kind));
     result.unwrap_or_else(Failure::respond)
 }
 

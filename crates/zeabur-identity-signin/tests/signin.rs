@@ -2,6 +2,9 @@
 //! `passkey` crates) standing in for the browser and the user's device.
 
 #[cfg(test)]
+mod common;
+
+#[cfg(test)]
 mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -268,6 +271,9 @@ mod tests {
             .iter()
             .filter(|r| r["target"] == "zeabur_identity::audit")
             .collect();
+        for record in &audit {
+            super::common::assert_audit_shape(record);
+        }
         if let Some((event, phase, method)) = audited(path) {
             assert_eq!(audit.len(), 1, "{records:?}");
             let fields = &audit[0]["fields"];
@@ -318,7 +324,11 @@ mod tests {
             audit: audit.first().map(|r| (*r).clone()),
             diagnostics: records
                 .into_iter()
-                .filter(|record| record["target"] == "zeabur_identity_signin")
+                .filter(|record| {
+                    record["target"]
+                        .as_str()
+                        .is_some_and(|target| target.starts_with("zeabur_identity_signin"))
+                })
                 .collect(),
         }
     }
@@ -1230,7 +1240,7 @@ mod tests {
             assert_eq!(fields["subject"], ADMIN_UID);
             assert!(fields.get("error").is_none());
             let diagnostic = reply.diagnostics.first().unwrap();
-            assert_eq!(diagnostic["fields"]["reason"], "no-request");
+            assert_eq!(diagnostic["fields"]["reason"], "authorization_failed");
             let error = diagnostic["fields"]["error"].as_str().unwrap();
             assert!(!serde_json::to_string(fields).unwrap().contains(error));
             // A rejected authorization still consumed the verified passkey ceremony.
@@ -1269,7 +1279,9 @@ mod tests {
     }
 
     mod account {
-        use zeabur_identity_signin::account::{REAUTH_WINDOW, SESSION_COOKIE, SESSION_LIFETIME};
+        use zeabur_identity_signin::account::{
+            ACCOUNT_CLIENT, REAUTH_WINDOW, SESSION_COOKIE, SESSION_LIFETIME,
+        };
         use zeabur_identity_store::{GrantStore as _, Removal};
 
         use super::*;
@@ -1456,6 +1468,22 @@ mod tests {
             enrol(&h, &mut first).await;
             let session = sign_in_to_account(&h, &mut first).await;
             (h, first, session)
+        }
+
+        /// A passkey account session records what a passkey sign-in asserts (RFC 8176 values in
+        /// this order), and that the user was verified.
+        #[tokio::test]
+        async fn a_passkey_session_records_the_passkey_sign_in() {
+            let (h, _device, _session) = signed_in().await;
+            let admin = user(&h, "admin").await;
+            let grants = h.service.oauth.grants.list(&admin).await.unwrap();
+            let [grant] = grants.as_slice() else {
+                panic!("{grants:?}")
+            };
+            assert_eq!(grant.spec.client, ACCOUNT_CLIENT);
+            assert_eq!(grant.spec.amr, ["swk", "mfa"]);
+            assert!(grant.spec.user_verified);
+            assert!(grant.spec.credential.is_some());
         }
 
         /// Every endpoint a page names is a route: a rename on either side would leave a
@@ -2000,6 +2028,7 @@ mod tests {
         use zeabur_identity_core::totp::{RECOVERY_CODES, STEP, Secret};
         use zeabur_identity_signin::account::SESSION_COOKIE;
         use zeabur_identity_signin::password::DEVICE_COOKIE;
+        use zeabur_identity_store::GrantStore as _;
 
         use super::account::{self, SIGNED_OUT_MARK, Session, page, sign_in_to_account, signed_in};
         use super::*;
@@ -2664,6 +2693,25 @@ mod tests {
                 &cookies,
             )
             .await
+        }
+
+        /// A password account session records what a password sign-in asserts, and that the
+        /// user was not verified.
+        #[tokio::test]
+        async fn a_password_session_records_the_password_sign_in() {
+            let h = harness().await;
+            let device = dana_with_password(&h).await;
+            let reply = account_sign_in(&h, "dana", GOOD, None, Some(&device)).await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+            let dana = account::user(&h, "dana").await;
+            let grants = h.service.oauth.grants.list(&dana).await.unwrap();
+            let [grant] = grants.as_slice() else {
+                panic!("{grants:?}")
+            };
+            assert_eq!(grant.spec.amr, ["pwd"]);
+            assert!(!grant.spec.user_verified);
+            assert!(!grant.spec.device_bound);
+            assert!(grant.spec.credential.is_some());
         }
 
         #[tokio::test]

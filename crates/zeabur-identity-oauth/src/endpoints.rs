@@ -343,6 +343,47 @@ fn auth_failure(failure: AuthFailure) -> Response {
     response
 }
 
+/// A `grant_type` the token endpoint accepts ([RFC 6749] §4.1.3, §6).
+///
+/// [RFC 6749]: https://www.rfc-editor.org/rfc/rfc6749.html
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GrantType {
+    /// `authorization_code`.
+    AuthorizationCode,
+    /// `refresh_token`.
+    RefreshToken,
+}
+
+impl GrantType {
+    /// Every grant type the token endpoint accepts, in the order discovery lists them.
+    pub const SUPPORTED: [Self; 2] = [Self::AuthorizationCode, Self::RefreshToken];
+
+    /// Its `grant_type` value.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::AuthorizationCode => "authorization_code",
+            Self::RefreshToken => "refresh_token",
+        }
+    }
+
+    /// The grant type whose value is exactly `value`.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        Self::SUPPORTED
+            .into_iter()
+            .find(|grant| grant.as_str() == value)
+    }
+
+    /// The audit event of a token request for it.
+    const fn event(self) -> &'static str {
+        match self {
+            Self::AuthorizationCode => "oauth.code_exchange",
+            Self::RefreshToken => "oauth.refresh",
+        }
+    }
+}
+
 async fn token<D: Directory, G: GrantStore, C: Clock>(
     State(server): State<Shared<D, G, C>>,
     headers: HeaderMap,
@@ -362,17 +403,19 @@ async fn token<D: Directory, G: GrantStore, C: Clock>(
             error,
             basic: false,
         })?;
-        event = match params.get("grant_type") {
-            Some("authorization_code") => "oauth.code_exchange",
-            Some("refresh_token") => "oauth.refresh",
-            Some(_) | None => "oauth.token_request",
-        };
+        let grant = params.get("grant_type").map(GrantType::parse);
+        event = grant
+            .flatten()
+            .map_or("oauth.token_request", GrantType::event);
         let authenticated = authenticate(&server.directory, &headers, &params).await?;
         let client = client.insert(authenticated);
-        match params.get("grant_type") {
-            Some("authorization_code") => exchange_code(&server, client, &params).await,
-            Some("refresh_token") => refresh(&server, client, &params).await,
-            Some(_) => Err(OAuthError::new(
+        match grant {
+            Some(Some(GrantType::AuthorizationCode)) => {
+                exchange_code(&server, client, &params).await
+            }
+            Some(Some(GrantType::RefreshToken)) => refresh(&server, client, &params).await,
+            // RFC 6749 §5.2.
+            Some(None) => Err(OAuthError::new(
                 ErrorCode::UnsupportedGrantType,
                 "This grant_type is not supported. Use authorization_code or refresh_token.",
             )),

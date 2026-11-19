@@ -47,6 +47,7 @@ use zeabur_identity_keys::verify::{VerificationKey, VerifyError, parse_jwk_set, 
 use zeabur_identity_ui::pages::ProviderButton;
 
 use super::http::{HttpClient, HttpError};
+use crate::method::SignInMethod;
 
 /// How long a discovery document is reused before it is fetched again.
 const METADATA_MAX_AGE: Duration = Duration::from_hours(1);
@@ -60,11 +61,6 @@ const LEEWAY: u64 = 60;
 pub const GOOGLE_ISSUER: &str = "https://accounts.google.com";
 /// The issuer of accounts linked through a `GitHub` provider.
 pub const GITHUB_ISSUER: &str = "https://github.com";
-/// The `amr` value of a sign-in through a provider marked `mfa: Enforced`: "Multiple-factor
-/// authentication" ([RFC 8176] §2).
-///
-/// [RFC 8176]: https://www.rfc-editor.org/rfc/rfc8176.html#section-2
-pub const UPSTREAM_MFA_AMR: &str = "mfa";
 
 /// The client secret of a provider: fixed, or read at each code exchange, so that a rotated
 /// secret is used at the next sign-in.
@@ -402,22 +398,10 @@ impl Provider {
         self
     }
 
-    /// How [`account::allows`] sees a sign-in through it.
-    #[must_use]
-    pub const fn method(&self) -> account::Method {
-        account::Method::Upstream {
+    /// A sign-in through it.
+    pub(crate) const fn sign_in_method(&self) -> SignInMethod {
+        SignInMethod::Upstream {
             mfa_enforced: self.mfa_enforced,
-        }
-    }
-
-    /// The `amr` of a sign-in through it: `mfa` when it is marked as enforcing a second factor,
-    /// else nothing (see the [module documentation](super)).
-    #[must_use]
-    pub fn amr(&self) -> Vec<String> {
-        if self.mfa_enforced {
-            vec![UPSTREAM_MFA_AMR.to_owned()]
-        } else {
-            Vec::new()
         }
     }
 
@@ -434,7 +418,7 @@ impl Provider {
             issuer: self.issuer.clone(),
             label: self.label.clone(),
             icon,
-            method: self.method(),
+            method: self.sign_in_method().policy(),
         }
     }
 

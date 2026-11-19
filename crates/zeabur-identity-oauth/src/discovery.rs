@@ -32,6 +32,8 @@ pub use zeabur_identity_core::protocol::{
 };
 use zeabur_identity_keys::Algorithm;
 
+use crate::endpoints::GrantType;
+
 /// The metadata document.
 #[derive(Debug, Serialize)]
 pub struct ProviderMetadata {
@@ -45,7 +47,7 @@ pub struct ProviderMetadata {
     scopes_supported: Vec<&'static str>,
     response_types_supported: &'static [&'static str],
     response_modes_supported: &'static [&'static str],
-    grant_types_supported: &'static [&'static str],
+    grant_types_supported: [&'static str; 2],
     subject_types_supported: &'static [&'static str],
     id_token_signing_alg_values_supported: [&'static str; 2],
     request_uri_parameter_supported: bool,
@@ -74,7 +76,7 @@ impl ProviderMetadata {
             scopes_supported: crate::authorize::SUPPORTED_SCOPES.to_vec(),
             response_types_supported: &["code"],
             response_modes_supported: &["query"],
-            grant_types_supported: &["authorization_code", "refresh_token"],
+            grant_types_supported: GrantType::SUPPORTED.map(GrantType::as_str),
             subject_types_supported: &["public"],
             id_token_signing_alg_values_supported: Algorithm::ALL.map(Algorithm::as_str),
             // Discovery §3 defaults this to true, meaning OIDC request objects by reference,

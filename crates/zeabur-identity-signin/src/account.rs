@@ -57,15 +57,17 @@ use zeabur_identity_ui::pages::{
     Storage, account_page, error_page, page_lang,
 };
 
+use crate::audit::Record;
 use crate::device::Requester;
+use crate::method::SignInMethod;
 use crate::passkeys::{BackupFlags, backup_flags};
 use crate::problem::{Problem, Step};
 use crate::upstream::provider::{Descriptor, GITHUB_ISSUER, GOOGLE_ISSUER};
 use crate::{
     Accepted, BAD_REQUEST, CEREMONY_COOKIE, CEREMONY_EXPIRED, CEREMONY_LIFETIME, Ceremony,
-    PASSKEY_AMR, PASSKEY_FAILED, Refused, SignIn, Verified, accepted, check_account, check_request,
-    clean_label, clear_cookie, cookie, json, new_passkey, open, parse, seal, set_cookie,
-    set_cookie_with, touch, verify_assertion,
+    PASSKEY_FAILED, Refused, SignIn, Verified, accepted, check_account, check_request, clean_label,
+    clear_cookie, cookie, json, new_passkey, open, parse, seal, set_cookie, set_cookie_with, touch,
+    verify_assertion,
 };
 
 /// Cookie holding the account session, `<grant name>.<secret>` (`SameSite=Lax`, so a link to
@@ -344,53 +346,6 @@ pub(crate) struct Audit<'a> {
     pub(crate) session: Option<String>,
     pub(crate) revoked: usize,
     pub(crate) requester: Option<&'a Requester>,
-}
-
-pub(crate) fn log_outcome<T>(
-    event: &'static str,
-    user: Option<&User>,
-    audit: &Audit<'_>,
-    result: &Result<T, Problem>,
-) {
-    let requester = audit.requester;
-    let ip = requester.and_then(|r| r.ip).map(|ip| ip.to_string());
-    let peer = requester.and_then(|r| r.peer).map(|ip| ip.to_string());
-    let user_agent = requester.and_then(|r| r.user_agent.as_deref());
-    let (actor, subject) = (
-        user.map(|u| u.name.as_str()),
-        user.map(|u| u.subject.as_str()),
-    );
-    match result {
-        Ok(_) => tracing::info!(
-            target: "zeabur_identity::audit",
-            event,
-            outcome = "success",
-            actor,
-            subject,
-            credential = audit.credential.as_deref(),
-            aaguid = audit.aaguid.as_deref(),
-            session = audit.session.as_deref(),
-            revoked = audit.revoked,
-            client_ip = ip.as_deref(),
-            peer = peer.as_deref(),
-            user_agent,
-            "account changed"
-        ),
-        Err(problem) => tracing::warn!(
-            target: "zeabur_identity::audit",
-            event,
-            outcome = "failure",
-            reason = problem.kind,
-            actor,
-            subject,
-            credential = audit.credential.as_deref(),
-            session = audit.session.as_deref(),
-            client_ip = ip.as_deref(),
-            peer = peer.as_deref(),
-            user_agent,
-            "account change failed"
-        ),
-    }
 }
 
 /// Records an `Event` on the user. Best effort: the change is done, so a failure is logged.
@@ -911,15 +866,11 @@ where
         )
         .await?;
         audit.credential = Some(verified.credential.clone());
-        let authentication = Authentication {
-            user: verified.user.name.clone(),
-            subject: verified.user.subject.clone(),
-            auth_time: now,
-            amr: PASSKEY_AMR.iter().map(|m| (*m).to_owned()).collect(),
-            credential: Some(verified.credential.clone()),
-            user_verified: true,
+        let method = SignInMethod::Passkey {
             device_bound: verified.device_bound,
         };
+        let authentication =
+            method.authentication(&verified.user, verified.credential.clone(), now);
         let token = start_session(&service, &authentication).await?;
         audit.session = Some(token.name.clone());
         touch(&service, &verified, now).await;
@@ -930,8 +881,8 @@ where
         Ok(with_cookie(response, &token))
     }
     .await;
-    let logged = result.as_ref().map(|_| ()).map_err(|r| r.problem);
-    log_outcome("account.sign_in", user.as_ref(), &audit, &logged);
+    let record = Record::account("account.sign_in", user.as_ref(), &audit);
+    record.log(result.as_ref().err().map(|r| r.problem.kind));
     result.unwrap_or_else(|refused| refused.respond(service.passkeys.rp_id()))
 }
 
@@ -966,7 +917,8 @@ where
         Ok(done(true, None))
     }
     .await;
-    log_outcome("account.sign_out", user.as_ref(), &audit, &result);
+    let record = Record::account("account.sign_out", user.as_ref(), &audit);
+    record.log(result.as_ref().err().map(|p| p.kind));
     result.unwrap_or_else(IntoResponse::into_response)
 }
 
@@ -1049,8 +1001,8 @@ where
         Ok(response)
     }
     .await;
-    let logged = result.as_ref().map(|_| ()).map_err(|r| r.problem);
-    log_outcome("account.reauth", user.as_ref(), &audit, &logged);
+    let record = Record::account("account.reauth", user.as_ref(), &audit);
+    record.log(result.as_ref().err().map(|r| r.problem.kind));
     result.unwrap_or_else(|refused| refused.respond(service.passkeys.rp_id()))
 }
 
@@ -1179,7 +1131,8 @@ where
         Ok(response)
     }
     .await;
-    log_outcome("account.passkey_added", user.as_ref(), &audit, &result);
+    let record = Record::account("account.passkey_added", user.as_ref(), &audit);
+    record.log(result.as_ref().err().map(|p| p.kind));
     result.unwrap_or_else(IntoResponse::into_response)
 }
 
@@ -1232,7 +1185,8 @@ where
         Ok(done(false, None))
     }
     .await;
-    log_outcome("account.passkey_renamed", user.as_ref(), &audit, &result);
+    let record = Record::account("account.passkey_renamed", user.as_ref(), &audit);
+    record.log(result.as_ref().err().map(|p| p.kind));
     result.unwrap_or_else(IntoResponse::into_response)
 }
 
@@ -1335,7 +1289,8 @@ where
         Ok(done(signed_out, signal))
     }
     .await;
-    log_outcome("account.passkey_removed", user.as_ref(), &audit, &result);
+    let record = Record::account("account.passkey_removed", user.as_ref(), &audit);
+    record.log(result.as_ref().err().map(|p| p.kind));
     result.unwrap_or_else(IntoResponse::into_response)
 }
 
@@ -1393,7 +1348,8 @@ where
         Ok(done(signed_out, None))
     }
     .await;
-    log_outcome("account.upstream_unlinked", user.as_ref(), &audit, &result);
+    let record = Record::account("account.upstream_unlinked", user.as_ref(), &audit);
+    record.log(result.as_ref().err().map(|p| p.kind));
     result.unwrap_or_else(IntoResponse::into_response)
 }
 
@@ -1444,7 +1400,8 @@ where
         Ok(done(signed_out, None))
     }
     .await;
-    log_outcome("account.session_revoked", user.as_ref(), &audit, &result);
+    let record = Record::account("account.session_revoked", user.as_ref(), &audit);
+    record.log(result.as_ref().err().map(|p| p.kind));
     result.unwrap_or_else(IntoResponse::into_response)
 }
 
@@ -1506,7 +1463,8 @@ where
         Ok(done(false, None))
     }
     .await;
-    log_outcome("account.sessions_revoked", user.as_ref(), &audit, &result);
+    let record = Record::account("account.sessions_revoked", user.as_ref(), &audit);
+    record.log(result.as_ref().err().map(|p| p.kind));
     result.unwrap_or_else(IntoResponse::into_response)
 }
 
