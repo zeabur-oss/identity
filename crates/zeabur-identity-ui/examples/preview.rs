@@ -368,7 +368,7 @@ async fn setup_password_options(body: String) -> Response {
         let uri = "otpauth://totp/identity.example.com:admin?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP&issuer=identity.example.com&algorithm=SHA1&digits=6&period=30";
         let (size, path) = qr(uri);
         format!(
-            r#"{{"secret":"JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP","uri":"{uri}","qr":{{"size":{size},"path":"{path}"}},"sealed":"preview"}}"#
+            r#"{{"secret":"JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP","secret_display":"JBSW Y3DP EHPK 3PXP JBSW Y3DP EHPK 3PXP","uri":"{uri}","qr":{{"size":{size},"path":"{path}"}},"sealed":"preview"}}"#
         )
     } else {
         "null".to_owned()

@@ -115,7 +115,7 @@ async function passwordOptions(token: string): Promise<boolean> {
     sealed = totp.sealed
     drawQr(totp.qr.size, totp.qr.path)
     const secret = document.getElementById("totp-secret")
-    if (secret) secret.textContent = totp.secret.replace(/(.{4})(?=.)/g, "$1 ")
+    if (secret) secret.textContent = totp.secret_display
     document.getElementById("totp")?.removeAttribute("hidden")
   }
   return true
