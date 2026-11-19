@@ -43,19 +43,13 @@ jobs:
         run: bun install --frozen-lockfile
       - name: The version is the crates' and the UI's, with a CHANGELOG.md section, on main
         run: |
-          # An image tag cannot hold the + of build metadata.
-          [[ "$VERSION" == v* && "$VERSION" != *+* ]] ||
-            { echo "::error::$VERSION is not v and SemVer without build metadata"; exit 1; }
-          others=$( {
-            cargo metadata --locked --no-deps --format-version 1 | jq -r '.packages[] | "\(.name) \(.version)"'
-            echo "ui/package.json $(jq -r .version ui/package.json)"
-          } | grep -v " ${VERSION#v}\$" || true)
-          [[ -z "$others" ]] || { echo "::error::not at ${VERSION#v}:"; echo "$others"; exit 1; }
-          bun x zeabur-oss-release notes CHANGELOG.md "$VERSION" >/dev/null
-          if [[ "$GITHUB_EVENT_NAME" == push ]]; then
-            git merge-base --is-ancestor HEAD origin/main ||
-              { echo "::error::$VERSION is not on main"; exit 1; }
-          fi
+          versions=()
+          for version in $(cargo metadata --locked --no-deps --format-version 1 | jq -r '.packages[].version' | sort -u) \
+            "$(jq -r .version ui/package.json)"; do
+            versions+=(--version "$version")
+          done
+          bun x zeabur-oss-release check-tag "$VERSION" --changelog CHANGELOG.md "${versions[@]}" \
+            ${{ github.event_name != 'push' && '--rehearsal' || '' }}
 
   build:
     name: build (${{ matrix.arch }})
@@ -110,9 +104,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           image=ghcr.io/${GITHUB_REPOSITORY,,}:${VERSION#v}
-          if gh release view "$VERSION" --json isDraft --jq '.isDraft' | grep -qx false; then
-            echo "::error::release $VERSION is already published"; exit 1
-          fi
+          bun x zeabur-oss-release unpublished "$VERSION"
           crane auth login ghcr.io --username "$GITHUB_ACTOR" --password-stdin <<<"$GH_TOKEN"
           bun x zeabur-oss-release absent "$image"
           bun x zeabur-oss-release push-image --out published "$image" \
@@ -175,7 +167,7 @@ jobs:
         with:
           name: published
           path: published
-      - name: Make the release assets and their signed checksums
+      - name: Make the release assets
         run: |
           mkdir assets
           cp candidates/*/*.tar.gz candidates/*/*.cdx.json published/digests.txt assets/
@@ -184,15 +176,11 @@ jobs:
             zeabur-identityctl >"$RUNNER_TEMP/zeabur-identityctl"
           chmod +x "$RUNNER_TEMP/zeabur-identityctl"
           "$RUNNER_TEMP/zeabur-identityctl" resources >assets/resources.json
-          bun x zeabur-oss-release checksums assets
-      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+      - uses: zeabur-oss/.github/actions/release-draft@fe73a0c68d3ef4b7557f15f7987f59f555714788 # main
         with:
-          subject-checksums: assets/SHA256SUMS
-      # The draft is created with its files, never before: a published release takes no more files.
-      - name: Create the draft release with the assets
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: bun x zeabur-oss-release draft CHANGELOG.md "$VERSION" assets --name "Zeabur Identity" --docs https://oss.zeabur.com/docs/identity/
+          version: ${{ env.VERSION }}
+          name: Zeabur Identity
+          docs: https://oss.zeabur.com/docs/identity/
 
   verify:
     name: verify (${{ matrix.arch }})
@@ -210,18 +198,12 @@ jobs:
       contents: write
       attestations: read
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: zeabur-oss/.github/actions/release-verify@fe73a0c68d3ef4b7557f15f7987f59f555714788 # main
         with:
-          persist-credentials: false
-      - uses: zeabur-oss/.github/actions/ci-setup@f3ae87d7ef3c37447432e398200d200b546dfa46 # main
-      - name: Install the packages
-        run: bun install --frozen-lockfile
-      - name: Download the draft's assets and verify them, the image and its SBOM, and smoke them
+          version: ${{ env.VERSION }}
+      - name: Verify the image and its SBOM, and smoke them
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_SOURCE_REPOSITORY: ${{ github.repository }}
           RELEASE_SOURCE_REF: refs/tags/${{ env.VERSION }}
-        run: |
-          gh release download "$VERSION" --repo "$GITHUB_REPOSITORY" --dir downloaded
-          bun x zeabur-oss-release verify-assets downloaded
-          scripts/release-verify.sh "$VERSION" downloaded
+        run: scripts/release-verify.sh "$VERSION" downloaded
