@@ -1752,7 +1752,7 @@ mod tests {
         let github = json!({"clientId": "Iv1.abc", "github": {}});
         let keycloak = json!({"clientId": "identity", "openid": {
             "issuer": "https://sso.example/realms/dev", "displayName": "Keycloak",
-            "scopes": ["profile"]}});
+            "scopes": ["profile"], "mfa": "Enforced"}});
         let unnamed = json!({"clientId": "identity", "openid": {"issuer": "https://sso.example"}});
         for (name, spec) in [
             ("github", &github),
@@ -1806,6 +1806,7 @@ mod tests {
             ),
             ("scope with a space", "j", openid("scopes", json!(["a b"]))),
             ("empty display name", "k", openid("displayName", json!(""))),
+            ("mfa in lowercase", "m", openid("mfa", json!("enforced"))),
             (
                 "empty client ID",
                 "l",

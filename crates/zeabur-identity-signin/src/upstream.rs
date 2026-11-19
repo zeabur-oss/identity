@@ -26,8 +26,14 @@
 //! 4. The link names the user's UID, as an enrolment link does. The change is logged and recorded
 //!    as an `AccountLinked` event on the user.
 //!
-//! Upstream sign-ins carry no `amr` value (RFC 8176 defines none for federation). Admin accounts
-//! sign in with a passkey only, so they can neither sign in nor link an account here.
+//! An upstream sign-in carries no `amr` value: RFC 8176 defines none for federation, and Zeabur
+//! Identity does not read the provider's `amr`. The one exception is a provider that the operator
+//! marks `mfa: Enforced` (see [`Provider::enforcing_mfa`]): its sign-ins carry `amr = ["mfa"]`,
+//! "Multiple-factor authentication" ([RFC 8176] §2). The value rests on the operator's statement
+//! alone. The token endpoint reads it back to decide again whether an admin account may use the
+//! sign-in (`zeabur_identity_core::account::allows`). Under `admin-sign-in: two-factor`, an admin
+//! account signs in and links accounts only through such a provider. Under `passkey` and
+//! `device-bound-passkey`, it does neither through any provider.
 //!
 //! A link names its `User` by UID as well as by name. After a delete, a new object can have the
 //! same name, but every object gets a distinct UID ([Object Names and IDs]). Thus a link left
@@ -45,6 +51,7 @@
 //! sends it. Such a provider gets no protection from this check.
 //!
 //! [Object Names and IDs]: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/
+//! [RFC 8176]: https://www.rfc-editor.org/rfc/rfc8176.html#section-2
 //! [RFC 9207]: https://www.rfc-editor.org/rfc/rfc9207.html#section-2.4
 
 pub mod http;
@@ -63,7 +70,6 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::{Deserialize, Serialize};
 use zeabur_identity_api::upstream::{Issuer, ProviderId};
-use zeabur_identity_core::account::Method;
 use zeabur_identity_core::clock::{Clock, UnixTime};
 use zeabur_identity_core::crypto::{ct_eq, hex, random, sha256};
 use zeabur_identity_oauth::authorize::Authentication;
@@ -240,7 +246,7 @@ where
             // leaves.
             let (_, user) =
                 valid_setup_token(&sign_in.setup, &sign_in.oauth.directory, token, now).await?;
-            check_account(&sign_in.oauth.directory, &user, Method::Upstream).await?;
+            check_account(&sign_in.oauth.directory, &user, provider.method()).await?;
         } else {
             // Signing in: there must be a pending request.
             cookie(&headers, FLOW_COOKIE)
@@ -354,7 +360,7 @@ where
             .provider(&request.provider)
             .ok_or(UNKNOWN_PROVIDER)?;
         require_fresh(&account, now)?;
-        check_account(&sign_in.oauth.directory, &account.user, Method::Upstream).await?;
+        check_account(&sign_in.oauth.directory, &account.user, provider.method()).await?;
         let bound = Bound {
             session: account.token.name().to_owned(),
             user: account.user.name.clone(),
@@ -377,6 +383,7 @@ where
 async fn finish_account_link<D, G, C, K, S>(
     sign_in: &SignIn<D, G, C, K, S>,
     account: &Account,
+    provider: &Provider,
     external: NewExternal,
     already_linked: bool,
     requester: &Requester,
@@ -396,7 +403,7 @@ where
             None,
         ));
     }
-    refuse_admin(&sign_in.oauth.directory, &account.user).await?;
+    refuse_admin(&sign_in.oauth.directory, &account.user, provider).await?;
     match sign_in.credentials.link(&external).await {
         Ok(CreateCredential::Created) => {}
         Ok(CreateCredential::AlreadyExists) => {
@@ -441,9 +448,13 @@ fn failure(lang: Lang, reason: ErrorReason, detail: &str) -> Response {
 /// Why a callback failed: the audit `reason`, what the page says, and a note for the details.
 type Failure = (&'static str, ErrorReason, Option<String>);
 
-/// Refuses an admin account when the settings do not let admins sign in upstream.
-async fn refuse_admin<D: Directory>(directory: &D, user: &User) -> Result<(), Failure> {
-    check_account(directory, user, Method::Upstream)
+/// Refuses an admin account when the settings do not let admins sign in through `provider`.
+async fn refuse_admin<D: Directory>(
+    directory: &D,
+    user: &User,
+    provider: &Provider,
+) -> Result<(), Failure> {
+    check_account(directory, user, provider.method())
         .await
         .map_err(|problem| match problem.kind {
             "admin-needs-passkey" | "admin-needs-two-factor" | "device-passkey-needed" => {
@@ -616,7 +627,7 @@ where
                 user: account.user.name.clone(),
                 user_subject: account.user.subject.clone(),
             };
-            return finish_account_link(sign_in, &account, external, linked.is_some(), &requester, now)
+            return finish_account_link(sign_in, &account, &provider, external, linked.is_some(), &requester, now)
                 .await;
         }
         let Some(token) = pending.link else {
@@ -639,13 +650,13 @@ where
             if user.disabled {
                 return Err(("user_unavailable", ErrorReason::UserUnavailable, None));
             }
-            refuse_admin(&oauth.directory, user).await?;
+            refuse_admin(&oauth.directory, user, &provider).await?;
             let flow = cookie(&headers, FLOW_COOKIE).ok_or(("missing_flow", ErrorReason::RequestExpired, None))?;
             let authentication = Authentication {
                 user: user.name.clone(),
                 subject: user.subject.clone(),
                 auth_time: now,
-                amr: Vec::new(),
+                amr: provider.amr(),
                 credential: Some(name.clone()),
                 user_verified: false,
                 device_bound: false,
@@ -677,7 +688,7 @@ where
             .await
             .map_err(|_problem| ("invalid_setup", ErrorReason::SetupLinkInvalid, None))?;
         link_user = Some(stored.user.clone());
-        refuse_admin(&oauth.directory, &user).await?;
+        refuse_admin(&oauth.directory, &user, &provider).await?;
         let user_subject = user.subject.clone();
         match sign_in.setup.consume(&stored).await {
             Ok(Consume::Consumed) => {}

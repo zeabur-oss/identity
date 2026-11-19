@@ -109,6 +109,24 @@ pub struct OpenID {
         inner(length(min = 1, max = MAX_SCOPE), regex(pattern = SCOPE_PATTERN))
     )]
     pub scopes: Option<Vec<String>>,
+
+    /// Whether the provider always asks for a second factor. Set `Enforced` only for a provider
+    /// you run and configure that way, for example a company Entra ID or Keycloak. Zeabur
+    /// Identity does not check it. Under `admin-sign-in: two-factor`, admin accounts may sign in
+    /// through an `Enforced` provider.
+    #[serde(default)]
+    pub mfa: Mfa,
+}
+
+/// Whether an OpenID provider always asks for a second factor, as the operator states it.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq, JsonSchema)]
+pub enum Mfa {
+    /// Nothing is known. Admin accounts sign in through the provider only under
+    /// `admin-sign-in: any`.
+    #[default]
+    Unknown,
+    /// The operator states that the provider asks every sign-in for a second factor.
+    Enforced,
 }
 
 /// github.com. It has nothing to set.
@@ -139,6 +157,35 @@ mod tests {
         };
         assert_eq!(openid.issuer, "https://accounts.google.com");
         assert_eq!(openid.display_name, None);
+        assert_eq!(openid.mfa, Mfa::Unknown);
+    }
+
+    #[test]
+    fn mfa_is_unknown_unless_set_to_enforced() {
+        let read = |mfa: serde_json::Value| {
+            serde_json::from_value::<UpstreamProviderSpec>(json!({
+                "clientId": "c",
+                "openid": {"issuer": "https://login.example.com", "mfa": mfa},
+            }))
+        };
+        let Ok(UpstreamProviderSpec {
+            kind: UpstreamKind::OpenID(openid),
+            ..
+        }) = read(json!("Enforced"))
+        else {
+            panic!("Enforced was refused");
+        };
+        assert_eq!(openid.mfa, Mfa::Enforced);
+        for bad in [json!("enforced"), json!(true), json!("Required")] {
+            assert!(read(bad.clone()).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn github_has_no_mfa_field() {
+        let spec = json!({"clientId": "Iv1.abc", "github": {"mfa": "Enforced"}});
+        let github: UpstreamProviderSpec = serde_json::from_value(spec).unwrap();
+        assert_eq!(github.kind, UpstreamKind::GitHub(GitHub {}));
     }
 
     #[test]

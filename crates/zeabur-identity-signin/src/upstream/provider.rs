@@ -40,6 +40,7 @@ use axum::http::{Method, Request, StatusCode, header};
 use serde::Deserialize;
 use thiserror::Error;
 use zeabur_identity_api::upstream::{ExternalId, InvalidValue, Issuer, ProviderId, Subject};
+use zeabur_identity_core::account;
 use zeabur_identity_core::clock::UnixTime;
 use zeabur_identity_keys::Algorithm;
 use zeabur_identity_keys::verify::{VerificationKey, VerifyError, parse_jwk_set, verify_compact};
@@ -59,6 +60,11 @@ const LEEWAY: u64 = 60;
 pub const GOOGLE_ISSUER: &str = "https://accounts.google.com";
 /// The issuer of accounts linked through a `GitHub` provider.
 pub const GITHUB_ISSUER: &str = "https://github.com";
+/// The `amr` value of a sign-in through a provider marked `mfa: Enforced`: "Multiple-factor
+/// authentication" ([RFC 8176] §2).
+///
+/// [RFC 8176]: https://www.rfc-editor.org/rfc/rfc8176.html#section-2
+pub const UPSTREAM_MFA_AMR: &str = "mfa";
 
 /// The client secret of a provider: fixed, or read at each code exchange, so that a rotated
 /// secret is used at the next sign-in.
@@ -103,6 +109,8 @@ pub struct Descriptor {
     pub label: String,
     /// The icon on its button (see `zeabur-identity-ui`'s `templates/icons.html`).
     pub icon: &'static str,
+    /// How [`account::allows`] sees a sign-in through it.
+    pub method: account::Method,
 }
 
 impl Descriptor {
@@ -221,6 +229,7 @@ pub struct Provider {
     client_id: String,
     client_secret: ClientSecret,
     protocol: Protocol,
+    mfa_enforced: bool,
 }
 
 impl std::fmt::Debug for Provider {
@@ -230,6 +239,7 @@ impl std::fmt::Debug for Provider {
             .field("label", &self.label)
             .field("issuer", &self.issuer)
             .field("client_id", &self.client_id)
+            .field("mfa_enforced", &self.mfa_enforced)
             .finish_non_exhaustive()
     }
 }
@@ -353,6 +363,7 @@ impl Provider {
             client_id,
             client_secret,
             protocol: Protocol::GitHub(endpoints),
+            mfa_enforced: false,
         })
     }
 
@@ -377,6 +388,36 @@ impl Provider {
                 scopes,
                 cache: OpenIdCache::default(),
             },
+            mfa_enforced: false,
+        }
+    }
+
+    /// The same provider, marked by the operator as one that always asks for a second factor.
+    /// Only OpenID providers can be marked: an operator does not run github.com.
+    #[must_use]
+    pub const fn enforcing_mfa(mut self) -> Self {
+        if matches!(self.protocol, Protocol::OpenId { .. }) {
+            self.mfa_enforced = true;
+        }
+        self
+    }
+
+    /// How [`account::allows`] sees a sign-in through it.
+    #[must_use]
+    pub const fn method(&self) -> account::Method {
+        account::Method::Upstream {
+            mfa_enforced: self.mfa_enforced,
+        }
+    }
+
+    /// The `amr` of a sign-in through it: `mfa` when it is marked as enforcing a second factor,
+    /// else nothing (see the [module documentation](super)).
+    #[must_use]
+    pub fn amr(&self) -> Vec<String> {
+        if self.mfa_enforced {
+            vec![UPSTREAM_MFA_AMR.to_owned()]
+        } else {
+            Vec::new()
         }
     }
 
@@ -393,6 +434,7 @@ impl Provider {
             issuer: self.issuer.clone(),
             label: self.label.clone(),
             icon,
+            method: self.method(),
         }
     }
 

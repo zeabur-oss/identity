@@ -555,7 +555,9 @@ async fn exchange_code<D: Directory, G: GrantStore, C: Clock>(
 
 /// Refuses a user whose account type no longer allows how they signed in (see
 /// [`account::allows`]). `amr` contains `swk` only after a passkey sign-in, `pwd` only after a
-/// password sign-in, and `mfa` with `pwd` only when a second factor followed the password.
+/// password sign-in, and `mfa` with `pwd` only when a second factor followed the password. An
+/// upstream sign-in has neither `swk` nor `pwd`, and has `mfa` only through a provider the
+/// operator marks as enforcing a second factor. A missing `mfa` counts as no second factor.
 fn check_policy(
     settings: Settings,
     user: &User,
@@ -570,7 +572,9 @@ fn check_policy(
             second_factor: has("mfa"),
         }
     } else {
-        Method::Upstream
+        Method::Upstream {
+            mfa_enforced: has("mfa"),
+        }
     };
     account::allows(user.account_type, settings, method).map_err(|refusal| {
         tracing::warn!(

@@ -385,8 +385,8 @@ pub struct AccountView<'a> {
     pub linked: &'a [LinkedRow<'a>],
     /// The upstream providers the user may link: those with no account of the user linked yet.
     pub providers: &'a [ProviderButton<'a>],
-    /// An admin account, which cannot link upstream accounts.
-    pub admin: bool,
+    /// Some providers are left out of `providers` because the account is an admin account.
+    pub providers_held_back: bool,
     /// The user's password, if they have one.
     pub password: Option<PasswordView>,
     /// The user can confirm with a passkey, which adding a passkey and linking or unlinking an
@@ -461,10 +461,9 @@ struct AccountItems<'a> {
     username: &'a str,
     passkeys: Vec<PasskeyItem<'a>>,
     linked: Vec<LinkedItem<'a>>,
-    providers: &'a [ProviderButton<'a>],
-    /// The providers offered for linking: none for an admin account.
+    /// The providers offered for linking.
     unlinked: &'a [ProviderButton<'a>],
-    admin: bool,
+    providers_held_back: bool,
     password: Option<PasswordView>,
     passkey_confirms: bool,
     this_session: Option<SessionItem<'a>>,
@@ -525,9 +524,8 @@ pub fn account_page(lang: Lang, view: Option<AccountView<'_>>) -> Response {
                 linked: l.linked.map(Date::new),
             })
             .collect(),
-        providers: view.providers,
-        unlinked: if view.admin { &[] } else { view.providers },
-        admin: view.admin,
+        unlinked: view.providers,
+        providers_held_back: view.providers_held_back,
         password: view.password,
         passkey_confirms: view.passkey_confirms,
         this_session: view

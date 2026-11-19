@@ -283,7 +283,7 @@ async fn account(Path(state): Path<String>, RawQuery(q): RawQuery, h: HeaderMap)
         } else {
             &MANY_UNLINKED
         },
-        admin,
+        providers_held_back: admin,
         password: admin.then_some(PasswordView {
             authenticator: true,
         }),

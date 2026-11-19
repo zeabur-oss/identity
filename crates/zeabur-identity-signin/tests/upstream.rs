@@ -21,7 +21,7 @@ mod tests {
     use zeabur_identity_api::client::ClientType;
     use zeabur_identity_api::token_hash;
     use zeabur_identity_api::upstream::{ExternalId, Issuer, ProviderId, Subject};
-    use zeabur_identity_core::account::AccountType;
+    use zeabur_identity_core::account::{AccountType, AdminSignIn, Settings};
     use zeabur_identity_core::clock::{Clock, SystemClock};
     use zeabur_identity_core::config::BaseUrl;
     use zeabur_identity_core::crypto::{Sealer, random, sha256};
@@ -895,6 +895,135 @@ mod tests {
         assert_eq!(
             started.json()["type"],
             "urn:zeabur-identity:problem:admin-needs-two-factor"
+        );
+    }
+
+    /// Marks the Google provider of the harness as one that always asks for a second factor.
+    fn enforce_mfa_at_google(h: &Harness) {
+        registry(h).replace(vec![
+            Arc::new(github_provider(ClientSecret::Fixed("gh-secret".into()))),
+            Arc::new(google_provider(GOOGLE_ISSUER).enforcing_mfa()),
+        ]);
+    }
+
+    fn set_level(h: &Harness, level: AdminSignIn) {
+        h.service.sign_in.oauth.directory.put_settings(Settings {
+            admin_sign_in: level,
+            ..Settings::default()
+        });
+    }
+
+    /// The `amr` claim of the access token from the code in `location`.
+    async fn amr_after(h: &Harness, location: &str) -> Value {
+        let tokens = exchange(h, location).await.json();
+        let payload = tokens["access_token"]
+            .as_str()
+            .unwrap()
+            .split('.')
+            .nth(1)
+            .unwrap();
+        let claims: Value =
+            serde_json::from_slice(&URL_SAFE_NO_PAD.decode(payload).unwrap()).unwrap();
+        claims.get("amr").cloned().unwrap_or(Value::Null)
+    }
+
+    #[tokio::test]
+    async fn an_admin_signs_in_through_a_provider_marked_as_enforcing_a_second_factor() {
+        let h = harness().await;
+        enforce_mfa_at_google(&h);
+        link(&h, Kind::Google, GOOGLE_SUB, "alice").await;
+        link(&h, Kind::GitHub, &GITHUB_ID.to_string(), "alice").await;
+        make_admin(&h, "alice").await;
+        let reply = sign_in(&h, "google", "code-1").await;
+        assert_eq!(reply.status, StatusCode::SEE_OTHER, "{}", reply.body);
+        assert_audit(
+            &reply,
+            "auth.sign_in",
+            None,
+            Some("alice"),
+            Some("uid-alice"),
+        );
+        let location = reply.headers[header::LOCATION].to_str().unwrap();
+        assert_eq!(amr_after(&h, location).await, json!(["mfa"]));
+
+        // GitHub is not marked: still refused.
+        let reply = sign_in(&h, "github", "code-2").await;
+        assert!(reply.body.contains("admin_needs_passkey"), "{}", reply.body);
+
+        // `passkey` and `device-bound-passkey` refuse every provider.
+        for level in [AdminSignIn::Passkey, AdminSignIn::DeviceBoundPasskey] {
+            set_level(&h, level);
+            let reply = sign_in(&h, "google", "code-3").await;
+            assert!(reply.body.contains("admin_needs_passkey"), "{level:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_regular_account_through_a_marked_provider_gets_mfa_and_through_others_nothing() {
+        let h = harness().await;
+        link(&h, Kind::Google, GOOGLE_SUB, "alice").await;
+        let reply = sign_in(&h, "google", "code-1").await;
+        let location = reply.headers[header::LOCATION].to_str().unwrap();
+        assert_eq!(amr_after(&h, location).await, Value::Null);
+
+        enforce_mfa_at_google(&h);
+        let reply = sign_in(&h, "google", "code-2").await;
+        let location = reply.headers[header::LOCATION].to_str().unwrap();
+        assert_eq!(amr_after(&h, location).await, json!(["mfa"]));
+    }
+
+    /// The callback reads the provider as it is then: a mark removed while the admin is at the
+    /// provider refuses the sign-in.
+    #[tokio::test]
+    async fn an_admin_is_refused_when_the_mark_is_removed_during_sign_in() {
+        let h = harness().await;
+        enforce_mfa_at_google(&h);
+        link(&h, Kind::Google, GOOGLE_SUB, "alice").await;
+        make_admin(&h, "alice").await;
+        let (query, cookies) = started_sign_in(&h, "google").await;
+        registry(&h).replace(vec![Arc::new(google_provider(GOOGLE_ISSUER))]);
+        let reply = callback(&h, "google", &query, &cookies).await;
+        assert!(reply.body.contains("admin_needs_passkey"), "{}", reply.body);
+        assert!(!reply.headers.contains_key(header::LOCATION));
+    }
+
+    #[tokio::test]
+    async fn an_admin_links_only_marked_providers_from_the_account_page() {
+        let h = harness().await;
+        enforce_mfa_at_google(&h);
+        make_admin(&h, "dana").await;
+        let session = account_session(&h, "dana", 0).await;
+        let page = account_page(&h, &session).await;
+        assert!(page.contains(r#"data-link="google""#), "{page}");
+        assert!(!page.contains(r#"data-link="github""#), "{page}");
+        assert!(page.contains(Lang::En.messages().admin_providers_held_back));
+
+        let (query, upstream) = start_account_link(&h, &session, "google", "code-1").await;
+        let reply = callback(
+            &h,
+            "google",
+            &query,
+            &format!("{upstream}; {}", session.cookie),
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::SEE_OTHER, "{}", reply.body);
+        assert_eq!(
+            linked_to(&h, Kind::Google, GOOGLE_SUB).await.as_deref(),
+            Some("dana")
+        );
+
+        // Under `passkey`, the page offers nothing and the start is refused.
+        set_level(&h, AdminSignIn::Passkey);
+        let reply = account_post(
+            &h,
+            "/account/links/start",
+            &json!({ "provider": "google" }),
+            &session.cookie,
+        )
+        .await;
+        assert_eq!(
+            reply.json()["type"],
+            "urn:zeabur-identity:problem:admin-needs-passkey"
         );
     }
 

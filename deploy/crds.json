@@ -1014,6 +1014,15 @@
                               }
                             ]
                           },
+                          "mfa": {
+                            "default": "Unknown",
+                            "description": "Whether the provider always asks for a second factor. Set `Enforced` only for a provider\nyou run and configure that way, for example a company Entra ID or Keycloak. Zeabur\nIdentity does not check it. Under `admin-sign-in: two-factor`, admin accounts may sign in\nthrough an `Enforced` provider.",
+                            "enum": [
+                              "Unknown",
+                              "Enforced"
+                            ],
+                            "type": "string"
+                          },
                           "scopes": {
                             "description": "Scopes to request in addition to `openid`.",
                             "items": {

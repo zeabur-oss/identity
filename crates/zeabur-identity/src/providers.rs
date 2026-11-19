@@ -19,7 +19,7 @@ use kube::ResourceExt as _;
 use kube::api::Api;
 use zeabur_identity_api::upstream::{Issuer, ProviderId};
 use zeabur_identity_api::upstream_provider::{
-    MAX_DISPLAY_NAME, UpstreamKind, UpstreamProvider, UpstreamProviderSpec,
+    MAX_DISPLAY_NAME, Mfa, UpstreamKind, UpstreamProvider, UpstreamProviderSpec,
 };
 use zeabur_identity_signin::upstream::provider::{
     ClientSecret, GitHubEndpoints, Provider, Providers,
@@ -124,14 +124,12 @@ fn build(
             if let Some(bad) = scopes.iter().find(|scope| !is_scope(scope)) {
                 return Err(format!("scope {bad:?} is not a scope token"));
             }
-            Ok(Provider::openid(
-                id,
-                label,
-                issuer,
-                scopes,
-                spec.client_id.clone(),
-                secret,
-            ))
+            let provider =
+                Provider::openid(id, label, issuer, scopes, spec.client_id.clone(), secret);
+            Ok(match openid.mfa {
+                Mfa::Enforced => provider.enforcing_mfa(),
+                Mfa::Unknown => provider,
+            })
         }
     }
 }
