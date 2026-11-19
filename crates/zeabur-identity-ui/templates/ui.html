@@ -92,7 +92,7 @@
 {#- A collapsed disclosure; the call body is its content. -#}
 {%- macro disclosure(summary, id = "", center = false) -%}
 <details data-slot="disclosure"{% if !id.is_empty() %} id="{{ id }}"{% endif %} class="group/disclosure flex flex-col text-[0.8125rem] leading-5">
-  <summary class="{% if center %}self-center {% else %}self-start {% endif %}inline-flex cursor-pointer list-none items-center gap-1.5 rounded-md text-secondary select-none hover:text-main [&::-webkit-details-marker]:hidden">
+  <summary class="{% if center %}self-center {% else %}self-start {% endif %}inline-flex min-h-6 cursor-pointer list-none items-center gap-1.5 rounded-md text-secondary select-none hover:text-main [&::-webkit-details-marker]:hidden">
     {{- icons::icon("CaretRight", "size-3.5 transition-transform duration-150 group-open/disclosure:rotate-90 motion-reduce:transition-none") }}{{ summary -}}
   </summary>
   <div class="mt-2 flex flex-col gap-2 text-pretty text-secondary">{{ caller() }}</div>

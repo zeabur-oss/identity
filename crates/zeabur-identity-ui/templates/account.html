@@ -144,12 +144,12 @@
                 {%- endif %}
               </div>
             </div>
-            {% call ui::dialog("rename", "rename-title-" ~ loop.index, m.rename, m.save, m.cancel) %}
-            <label class="sr-only" for="label-{{ loop.index }}">{{ m.setup_label }}</label>
-            <input id="label-{{ loop.index }}" name="label" type="text" maxlength="64" required autofocus autocomplete="off" value="{{ p.label.unwrap_or_default() }}" class="{{ ds::input() }}">
+            {% call ui::dialog("rename", "rename-title-" ~ p.name, m.rename, m.save, m.cancel) %}
+            <label class="sr-only" for="label-{{ p.name }}">{{ m.setup_label }}</label>
+            <input id="label-{{ p.name }}" name="label" type="text" maxlength="64" required autofocus autocomplete="off" value="{{ p.label.unwrap_or_default() }}" class="{{ ds::input() }}">
             {%- endcall %}
             {%- if view.passkeys.len() > 1 %}
-            {% call ui::dialog("confirm", "remove-title-" ~ loop.index, m.remove_title, m.remove, m.cancel, "destructive", "Fingerprint") %}
+            {% call ui::dialog("confirm", "remove-title-" ~ p.name, m.remove_title, m.remove, m.cancel, "destructive", "Fingerprint") %}
             <p data-slot="dialog-description" class="{{ ds::dialog_description() }} text-pretty">{{ m.remove_body }}</p>
             {%- endcall %}
             {%- endif %}
@@ -216,7 +216,7 @@
           {%- endif %}
         </div>
         {%- if view.passkey_confirms %}
-        {% call ui::dialog("confirm", "unlink-title-" ~ loop.index, m.unlink_title, m.remove, m.cancel, "destructive", "Fingerprint") %}
+        {% call ui::dialog("confirm", "unlink-title-" ~ l.name, m.unlink_title, m.remove, m.cancel, "destructive", "Fingerprint") %}
         <p data-slot="dialog-description" class="{{ ds::dialog_description() }} text-pretty">{{ m.unlink_body }}</p>
         {%- endcall %}
         {%- endif %}
