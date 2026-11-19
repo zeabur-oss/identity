@@ -44,7 +44,7 @@ Run what CI runs. Each job in `.github/workflows/ci.yml` runs `scripts/ci/<job>.
 `nix develop`, so a job runs the same on your machine:
 
 ```sh
-nix develop -c scripts/ci/lint.sh         # format, clippy, docs, cargo-deny and unsafe-report in a row
+nix develop -c scripts/ci/lint.sh         # format, clippy, docs, cargo-deny, unsafe-report, levels
 nix develop -c scripts/ci/test.sh
 nix develop -c scripts/ci/ui.sh
 nix develop -c scripts/ci/kubernetes.sh   # k3s with Docker: see "Disposable k3d cluster" below

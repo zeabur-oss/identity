@@ -20,6 +20,7 @@ cargo_checks() {
   bun install --frozen-lockfile
   # Writes target/unsafe-report.md, which the workflow uploads.
   node_modules/.bin/zeabur-oss-unsafe-report zeabur-identity zeabur-identityctl
+  node_modules/.bin/zeabur-oss-levels
 }
 
 case "${1:-all}" in

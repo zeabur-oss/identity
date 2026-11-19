@@ -9,6 +9,23 @@ rust-version = "1.99"
 license = "Apache-2.0"
 publish = false
 
+[workspace.metadata.levels]
+# A crate depends (normal and build dependencies) only on workspace crates of a lower level,
+# checked by zeabur-oss-levels. The test crates are dev-dependencies only.
+zeabur-identity-api = 0
+zeabur-identity-core = 0
+zeabur-identity-tls = 0
+zeabur-identity-keys = 1
+zeabur-identity-ui = 1
+zeabur-identity-store = 2
+zeabur-identity-k8s = 3
+zeabur-identity-oauth = 3
+zeabur-identity-signin = 4
+zeabur-identityctl = 4
+zeabur-identity = 5
+zeabur-identity-test-support = 6
+zeabur-identity-e2e = 6
+
 [workspace.dependencies]
 # Workspace crates, levelled from the bottom up.
 zeabur-identity-api = { path = "crates/zeabur-identity-api" }
