@@ -8,6 +8,10 @@
 //! A user with a TOTP authenticator also enters a code, or a recovery code, after the password
 //! (see [`zeabur_identity_core::totp`]). A wrong code counts as a failed sign-in. The setup link
 //! asks for an authenticator when the account settings need a second factor for the user.
+//!
+//! On the account page, a signed-in user changes or removes their password with the current one,
+//! checked and counted as at sign-in. A change keeps the authenticator, and the codes already used
+//! stay used. A removal deletes the authenticator with the password.
 
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -27,11 +31,14 @@ use zeabur_identity_core::totp::{RecoveryKey, Secret};
 use zeabur_identity_oauth::authorize::Authentication;
 use zeabur_identity_oauth::endpoints::{FLOW_COOKIE, complete_authorization};
 use zeabur_identity_store::{
-    Consume, CredentialStore, Directory, GrantStore, PasswordState, Saved, SetupStore,
-    StoredPassword, StoredTotp, User,
+    Consume, CredentialStore, Directory, GrantStore, PasswordRemoval, PasswordState, Saved,
+    SetupStore, StoredPassword, StoredTotp, User,
 };
 
-use crate::account::{Audit, record};
+use crate::account::{
+    Audit, LAST_CREDENTIAL, done, log_outcome, record, revoke_all_but, signed_in, start_session,
+    with_cookie,
+};
 use crate::device::Requester;
 use crate::problem::Problem;
 use crate::{
@@ -90,6 +97,18 @@ const ENROL_CODE_FAILED: Problem = Problem::new(
     StatusCode::UNPROCESSABLE_ENTITY,
     "code-failed",
     "This code does not match. Enter the current code from your authenticator app.",
+);
+const CURRENT_WRONG: Problem = Problem::new(
+    StatusCode::FORBIDDEN,
+    "current-password-wrong",
+    "This is not your current password.",
+);
+const NO_PASSWORD: Problem =
+    Problem::new(StatusCode::NOT_FOUND, "not-found", "You have no password.");
+const PASSWORD_CONFLICT: Problem = Problem::new(
+    StatusCode::CONFLICT,
+    "password-conflict",
+    "Your password changed in the meantime. Reload and try again.",
 );
 const BUSY: Problem = Problem::new(
     StatusCode::SERVICE_UNAVAILABLE,
@@ -333,11 +352,15 @@ impl From<Problem> for Failure {
 }
 
 impl Failure {
-    const fn kind(&self) -> &'static str {
+    const fn problem(&self) -> Problem {
         match self {
-            Self::Problem(problem) | Self::Retry(problem, _) => problem.kind,
-            Self::Weak(_) => PASSWORD_WEAK.kind,
+            Self::Problem(problem) | Self::Retry(problem, _) => *problem,
+            Self::Weak(_) => PASSWORD_WEAK,
         }
+    }
+
+    const fn kind(&self) -> &'static str {
+        self.problem().kind
     }
 
     fn respond(self) -> Response {
@@ -477,6 +500,44 @@ where
     check_request(headers, service.oauth.issuer.as_str())?;
     let request: SignInRequest = parse(body)?;
     let flow = cookie(headers, FLOW_COOKIE).ok_or(NO_REQUEST)?;
+    let authentication = authenticate(service, headers, &request, identity).await?;
+    let subject = authentication.subject.clone();
+    let location =
+        complete_authorization(&service.oauth, flow, authentication).map_err(|error| {
+            tracing::warn!(
+                reason = NO_REQUEST.kind,
+                ?error,
+                "password authorization failed"
+            );
+            NO_REQUEST
+        })?;
+    let mut response = json(
+        StatusCode::OK,
+        &SignedIn {
+            redirect_to: location,
+        },
+    );
+    service.passwords.remember(&mut response, headers, &subject);
+    crate::clear_cookie(&mut response, FLOW_COOKIE, "Lax");
+    Ok(response)
+}
+
+/// Checks a username, a password and, for a user with an authenticator, a code. Every password
+/// sign-in uses it: an unknown user and a held browser get the answer of a wrong password, and a
+/// wrong password or code counts against this browser.
+async fn authenticate<D, G, C, K, S>(
+    service: &SignIn<D, G, C, K, S>,
+    headers: &HeaderMap,
+    request: &SignInRequest,
+    identity: &mut Option<User>,
+) -> Result<Authentication, Failure>
+where
+    D: Directory,
+    G: GrantStore,
+    C: Clock,
+    K: CredentialStore,
+    S: SetupStore,
+{
     let entered = Normalized::new(&request.password).ok_or(PASSWORD_FAILED)?;
     let now = service.oauth.now();
     let passwords = &service.passwords;
@@ -541,7 +602,7 @@ where
     let name = stored.name.clone();
     record_success(service, user, stored, rehashed, device, second).await?;
     let amr = second.map_or(&PASSWORD_AMR[..], SecondFactor::amr);
-    let authentication = Authentication {
+    Ok(Authentication {
         user: user.name.clone(),
         subject: user.subject.clone(),
         auth_time: now,
@@ -549,25 +610,46 @@ where
         credential: Some(name),
         user_verified: false,
         device_bound: false,
+    })
+}
+
+/// `POST /account/session/password`: signs in to the account page with a username and password.
+/// The session is not user-verified, so changes that need a fresh passkey still ask for one.
+pub(crate) async fn account_session<D, G, C, K, S>(
+    State(service): State<Shared<D, G, C, K, S>>,
+    requester: Requester,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response
+where
+    D: Directory,
+    G: GrantStore,
+    C: Clock,
+    K: CredentialStore,
+    S: SetupStore,
+{
+    let mut identity = None;
+    let mut audit = Audit {
+        requester: Some(&requester),
+        ..Audit::default()
     };
-    let location =
-        complete_authorization(&service.oauth, flow, authentication).map_err(|error| {
-            tracing::warn!(
-                reason = NO_REQUEST.kind,
-                ?error,
-                "password authorization failed"
-            );
-            NO_REQUEST
-        })?;
-    let mut response = json(
-        StatusCode::OK,
-        &SignedIn {
-            redirect_to: location,
-        },
-    );
-    passwords.remember(&mut response, headers, &user.subject);
-    crate::clear_cookie(&mut response, FLOW_COOKIE, "Lax");
-    Ok(response)
+    let result: Result<Response, Failure> = async {
+        check_request(&headers, service.oauth.issuer.as_str())?;
+        let request: SignInRequest = parse(&body)?;
+        let authentication = authenticate(&service, &headers, &request, &mut identity).await?;
+        audit.credential.clone_from(&authentication.credential);
+        let token = start_session(&service, &authentication).await?;
+        audit.session = Some(token.name().to_owned());
+        let mut response = json(StatusCode::OK, &serde_json::json!({}));
+        service
+            .passwords
+            .remember(&mut response, &headers, &authentication.subject);
+        Ok(with_cookie(response, &token))
+    }
+    .await;
+    let logged = result.as_ref().map(|_| ()).map_err(Failure::problem);
+    log_outcome("account.sign_in", identity.as_ref(), &audit, &logged);
+    result.unwrap_or_else(Failure::respond)
 }
 
 /// Clears this browser's count, marks the second factor used, and stores a stronger hash.
@@ -764,6 +846,18 @@ fn issuer_host(issuer: &str) -> String {
         .unwrap_or_default()
 }
 
+/// `entered` as a new password for `owner`, if it is long enough and not easy to guess: not common,
+/// and without the username, the display name or the issuer's host.
+fn strong(entered: &str, owner: &User, issuer: &str) -> Result<Normalized, Failure> {
+    let entered = Normalized::new(entered).ok_or(Failure::Weak(Weakness::TooLong))?;
+    let host = issuer_host(issuer);
+    let mut context: Vec<&str> = vec![&owner.username, "zeabur"];
+    context.extend(owner.display_name.as_deref());
+    context.extend(host.split('.'));
+    password::check(&entered, &context).map_err(Failure::Weak)?;
+    Ok(entered)
+}
+
 /// `POST /setup/password/options`: what setting a password with this setup link asks for.
 pub(crate) async fn set_up_options<D, G, C, K, S>(
     State(service): State<Shared<D, G, C, K, S>>,
@@ -889,12 +983,7 @@ where
         second_factor: enrolled.is_some(),
     };
     check_account(&service.oauth.directory, &owner, method).await?;
-    let entered = Normalized::new(&request.password).ok_or(Failure::Weak(Weakness::TooLong))?;
-    let host = issuer_host(service.oauth.issuer.as_str());
-    let mut context: Vec<&str> = vec![&owner.username, "zeabur"];
-    context.extend(owner.display_name.as_deref());
-    context.extend(host.split('.'));
-    password::check(&entered, &context).map_err(Failure::Weak)?;
+    let entered = strong(&request.password, &owner, service.oauth.issuer.as_str())?;
     let hash = passwords
         .run(move |hasher| hasher.hash(&entered))
         .await?
@@ -947,6 +1036,184 @@ where
     }
     passwords.remember(&mut response, headers, &owner.subject);
     Ok(response)
+}
+
+#[derive(Deserialize)]
+struct ChangeRequest {
+    current: String,
+    new: String,
+}
+
+#[derive(Deserialize)]
+struct RemoveRequest {
+    current: String,
+}
+
+/// The stored password of `user`, if `entered` is it. As at sign-in, a held browser is refused
+/// and a wrong password counts against this browser.
+async fn check_current<D, G, C, K, S>(
+    service: &SignIn<D, G, C, K, S>,
+    headers: &HeaderMap,
+    user: &User,
+    entered: &str,
+    now: UnixTime,
+) -> Result<StoredPassword, Failure>
+where
+    D: Directory,
+    G: GrantStore,
+    C: Clock,
+    K: CredentialStore,
+    S: SetupStore,
+{
+    let stored = service
+        .credentials
+        .password(user)
+        .await
+        .map_err(internal)?
+        .ok_or(NO_PASSWORD)?;
+    let passwords = &service.passwords;
+    let device = passwords.device(headers, &user.subject);
+    let device = device.as_deref();
+    if let Some(until) = stored.state.guesses.held(device, now) {
+        let seconds = until.as_secs().saturating_sub(now.as_secs()).max(1);
+        return Err(Failure::Retry(PASSWORD_HELD, seconds));
+    }
+    let entered = Normalized::new(entered).ok_or(CURRENT_WRONG)?;
+    let hash = stored.hash.clone();
+    let verdict = passwords
+        .run(move |hasher| hasher.verify(&entered, &hash))
+        .await?;
+    if verdict == Verdict::Mismatch {
+        update_state(&service.credentials, user, stored, |state| {
+            state.guesses.fail(device, now);
+            true
+        })
+        .await;
+        return Err(CURRENT_WRONG.into());
+    }
+    Ok(stored)
+}
+
+/// The authenticator of `stored` for a new password, whose state starts empty: the recovery codes
+/// not used yet, and no TOTP step up to the last one used.
+fn carried(totp: &StoredTotp, state: &PasswordState) -> StoredTotp {
+    StoredTotp {
+        secret: totp.secret.clone(),
+        recovery: totp
+            .recovery
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| !state.recovery_used.contains(index))
+            .map(|(_, hash)| hash.clone())
+            .collect(),
+        enrolled_step: state
+            .totp_last_step
+            .map_or(totp.enrolled_step, |last| last.max(totp.enrolled_step)),
+    }
+}
+
+/// `POST /account/password`: replaces the signed-in user's password.
+pub(crate) async fn change<D, G, C, K, S>(
+    State(service): State<Shared<D, G, C, K, S>>,
+    requester: Requester,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response
+where
+    D: Directory,
+    G: GrantStore,
+    C: Clock,
+    K: CredentialStore,
+    S: SetupStore,
+{
+    let now = service.oauth.now();
+    let mut user = None;
+    let mut audit = Audit {
+        requester: Some(&requester),
+        ..Audit::default()
+    };
+    let result: Result<Response, Failure> = async {
+        let request: ChangeRequest = parse(&body)?;
+        let account = signed_in(&service, &headers, now).await?;
+        audit.session = Some(account.token.name().to_owned());
+        let owner = user.insert(account.user);
+        let stored = check_current(&service, &headers, owner, &request.current, now).await?;
+        audit.credential = Some(stored.name.clone());
+        let entered = strong(&request.new, owner, service.oauth.issuer.as_str())?;
+        let hash = service
+            .passwords
+            .run(move |hasher| hasher.hash(&entered))
+            .await?
+            .map_err(internal)?;
+        let totp = stored.totp.as_ref().map(|t| carried(t, &stored.state));
+        match service
+            .credentials
+            .set_password(owner, &hash, totp.as_ref(), Some(&stored))
+            .await
+            .map_err(internal)?
+        {
+            Saved::Saved => {}
+            Saved::Conflict => return Err(PASSWORD_CONFLICT.into()),
+        }
+        audit.revoked = revoke_all_but(&service, owner, account.token.name()).await?;
+        record(&service, owner, "PasswordChanged", &audit, now).await;
+        let mut response = done(false, None);
+        service
+            .passwords
+            .remember(&mut response, &headers, &owner.subject);
+        Ok(response)
+    }
+    .await;
+    let logged = result.as_ref().map(|_| ()).map_err(Failure::problem);
+    log_outcome("account.password_changed", user.as_ref(), &audit, &logged);
+    result.unwrap_or_else(Failure::respond)
+}
+
+/// `POST /account/password/remove`: deletes the signed-in user's password and authenticator.
+pub(crate) async fn remove<D, G, C, K, S>(
+    State(service): State<Shared<D, G, C, K, S>>,
+    requester: Requester,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response
+where
+    D: Directory,
+    G: GrantStore,
+    C: Clock,
+    K: CredentialStore,
+    S: SetupStore,
+{
+    let now = service.oauth.now();
+    let mut user = None;
+    let mut audit = Audit {
+        requester: Some(&requester),
+        ..Audit::default()
+    };
+    let result: Result<Response, Failure> = async {
+        let request: RemoveRequest = parse(&body)?;
+        let account = signed_in(&service, &headers, now).await?;
+        audit.session = Some(account.token.name().to_owned());
+        let owner = user.insert(account.user);
+        let stored = check_current(&service, &headers, owner, &request.current, now).await?;
+        audit.credential = Some(stored.name.clone());
+        match service
+            .credentials
+            .remove_password(owner, &stored)
+            .await
+            .map_err(internal)?
+        {
+            PasswordRemoval::Removed => {}
+            PasswordRemoval::LastCredential => return Err(LAST_CREDENTIAL.into()),
+            PasswordRemoval::Conflict => return Err(PASSWORD_CONFLICT.into()),
+        }
+        audit.revoked = revoke_all_but(&service, owner, account.token.name()).await?;
+        record(&service, owner, "PasswordRemoved", &audit, now).await;
+        Ok(done(false, None))
+    }
+    .await;
+    let logged = result.as_ref().map(|_| ()).map_err(Failure::problem);
+    log_outcome("account.password_removed", user.as_ref(), &audit, &logged);
+    result.unwrap_or_else(Failure::respond)
 }
 
 #[cfg(test)]

@@ -633,6 +633,18 @@ pub enum Unlink {
     Conflict,
 }
 
+/// Outcome of [`CredentialStore::remove_password`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PasswordRemoval {
+    /// Deleted, with its authenticator and recovery codes.
+    Removed,
+    /// The user has no passkey or linked account, so it stays.
+    LastCredential,
+    /// The password or the user's other credentials changed since they were read. Nothing was
+    /// deleted. Retrying is safe.
+    Conflict,
+}
+
 /// A linked upstream account as the account page lists it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinkedSummary {
@@ -922,6 +934,15 @@ pub trait CredentialStore: Send + Sync + 'static {
         stored: &StoredPassword,
         state: &PasswordState,
     ) -> impl Future<Output = Result<Saved, StoreError>> + Send;
+
+    /// Deletes the password of `user`, with its authenticator, if it is still `stored` and the
+    /// user keeps a passkey or a linked account. A removal racing an unlink must never leave the
+    /// user with no credential.
+    fn remove_password(
+        &self,
+        user: &User,
+        stored: &StoredPassword,
+    ) -> impl Future<Output = Result<PasswordRemoval, StoreError>> + Send;
 }
 
 /// The pending setup token: who it is for, its hash and expiry, and the stored version that a
@@ -1314,6 +1335,42 @@ impl CredentialStore for MemoryCredentialStore {
             Some(_) | None => Saved::Conflict,
         };
         drop(passwords);
+        future::ready(Ok(outcome))
+    }
+
+    fn remove_password(
+        &self,
+        user: &User,
+        stored: &StoredPassword,
+    ) -> impl Future<Output = Result<PasswordRemoval, StoreError>> + Send {
+        // The same lock order as `unlink`.
+        let passkeys = self.passkeys.lock().unwrap_or_else(PoisonError::into_inner);
+        let externals = self
+            .externals
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let mut passwords = self
+            .passwords
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let others = passkeys
+            .values()
+            .any(|other| other.passkey.user == user.name)
+            || externals
+                .values()
+                .any(|(linked, ..)| linked.signs_in_as(user));
+        let name = password_credential_name(&user.subject);
+        let outcome = if passwords.get(&name).map(|p| p.version.as_str()) != Some(&stored.version) {
+            PasswordRemoval::Conflict
+        } else if !others {
+            PasswordRemoval::LastCredential
+        } else {
+            passwords.remove(&name);
+            PasswordRemoval::Removed
+        };
+        drop(passwords);
+        drop(externals);
+        drop(passkeys);
         future::ready(Ok(outcome))
     }
 }

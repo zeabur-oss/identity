@@ -532,6 +532,10 @@ mod tests {
             "\"last-credential\"",
             "\"admin-needs-passkey\"",
             "#notice=linked",
+            "/account/password",
+            "/account/password/remove",
+            "\"current-password-wrong\"",
+            "\"password-held\"",
         ] {
             assert!(account.contains(needle), "account.js: {needle}");
         }

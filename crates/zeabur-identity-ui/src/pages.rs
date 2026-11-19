@@ -352,6 +352,13 @@ pub struct LinkedRow<'a> {
     pub linked: Option<u64>,
 }
 
+/// The user's password on the account page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PasswordView {
+    /// Whether an authenticator app is asked for after the password.
+    pub authenticator: bool,
+}
+
 /// A session or app grant on the account page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SessionRow<'a> {
@@ -380,6 +387,11 @@ pub struct AccountView<'a> {
     pub providers: &'a [ProviderButton<'a>],
     /// An admin account, which cannot link upstream accounts.
     pub admin: bool,
+    /// The user's password, if they have one.
+    pub password: Option<PasswordView>,
+    /// The user can confirm with a passkey, which adding a passkey and linking or unlinking an
+    /// account need. False for a password sign-in by a user with no passkey.
+    pub passkey_confirms: bool,
     /// The user's sessions and app grants.
     pub sessions: &'a [SessionRow<'a>],
 }
@@ -451,6 +463,8 @@ struct AccountItems<'a> {
     linked: Vec<LinkedItem<'a>>,
     providers: &'a [ProviderButton<'a>],
     admin: bool,
+    password: Option<PasswordView>,
+    passkey_confirms: bool,
     sessions: Vec<SessionItem<'a>>,
 }
 
@@ -466,8 +480,8 @@ struct AccountPage<'a> {
 }
 
 /// Renders the account page: a sign-in button without `view`, else the user's passkeys, linked
-/// accounts and sessions. The linked accounts show only if the user has one or `providers` offers
-/// one.
+/// accounts, password and sessions. The linked accounts show only if the user has one or
+/// `providers` offers one.
 #[must_use]
 pub fn account_page(lang: Lang, view: Option<AccountView<'_>>) -> Response {
     let m = lang.messages();
@@ -500,6 +514,8 @@ pub fn account_page(lang: Lang, view: Option<AccountView<'_>>) -> Response {
             .collect(),
         providers: view.providers,
         admin: view.admin,
+        password: view.password,
+        passkey_confirms: view.passkey_confirms,
         sessions: view
             .sessions
             .iter()

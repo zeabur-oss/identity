@@ -329,6 +329,8 @@ mod tests {
                     key.as_str(),
                     "token"
                         | "password"
+                        | "current"
+                        | "new"
                         | "id"
                         | "rawId"
                         | "clientDataJSON"
@@ -1249,24 +1251,24 @@ mod tests {
         use super::*;
 
         /// Only the signed-out page has the sign-in button.
-        const SIGNED_OUT_MARK: &str = "id=\"account-sign-in\"";
+        pub(super) const SIGNED_OUT_MARK: &str = "id=\"account-sign-in\"";
 
         /// A signed-in browser: the session cookie.
-        struct Session {
-            cookie: String,
+        pub(super) struct Session {
+            pub(super) cookie: String,
         }
 
         impl Session {
-            fn cookies(&self) -> [(&str, &str); 1] {
+            pub(super) fn cookies(&self) -> [(&str, &str); 1] {
                 [(SESSION_COOKIE, self.cookie.as_str())]
             }
         }
 
-        async fn user(h: &Harness, name: &str) -> User {
+        pub(super) async fn user(h: &Harness, name: &str) -> User {
             h.service.oauth.directory.user(name).await.unwrap().unwrap()
         }
 
-        async fn passkeys(h: &Harness, name: &str) -> Vec<String> {
+        pub(super) async fn passkeys(h: &Harness, name: &str) -> Vec<String> {
             let user = user(h, name).await;
             let mut names: Vec<String> = h
                 .service
@@ -1281,7 +1283,7 @@ mod tests {
             names
         }
 
-        async fn page(h: &Harness, session: Option<&str>) -> String {
+        pub(super) async fn page(h: &Harness, session: Option<&str>) -> String {
             let mut request = Request::get("/account");
             if let Some(cookie) = session {
                 request = request.header(header::COOKIE, format!("{SESSION_COOKIE}={cookie}"));
@@ -1319,7 +1321,7 @@ mod tests {
             )
         }
 
-        async fn sign_in_to_account(h: &Harness, device: &mut Device) -> Session {
+        pub(super) async fn sign_in_to_account(h: &Harness, device: &mut Device) -> Session {
             let reply = post(&h.app, "/account/session/options", json!({}), &[]).await;
             let (credential, ceremony) = assertion(device, &reply).await;
             let reply = post(
@@ -1424,7 +1426,7 @@ mod tests {
         }
 
         /// Admin enrolled with one device and signed in to `/account` with it.
-        async fn signed_in() -> (Harness, Device, Session) {
+        pub(super) async fn signed_in() -> (Harness, Device, Session) {
             let h = harness().await;
             let mut first = device();
             enrol(&h, &mut first).await;
@@ -1916,8 +1918,10 @@ mod tests {
     mod password {
         use zeabur_identity_core::guessing::{HOLD, LIMIT};
         use zeabur_identity_core::totp::{RECOVERY_CODES, STEP, Secret};
+        use zeabur_identity_signin::account::SESSION_COOKIE;
         use zeabur_identity_signin::password::DEVICE_COOKIE;
 
+        use super::account::{self, SIGNED_OUT_MARK, Session, page, sign_in_to_account, signed_in};
         use super::*;
 
         const GOOD: &str = "violet kettle under the stairs";
@@ -2103,10 +2107,19 @@ mod tests {
         }
 
         async fn sign_in_with_code(h: &Harness, code: Option<&str>, device: Option<&str>) -> Reply {
+            admin_sign_in(h, GOOD, code, device).await
+        }
+
+        async fn admin_sign_in(
+            h: &Harness,
+            password: &str,
+            code: Option<&str>,
+            device: Option<&str>,
+        ) -> Reply {
             let flow = flow(h).await;
             let mut cookies = vec![(FLOW_COOKIE, flow.as_str())];
             cookies.extend(device.map(|d| (DEVICE_COOKIE, d)));
-            let body = json!({ "username": "admin", "password": GOOD, "code": code });
+            let body = json!({ "username": "admin", "password": password, "code": code });
             post(&h.app, "/login/password", body, &cookies).await
         }
 
@@ -2254,6 +2267,379 @@ mod tests {
             let reply = super::sign_in(&h, &mut device).await;
             assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
             assert!(reply.cookie(DEVICE_COOKIE).unwrap().starts_with(ADMIN_UID));
+        }
+
+        const NEW: &str = "copper lantern by the north gate";
+
+        /// The admin signed in to `/account` with a passkey, with a password and an
+        /// authenticator too. Returns the harness, the passkey device, the session, the
+        /// authenticator secret, the recovery codes and the device cookie.
+        async fn account_with_password() -> (Harness, Device, Session, Secret, Vec<String>, String)
+        {
+            let (h, passkey, session) = signed_in().await;
+            assert!(
+                !page(&h, Some(&session.cookie))
+                    .await
+                    .contains(PASSWORD_FORM)
+            );
+            let admin = account::user(&h, "admin").await;
+            h.service.setup.put(
+                &admin,
+                &token_hash(SETUP_TOKEN.as_bytes()),
+                UnixTime::from_secs(START + 3600),
+            );
+            let (secret, codes, device) = admin_with_authenticator(&h).await;
+            (h, passkey, session, secret, codes, device)
+        }
+
+        /// Only a user with a password sees the form to change it.
+        const PASSWORD_FORM: &str = "id=\"password-change\"";
+
+        async fn change(
+            h: &Harness,
+            session: &Session,
+            device: &str,
+            current: &str,
+            new: &str,
+        ) -> Reply {
+            post(
+                &h.app,
+                "/account/password",
+                json!({ "current": current, "new": new }),
+                &[(SESSION_COOKIE, &session.cookie), (DEVICE_COOKIE, device)],
+            )
+            .await
+        }
+
+        async fn remove(h: &Harness, session: &Session, device: &str, current: &str) -> Reply {
+            post(
+                &h.app,
+                "/account/password/remove",
+                json!({ "current": current }),
+                &[(SESSION_COOKIE, &session.cookie), (DEVICE_COOKIE, device)],
+            )
+            .await
+        }
+
+        #[tokio::test]
+        async fn a_changed_password_signs_in_and_the_old_one_does_not() {
+            let (h, _passkey, session, secret, _, device) = account_with_password().await;
+            assert!(
+                page(&h, Some(&session.cookie))
+                    .await
+                    .contains(PASSWORD_FORM)
+            );
+            let reply = change(&h, &session, &device, GOOD, NEW).await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+            let audit = &reply.audit.as_ref().unwrap()["fields"];
+            assert_eq!(audit["event"], "account.password_changed");
+            assert_eq!(audit["outcome"], "success");
+            let event = h.service.credentials.events().pop().unwrap();
+            assert_eq!(event.reason, "PasswordChanged");
+            assert_eq!(event.subject, ADMIN_UID);
+
+            next_step(&h);
+            let code = secret.code_at(now(&h));
+            let reply = admin_sign_in(&h, GOOD, Some(&code), Some(&device)).await;
+            assert!(reply.kind().ends_with(":password-failed"), "{}", reply.body);
+            let reply = admin_sign_in(&h, NEW, Some(&code), Some(&device)).await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        }
+
+        #[tokio::test]
+        async fn a_wrong_current_password_is_refused_and_counted() {
+            let (h, mut passkey, session, _, _, device) = account_with_password().await;
+            let reply = change(&h, &session, &device, "not my password at all", NEW).await;
+            assert_eq!(reply.status, StatusCode::FORBIDDEN);
+            assert!(reply.kind().ends_with(":current-password-wrong"));
+            let audit = &reply.audit.as_ref().unwrap()["fields"];
+            assert_eq!(audit["reason"], "current-password-wrong");
+            for _ in 0..LIMIT {
+                remove(&h, &session, &device, "not my password at all").await;
+            }
+            // This browser is held back, even with the right password.
+            let reply = change(&h, &session, &device, GOOD, NEW).await;
+            assert_eq!(
+                reply.status,
+                StatusCode::TOO_MANY_REQUESTS,
+                "{}",
+                reply.body
+            );
+            assert!(reply.kind().ends_with(":password-held"));
+            assert!(reply.headers.contains_key(header::RETRY_AFTER));
+            h.clock.0.fetch_add(HOLD.as_secs(), Ordering::SeqCst);
+            let session = sign_in_to_account(&h, &mut passkey).await;
+            let reply = change(&h, &session, &device, GOOD, NEW).await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        }
+
+        #[tokio::test]
+        async fn a_weak_new_password_is_refused() {
+            let (h, _passkey, session, secret, _, device) = account_with_password().await;
+            for (password, weakness) in [
+                ("too short", "too-short"),
+                ("passwordpassword", "common"),
+                ("admin keeps a tidy garden", "context"),
+            ] {
+                let reply = change(&h, &session, &device, GOOD, password).await;
+                assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY, "{password}");
+                assert_eq!(reply.body["weakness"], weakness, "{password}");
+            }
+            next_step(&h);
+            let code = secret.code_at(now(&h));
+            let reply = admin_sign_in(&h, GOOD, Some(&code), Some(&device)).await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        }
+
+        #[tokio::test]
+        async fn used_codes_stay_used_after_a_change() {
+            let (h, _passkey, session, secret, codes, device) = account_with_password().await;
+            let known = Some(device.as_str());
+            next_step(&h);
+            let code = secret.code_at(now(&h));
+            let reply = sign_in_with_code(&h, Some(&code), known).await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+            let reply = sign_in_with_code(&h, Some(&codes[0]), known).await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+
+            let reply = change(&h, &session, &device, GOOD, NEW).await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+
+            let reply = admin_sign_in(&h, NEW, Some(&code), known).await;
+            assert!(reply.kind().ends_with(":code-failed"), "used step");
+            let reply = admin_sign_in(&h, NEW, Some(&codes[0]), known).await;
+            assert!(reply.kind().ends_with(":code-failed"), "used recovery code");
+            let reply = admin_sign_in(&h, NEW, Some(&codes[1]), known).await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+            next_step(&h);
+            let reply = admin_sign_in(&h, NEW, Some(&secret.code_at(now(&h))), known).await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        }
+
+        #[tokio::test]
+        async fn the_only_way_in_cannot_be_removed() {
+            let (h, _passkey, session, _, _, device) = account_with_password().await;
+            for name in account::passkeys(&h, "admin").await {
+                h.service.credentials.delete(&name);
+            }
+            let reply = remove(&h, &session, &device, GOOD).await;
+            assert_eq!(reply.status, StatusCode::CONFLICT, "{}", reply.body);
+            assert!(reply.kind().ends_with(":last-credential"));
+            let admin = account::user(&h, "admin").await;
+            assert!(
+                h.service
+                    .credentials
+                    .password(&admin)
+                    .await
+                    .unwrap()
+                    .is_some()
+            );
+        }
+
+        #[tokio::test]
+        async fn removing_the_password_removes_the_authenticator() {
+            let (h, _passkey, session, secret, codes, device) = account_with_password().await;
+            let reply = remove(&h, &session, &device, GOOD).await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+            let audit = &reply.audit.as_ref().unwrap()["fields"];
+            assert_eq!(audit["event"], "account.password_removed");
+            assert_eq!(
+                h.service.credentials.events().pop().unwrap().reason,
+                "PasswordRemoved"
+            );
+            let admin = account::user(&h, "admin").await;
+            assert!(
+                h.service
+                    .credentials
+                    .password(&admin)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(
+                !page(&h, Some(&session.cookie))
+                    .await
+                    .contains(PASSWORD_FORM)
+            );
+            next_step(&h);
+            let known = Some(device.as_str());
+            let reply = sign_in_with_code(&h, Some(&secret.code_at(now(&h))), known).await;
+            assert!(reply.kind().ends_with(":password-failed"));
+            let reply = sign_in_with_code(&h, Some(&codes[2]), known).await;
+            assert!(reply.kind().ends_with(":password-failed"));
+            // There is nothing left to remove.
+            let reply = remove(&h, &session, &device, GOOD).await;
+            assert_eq!(reply.status, StatusCode::NOT_FOUND);
+        }
+
+        #[tokio::test]
+        async fn a_change_or_removal_signs_out_every_other_session() {
+            let (h, mut passkey, session, _, _, device) = account_with_password().await;
+            let other = sign_in_to_account(&h, &mut passkey).await;
+            let reply = change(&h, &session, &device, GOOD, NEW).await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+            assert_eq!(reply.audit.as_ref().unwrap()["fields"]["revoked"], 1);
+            assert!(
+                page(&h, Some(&other.cookie))
+                    .await
+                    .contains(SIGNED_OUT_MARK)
+            );
+            assert!(
+                !page(&h, Some(&session.cookie))
+                    .await
+                    .contains(SIGNED_OUT_MARK)
+            );
+
+            let other = sign_in_to_account(&h, &mut passkey).await;
+            let reply = remove(&h, &session, &device, NEW).await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+            assert!(
+                page(&h, Some(&other.cookie))
+                    .await
+                    .contains(SIGNED_OUT_MARK)
+            );
+            assert!(
+                !page(&h, Some(&session.cookie))
+                    .await
+                    .contains(SIGNED_OUT_MARK)
+            );
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn concurrent_changes_save_one_and_refuse_the_other() {
+            let (h, _passkey, session, secret, _, device) = account_with_password().await;
+            let other = "amber window over the old mill";
+            let (first, second) = tokio::join!(
+                change(&h, &session, &device, GOOD, NEW),
+                change(&h, &session, &device, GOOD, other),
+            );
+            let (saved, refused) = if first.status == StatusCode::OK {
+                ((first, NEW), second)
+            } else {
+                ((second, other), first)
+            };
+            assert_eq!(saved.0.status, StatusCode::OK, "{}", saved.0.body);
+            // Both read the old password and the second save conflicts, or the first saved before
+            // the second read, which then finds the current password changed.
+            let kind = refused.kind();
+            assert!(
+                (refused.status == StatusCode::CONFLICT && kind.ends_with(":password-conflict"))
+                    || (refused.status == StatusCode::FORBIDDEN
+                        && kind.ends_with(":current-password-wrong")),
+                "{}",
+                refused.body
+            );
+            next_step(&h);
+            let code = secret.code_at(now(&h));
+            let reply = admin_sign_in(&h, saved.1, Some(&code), Some(&device)).await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        }
+
+        async fn account_sign_in(
+            h: &Harness,
+            username: &str,
+            password: &str,
+            code: Option<&str>,
+            device: Option<&str>,
+        ) -> Reply {
+            let cookies: Vec<(&str, &str)> =
+                device.map(|d| (DEVICE_COOKIE, d)).into_iter().collect();
+            post(
+                &h.app,
+                "/account/session/password",
+                json!({ "username": username, "password": password, "code": code }),
+                &cookies,
+            )
+            .await
+        }
+
+        #[tokio::test]
+        async fn a_user_with_only_a_password_signs_in_to_the_account_page_and_changes_it() {
+            let h = harness().await;
+            let device = dana_with_password(&h).await;
+            let reply = account_sign_in(&h, "dana", GOOD, None, Some(&device)).await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+            let audit = &reply.audit.as_ref().unwrap()["fields"];
+            assert_eq!(audit["event"], "account.sign_in");
+            assert_eq!(audit["outcome"], "success");
+            let session = Session {
+                cookie: reply.cookie(SESSION_COOKIE).unwrap(),
+            };
+            let html = page(&h, Some(&session.cookie)).await;
+            assert!(html.contains(PASSWORD_FORM));
+            // Without a passkey, the page offers no passkey or link changes.
+            assert!(!html.contains("id=\"add\""));
+            assert!(html.contains("needs a sign-in with a passkey"));
+            let reply = post(
+                &h.app,
+                "/account/passkeys/options",
+                json!({}),
+                &session.cookies(),
+            )
+            .await;
+            assert!(reply.kind().ends_with(":reauth-required"), "{}", reply.body);
+
+            let reply = change(&h, &session, &device, GOOD, NEW).await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+            let reply = sign_in(&h, "dana", GOOD, Some(&device)).await;
+            assert_eq!(reply.status, StatusCode::UNAUTHORIZED);
+            let reply = sign_in(&h, "dana", NEW, Some(&device)).await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        }
+
+        #[tokio::test]
+        async fn an_admin_signs_in_to_the_account_page_with_a_password_and_a_code() {
+            let h = harness().await;
+            let (secret, _, device) = admin_with_authenticator(&h).await;
+            let reply = account_sign_in(&h, "admin", GOOD, None, Some(&device)).await;
+            assert_eq!(reply.status, StatusCode::UNAUTHORIZED);
+            assert!(reply.kind().ends_with(":code-needed"));
+            assert!(reply.cookie(SESSION_COOKIE).is_none());
+            next_step(&h);
+            let code = secret.code_at(now(&h));
+            let reply = account_sign_in(&h, "admin", GOOD, Some(&code), Some(&device)).await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+            let cookie = reply.cookie(SESSION_COOKIE).unwrap();
+            assert!(!page(&h, Some(&cookie)).await.contains(SIGNED_OUT_MARK));
+            // The code works once, here as at the sign-in page.
+            let reply = sign_in_with_code(&h, Some(&code), Some(&device)).await;
+            assert!(reply.kind().ends_with(":code-failed"));
+        }
+
+        #[tokio::test]
+        async fn account_sign_ins_count_against_the_sign_in_limits() {
+            let h = harness().await;
+            let device = dana_with_password(&h).await;
+            for _ in 0..=LIMIT {
+                let reply = account_sign_in(
+                    &h,
+                    "dana",
+                    "a wrong guess, again and again",
+                    None,
+                    Some(&device),
+                )
+                .await;
+                assert!(reply.cookie(SESSION_COOKIE).is_none());
+            }
+            let reply = sign_in(&h, "dana", GOOD, Some(&device)).await;
+            assert_eq!(reply.status, StatusCode::TOO_MANY_REQUESTS);
+            let reply = account_sign_in(&h, "dana", GOOD, None, Some(&device)).await;
+            assert_eq!(reply.status, StatusCode::TOO_MANY_REQUESTS);
+            assert!(reply.headers.contains_key(header::RETRY_AFTER));
+        }
+
+        #[tokio::test]
+        async fn an_unknown_user_gets_the_answer_of_a_wrong_password() {
+            let h = harness().await;
+            dana_with_password(&h).await;
+            let wrong = account_sign_in(&h, "dana", "not the password at all", None, None).await;
+            assert_eq!(wrong.status, StatusCode::UNAUTHORIZED);
+            for (username, password) in [("nobody", GOOD), ("admin", GOOD), ("dana", "")] {
+                let reply = account_sign_in(&h, username, password, None, None).await;
+                assert_eq!(reply.status, wrong.status, "{username}");
+                assert_eq!(reply.body, wrong.body, "{username}");
+                assert!(reply.cookie(SESSION_COOKIE).is_none());
+            }
         }
     }
 }

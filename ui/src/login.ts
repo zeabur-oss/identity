@@ -14,6 +14,7 @@ import {
   supported,
   upstreamButtons,
 } from "./webauthn"
+import { codeStep, entered, wireOtherAccount } from "./password"
 
 const form = document.getElementById("sign-in") as HTMLFormElement | null
 const text = messages(form)
@@ -79,15 +80,11 @@ function failed(kind: string): void {
 /** The password was right: the code step takes the place of the username and password. */
 function askForCode(): void {
   secondStep(true)
-  document.querySelector<HTMLInputElement>("#code")?.focus()
 }
 
-/** Shows the code step, or goes back to the first step with the password cleared. */
+/** Shows the code step, or goes back to the first step; the other ways in show only with it. */
 function secondStep(shown: boolean): void {
-  const user = document.getElementById("second-factor-user")
-  if (user) user.textContent = field("username").trim()
-  document.getElementById("first-step")?.toggleAttribute("hidden", shown)
-  document.getElementById("second-factor")?.toggleAttribute("hidden", !shown)
+  codeStep(shown)
   document.getElementById("lost-passkey")?.toggleAttribute("hidden", shown)
   for (const button of document.querySelectorAll("[data-provider]"))
     button.toggleAttribute("hidden", shown)
@@ -99,16 +96,6 @@ function alternatives(): void {
   const view = document.getElementById("alternatives")
   const shown = [...(view?.querySelectorAll("button") ?? [])].some((button) => !button.hidden)
   view?.toggleAttribute("hidden", !shown)
-}
-
-function useAnotherAccount(): void {
-  for (const id of ["password", "code"]) {
-    const input = document.querySelector<HTMLInputElement>(`#${id}`)
-    if (input) input.value = ""
-  }
-  say("error", "")
-  secondStep(false)
-  document.querySelector<HTMLInputElement>("#username")?.focus()
 }
 
 async function options(): Promise<PublicKeyCredentialRequestOptions | null> {
@@ -136,15 +123,10 @@ async function autofillWith(publicKey: PublicKeyCredentialRequestOptions): Promi
   if (credential) await finish(credential).catch(() => say("error", text("msgError")))
 }
 
-function field(id: string): string {
-  return document.querySelector<HTMLInputElement>(`#${id}`)?.value ?? ""
-}
-
 function signInWithPassword(event: SubmitEvent): void {
   event.preventDefault()
   if (finishing) return
-  const username = field("username").trim()
-  const password = field("password")
+  const { username, password, code } = entered()
   say("status", "")
   if (!username || !password) {
     say("error", text("msgPasswordMissing"))
@@ -152,23 +134,22 @@ function signInWithPassword(event: SubmitEvent): void {
   }
   finishing = true
   say("error", "")
-  void sendPassword(username, password)
+  void sendPassword(username, password, code)
 }
 
-async function sendPassword(username: string, password: string): Promise<void> {
+async function sendPassword(
+  username: string,
+  password: string,
+  code: string | null,
+): Promise<void> {
   try {
-    const reply = await post("/login/password", { username, password, code: typedCode() })
+    const reply = await post("/login/password", { username, password, code })
     finishing = leave(reply)
     if (!finishing) failed(problem(reply))
   } catch {
     finishing = false
     say("error", text("msgError"))
   }
-}
-
-/** The code typed, once the code field shows. */
-function typedCode(): string | null {
-  return document.getElementById("second-factor")?.hidden ? null : field("code").trim() || null
 }
 
 /** Goes to the app the reply names; true when the page is on its way out. */
@@ -217,7 +198,10 @@ if (form) {
     { "no-request": ended },
   )
   form.addEventListener("submit", signInWithPassword)
-  document.getElementById("other-account")?.addEventListener("click", useAnotherAccount)
+  wireOtherAccount(() => {
+    say("error", "")
+    secondStep(false)
+  })
   const passkey = document.getElementById("passkey")
   if (!supported()) {
     passkey?.setAttribute("hidden", "")
