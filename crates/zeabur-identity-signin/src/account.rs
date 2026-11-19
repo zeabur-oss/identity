@@ -545,9 +545,10 @@ fn linked_rows<'a>(
     linked: &'a [LinkedSummary],
     shown: &'a [(String, &'static str)],
 ) -> Vec<LinkedRow<'a>> {
-    let mut rows = Vec::new();
-    for (account, (label, icon)) in linked.iter().zip(shown) {
-        rows.push(LinkedRow {
+    linked
+        .iter()
+        .zip(shown)
+        .map(|(account, (label, icon))| LinkedRow {
             name: &account.name,
             provider: ProviderButton {
                 id: "",
@@ -555,9 +556,8 @@ fn linked_rows<'a>(
                 icon,
             },
             linked: account.created_at.map(UnixTime::as_secs),
-        });
-    }
-    rows
+        })
+        .collect()
 }
 
 /// The host of an issuer, or the issuer itself if it has none.

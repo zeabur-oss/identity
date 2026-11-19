@@ -80,15 +80,8 @@ impl fmt::Display for BaseUrlRule {
 /// An `https` URL with a host and no path, query, fragment or credentials, written without a
 /// trailing slash.
 ///
-/// The issuer identifier has this form so that OpenID Connect Discovery (which appends
-/// `/.well-known/openid-configuration` to the issuer, [OIDC Discovery] §4) and RFC 8414 (which
-/// inserts the well-known segment between host and path, [RFC 8414] §3) yield the same location.
-/// With a path the two locations differ, which is easy to get wrong.
-///
-/// Only the normal form is accepted because verifiers compare the issuer as a string:
-/// OIDC Discovery §4.3 requires the `issuer` in the metadata to be identical to the URL it was
-/// fetched under and to `iss` in ID tokens, and kube-apiserver requires the fetched `issuer` to
-/// match its configured `issuer.url` ([KEP-3331]).
+/// Verifiers compare the issuer as a string ([OIDC Discovery] §4.3, [KEP-3331]). With a path,
+/// OpenID Connect Discovery and [RFC 8414] §3 yield different well-known locations.
 ///
 /// [OIDC Discovery]: https://openid.net/specs/openid-connect-discovery-1_0.html
 /// [RFC 8414]: https://www.rfc-editor.org/rfc/rfc8414

@@ -1,46 +1,38 @@
-//! The authorization endpoint (RFC 6749 §4.1.1, OIDC Core §3.1.2): validating the request,
-//! keeping it while the user signs in, and answering with a code.
+//! The authorization endpoint (RFC 6749 §4.1.1, OIDC Core §3.1.2): validating the request, keeping
+//! it while the user signs in, and answering with a code.
 //!
-//! Nothing here writes to storage. A validated request is sealed (AEAD under the process key)
-//! into the `__Host-zeabur-identity-flow` cookie (`Secure; HttpOnly; SameSite=Lax`) until the user
-//! has authenticated, and the resulting code is sealed too. Storing a record per unauthenticated
-//! request would let anyone fill the store; Dex's per-request `AuthRequest` objects caused
-//! exactly that ([Dex]). Keeping pre-authentication state sealed on the client follows Hydra's
-//! AEAD-encoded flows and Kanidm's encrypted codes ([Hydra], [Kanidm]).
+//! Nothing here writes to storage. A validated request is sealed (AEAD under the process key) into
+//! the `__Host-zeabur-identity-flow` cookie (`Secure; HttpOnly; SameSite=Lax`) until the user has
+//! authenticated. The resulting code is sealed too. A stored record per unauthenticated request
+//! would let anyone fill the store.
 //!
-//! [`validate`] checks in the order RFC 6749 §4.1.2.1 implies: the client and redirect URI first,
-//! whose failures are shown locally and never redirected, then everything else, whose failures
-//! go back to the client:
+//! [`validate`] checks in the order RFC 6749 §4.1.2.1 implies. It checks the client and redirect
+//! URI first. Their failures are shown locally and never redirected. All other failures go back to
+//! the client:
 //!
 //! - redirect URIs match exactly, except the port of loopback URIs (RFC 9700 §2.1);
 //! - request objects and `registration` are refused (OIDC Core §3.1.2.6);
 //! - only `response_type=code` with `response_mode=query`;
-//! - PKCE S256 is required for every client, confidential ones included (RFC 9700 §2.1.1); `plain`
-//!   is refused, as in OAuth 2.1;
+//! - PKCE S256 is required for every client, confidential ones included (RFC 9700 §2.1.1), and
+//!   `plain` is refused;
 //! - unknown scopes are ignored;
 //! - the access-token audience is one value from the client's allowlist: the RFC 8707 `resource` if
-//!   sent, otherwise the client's only audience, otherwise the client ID; an ambiguous or
+//!   sent, otherwise the client's only audience, otherwise the client ID. An ambiguous or
 //!   disallowed resource is `invalid_target` (RFC 9068 §3);
-//! - `prompt=none` is always `login_required`, because there is no single sign-on session that
-//!   could satisfy it silently (OIDC Core §3.1.2.1).
+//! - `prompt=none` is always `login_required`, because no single sign-on session can satisfy it
+//!   silently (OIDC Core §3.1.2.1).
 //!
 //! Responses are `303 See Other` redirects and carry `iss` (RFC 9207). These answer the 307
-//! redirect credential leak and the mix-up attack found in the formal analysis of OAuth 2.0 by
-//! Fett, Küsters and Schmitz [\[FKS16\]][FKS16]; RFC 9700 §4.11.2 now forbids 307.
+//! redirect credential leak and the mix-up attack in the formal analysis of OAuth 2.0 by Fett,
+//! Küsters and Schmitz [\[FKS16\]][FKS16]. RFC 9700 §4.11.2 now forbids 307.
 //!
 //! # References
 //!
 //! - [FKS16] D. Fett, R. Küsters, and G. Schmitz, "A Comprehensive Formal Security Analysis of
 //!   OAuth 2.0," in *Proc. 2016 ACM SIGSAC Conf. Computer and Communications Security (CCS '16)*,
 //!   Vienna, Austria, 2016, pp. 1204–1215, doi: 10.1145/2976749.2978385.
-//! - [Dex project][Dex], `storage/kubernetes/` and issues #1091, #1292, #1969, commit `05a2750`.
-//! - [Ory Hydra][Hydra], `flow/flow_encoding.go`, commit `4174065`.
-//! - [Kanidm project][Kanidm], `server/lib/src/idm/oauth2.rs`, commit `3331b8e`.
 //!
 //! [FKS16]: https://doi.org/10.1145/2976749.2978385
-//! [Dex]: https://github.com/dexidp/dex/tree/05a275057112ba93e17db21f600b756f000f1c21
-//! [Hydra]: https://github.com/ory/hydra/tree/4174065ffb052799890f7480f5360a877a67ffc1
-//! [Kanidm]: https://github.com/kanidm/kanidm/tree/3331b8ed7f1541901ffe0c722f2a04c82897809c
 
 use axum::http::Uri;
 use serde::{Deserialize, Serialize};
@@ -331,9 +323,7 @@ pub fn response_location(
     issuer: &str,
 ) -> String {
     let mut query = form_urlencoded::Serializer::new(String::new());
-    for (key, value) in pairs {
-        query.append_pair(key, value);
-    }
+    query.extend_pairs(pairs);
     if let Some(state) = state {
         query.append_pair("state", state);
     }

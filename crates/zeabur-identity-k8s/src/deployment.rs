@@ -251,16 +251,18 @@ pub fn request_memory_mib(deployment: &Deployment) -> Option<u64> {
     let spec = deployment.spec.as_ref()?;
     let replicas = u64::try_from(spec.replicas?).ok()?;
     let containers = &spec.template.spec.as_ref()?.containers;
-    let mut per_pod = 0_u64;
-    for container in containers {
-        let request = container
-            .resources
-            .as_ref()?
-            .requests
-            .as_ref()?
-            .get("memory")?;
-        per_pod += request.0.strip_suffix("Mi")?.parse::<u64>().ok()?;
-    }
+    let per_pod = containers
+        .iter()
+        .map(|container| {
+            let request = container
+                .resources
+                .as_ref()?
+                .requests
+                .as_ref()?
+                .get("memory")?;
+            request.0.strip_suffix("Mi")?.parse::<u64>().ok()
+        })
+        .sum::<Option<u64>>()?;
     replicas.checked_mul(per_pod)
 }
 

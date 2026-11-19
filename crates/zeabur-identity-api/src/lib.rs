@@ -1,40 +1,32 @@
 #![doc = include_str!("../README.md")]
 //! # Custom resources
 //!
-//! Zeabur Identity's long-term state lives in six namespaced kinds; private key material lives in
+//! Zeabur Identity's long-term state lives in six namespaced kinds. Private key material lives in
 //! Secrets. Short-lived state (pre-login flows, WebAuthn challenges, authorization codes) never
 //! reaches the API server.
-//! Each kind exists because a native object cannot do its job:
 //!
-//! - [`user::User`]: admins or GitOps own `spec`; Zeabur Identity only reads it. A custom resource
-//!   provides admission checks for usernames and groups, and whoever manages users needs no access
-//!   to Secrets. Session state belongs to [`grant::Grant`], not the user.
-//! - [`credential::Credential`]: the name is derived from the credential's unique key, so a
-//!   duplicate `create` fails with `409` across replicas. A `ConfigMap` could do that, but has no
-//!   schema for the type union and is readable by the namespace `view` role. A kind of its own also
-//!   gives typed revocation (`kubectl delete credential`).
-//! - [`client::OAuthClient`]: configuration written in GitOps repositories, which must be rejected
-//!   at `kubectl apply` when it breaks [RFC 9700] (non-loopback `http`, fragments, plaintext
-//!   secrets).
-//! - [`grant::Grant`]: as Secrets, grants would need namespace-wide `create`, `list` and `delete`
-//!   on Secrets (`create` cannot be limited to a name, [RBAC]), which would also reach the signing
-//!   keys. A grant holds only hashes; `kubectl get grants` shows who is signed in.
-//! - [`invitation::Invitation`]: written by an admin, redeemed by Zeabur Identity. As Secrets,
-//!   pending invitations could only be found with `list` on Secrets.
-//! - [`upstream_provider::UpstreamProvider`]: configuration written by admins or GitOps, which
-//!   Zeabur Identity watches. A provider's client secret is a key of one Secret with a fixed name,
-//!   so Zeabur Identity reads that Secret by name and no other Secret.
+//! - [`user::User`]: admins or GitOps own `spec`. Zeabur Identity only reads it.
+//! - [`credential::Credential`]: the name derives from the credential's unique key, so a duplicate
+//!   `create` fails with `409` across replicas.
+//! - [`client::OAuthClient`]: the API server rejects a client that breaks [RFC 9700] (non-loopback
+//!   `http`, fragments, plaintext secrets) at `kubectl apply`.
+//! - [`grant::Grant`]: a grant holds only hashes. As Secrets, grants would need namespace-wide
+//!   `create`, `list` and `delete` on Secrets (`create` cannot be limited to a name, [RBAC]), which
+//!   would also reach the signing keys.
+//! - [`invitation::Invitation`]: written by an admin, redeemed by Zeabur Identity.
+//! - [`upstream_provider::UpstreamProvider`]: written by admins or GitOps. A provider's client
+//!   secret is a key of one Secret with a fixed name, so Zeabur Identity reads that Secret by name
+//!   and no other Secret.
 //!
 //! Format rules (lengths, patterns, list sizes) are `OpenAPI` `maxLength`, `pattern` and
-//! `maxItems`, which cost nothing against the CEL cost budget; CEL rules
-//! (`x-kubernetes-validations`) are used only for immutability and cross-field checks. Every
-//! string and list is bounded, because the API server rejects a definition whose estimated rule
-//! cost exceeds the budget ([CRD validation]); k3s 1.36 refused an unbounded version of these
-//! schemas for exactly that reason. GitOps-authored objects are thus validated at admission, and
-//! Zeabur Identity validates again when it reads them.
+//! `maxItems`, which cost nothing against the CEL cost budget. CEL rules
+//! (`x-kubernetes-validations`) are used only for immutability and cross-field checks. Every string
+//! and list is bounded, because the API server rejects a definition whose estimated rule cost
+//! exceeds the budget ([CRD validation]). The API server validates GitOps-authored objects at
+//! admission, and Zeabur Identity validates them again when it reads them.
 //!
-//! Custom resources are not covered by k3s Secret encryption at rest. That is acceptable for
-//! their content: hashes of high-entropy secrets, public keys and metadata.
+//! Custom resources are not covered by k3s Secret encryption at rest. They hold only hashes of
+//! high-entropy secrets, public keys and metadata.
 //!
 //! # References
 //!
@@ -96,11 +88,13 @@ pub fn token_hash(token: &[u8]) -> String {
     let digest = aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, token);
     let mut out = String::with_capacity(71);
     out.push_str("sha256:");
-    for byte in digest.as_ref() {
-        for nibble in [byte >> 4, byte & 0x0F] {
-            out.extend(char::from_digit(u32::from(nibble), 16));
-        }
-    }
+    out.extend(
+        digest
+            .as_ref()
+            .iter()
+            .flat_map(|byte| [byte >> 4, byte & 0x0F])
+            .filter_map(|nibble| char::from_digit(u32::from(nibble), 16)),
+    );
     out
 }
 

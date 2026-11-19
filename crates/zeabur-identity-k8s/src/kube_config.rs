@@ -1,40 +1,34 @@
 //! `zeabur-identityctl kube-config`: the kube-apiserver side of the integration.
 //!
-//! Run by the cluster admin with their own kubeconfig. It finds Zeabur Identity's Service, has
-//! cert-manager issue a certificate for the Service's ClusterIP ([`crate::internal_tls`]), and
-//! prints the `AuthenticationConfiguration` for the chosen distribution together with how to
-//! install it there. The configuration names the root CA, which stays the same when cert-manager
-//! renews the serving certificate. The output therefore changes only if the ClusterIP or the root
-//! CA changes.
+//! The cluster admin runs it with their own kubeconfig. It finds Zeabur Identity's Service and has
+//! cert-manager issue a certificate for the Service's ClusterIP ([`crate::internal_tls`]). It
+//! prints the `AuthenticationConfiguration` for the chosen distribution and how to install it
+//! there. The configuration names the root CA, which stays the same when cert-manager renews the
+//! serving certificate. The output changes only if the ClusterIP or the root CA changes.
 //!
 //! The file is a structured `AuthenticationConfiguration` (`apiserver.config.k8s.io/v1`, GA in
-//! Kubernetes 1.34, [KEP-3331]). kube-apiserver re-reads it about once a minute, so only the
-//! flag that names it needs a restart. It cannot be combined with `--oidc-*` flags.
+//! Kubernetes 1.34, [KEP-3331]). kube-apiserver re-reads it about once a minute. Only the flag that
+//! names it needs a restart. It cannot be combined with `--oidc-*` flags.
 //!
 //! # Discovery from inside the cluster
 //!
-//! With [`DiscoveryMode::Internal`] (the default), the control plane does not depend on public
-//! DNS, the ingress or a publicly trusted certificate. kube-apiserver redirects only the
-//! discovery request to `discoveryURL`; the document it gets there must still name the public
-//! issuer, and the JWK set is fetched from the document's `jwks_uri` ([oidc.go]). Zeabur Identity's
-//! internal listener therefore serves a copy of the metadata that differs only in `jwks_uri`.
-//! kube-apiserver resolves names with the host's resolver, so cluster DNS names do not resolve
-//! ([DNS]); it uses the Service's ClusterIP, over `https` (required by [validation.go]), with
-//! Zeabur Identity's own CA as `certificateAuthority` ([`crate::internal_tls`]). kube-apiserver
-//! starts even while Zeabur Identity is down and retries discovery every 10 s; it fetches discovery
-//! once, when the authenticator starts. A static JWK set is not an option: KEP-3331 lists other key
-//! discovery methods as a non-goal. `egressSelectorType` is never set: K3s/RKE2 dial a host name
-//! through it as a node name, so the authenticator would fail.
+//! With [`DiscoveryMode::Internal`] (the default), the control plane does not depend on public DNS,
+//! the ingress or a publicly trusted certificate. kube-apiserver redirects only the discovery
+//! request to `discoveryURL`. The document it gets there must name the public issuer, and the JWK
+//! set comes from the document's `jwks_uri` ([oidc.go]). The internal listener serves a copy of the
+//! metadata that differs only in `jwks_uri`. kube-apiserver does not resolve cluster DNS names
+//! ([DNS]). It uses the Service's ClusterIP over `https` (required by [validation.go]), with
+//! Zeabur Identity's own CA as `certificateAuthority` ([`crate::internal_tls`]).
+//! `egressSelectorType` is never set: K3s and RKE2 dial a host name through it as a node name, so
+//! the authenticator would fail.
 //!
 //! # Rules kube-apiserver enforces
 //!
-//! - `has(claims.client_id)`: kube-apiserver does not look at the JWT `typ`, so this accepts access
-//!   tokens, which carry `client_id` ([RFC 9068] §2.2), and rejects ID tokens, which are meant for
-//!   the client.
+//! - `has(claims.client_id)`: kube-apiserver does not look at the JWT `typ`. The rule accepts
+//!   access tokens, which carry `client_id` ([RFC 9068] §2.2), and rejects ID tokens.
 //! - `exp - iat` is bounded, because kube-apiserver cannot revoke a token before it expires.
-//! - Usernames and groups get the `zeabur:` prefix, which already rules out `system:`. Structured
-//!   configuration has no built-in rejection of `system:`, so `userValidationRules` reject it as
-//!   well, in case the mapping changes.
+//! - Usernames and groups get the `zeabur:` prefix, which already rules out `system:`.
+//!   `userValidationRules` reject `system:` as well.
 //! - `client_id`, `amr` and `jti` are mapped into `extra` under `identity.zeabur.com/`, so `kubectl
 //!   auth whoami` and audit events tie a request to one token issuance.
 //!
@@ -45,16 +39,15 @@
 //! | `k3s` (K3s/RKE2) | `enabled: false` | With the agent on the server |
 //! | `generic` | omitted | Depends on the cluster |
 //!
-//! - **K3s/RKE2** normally pass `--anonymous-auth=false` but drop it when they see an
+//! - **K3s and RKE2** normally pass `--anonymous-auth=false` but drop it when they see an
 //!   authentication configuration file, so the file restores it. Internal discovery needs
-//!   kube-proxy on the server, which the K3s flag `--disable-agent` removes.
-//! - **RKE2** runs kube-apiserver as a static pod. The directory, not the file, is mounted into the
-//!   pod with `kube-apiserver-extra-mount`: a single-file bind mount would keep showing the old
-//!   file after an atomic replace.
+//!   kube-proxy on the server. The K3s flag `--disable-agent` removes it.
+//! - **RKE2** runs kube-apiserver as a static pod. Mount the directory, not the file, with
+//!   `kube-apiserver-extra-mount`. A single-file bind mount keeps showing the old file after an
+//!   atomic replace.
 //!
-//! Installation follows the documented mechanism of K3s and RKE2 ([K3s], [RKE2]); see
-//! [`instructions`]. The RKE2 steps write the same files, flags and mount as the Zeabur installer,
-//! which runs `zeabur-identityctl kube-config --distro k3s` on RKE2 (see "installer" below).
+//! [`instructions`] follows the documented mechanism of K3s and RKE2 ([K3s], [RKE2]). The RKE2
+//! steps write the same files, flags and mount as the Zeabur installer.
 //!
 //! # References
 //!
@@ -69,8 +62,6 @@
 //!   IETF, Oct. 2021.
 //! - [K3s] K3s project, K3s documentation, `k3s server` command reference.
 //! - [RKE2] RKE2 project, RKE2 documentation, server configuration reference.
-//! - installer: Zeabur repository, `zeabur-installer-plan/src/rke2.rs` and
-//!   `zeabur-installer/src/apply.rs`.
 //!
 //! [KEP-3331]: https://github.com/kubernetes/enhancements/tree/master/keps/sig-auth/3331-structured-authentication-configuration
 //! [oidc.go]: https://github.com/kubernetes/kubernetes/blob/master/staging/src/k8s.io/apiserver/plugin/pkg/authenticator/token/oidc/oidc.go

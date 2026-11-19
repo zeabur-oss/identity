@@ -1,49 +1,41 @@
 //! The signing-key schedule.
 //!
-//! Each algorithm has a [`KeyRing`]. A key moves through three phases that are derived from two
-//! timestamps, never stored as mutable state:
+//! Each algorithm has a [`KeyRing`]. A key moves through three phases that derive from two
+//! timestamps. No phase is stored.
 //!
 //! - **Pending:** published in the JWK set but not yet signing (`now < activates_at`).
-//! - **Active:** the newest key with `activates_at <= now`; it signs everything.
-//! - **Retired:** a newer key has become active; still published so tokens it signed keep
-//!   verifying, until `retain_after` has passed since it stopped signing.
+//! - **Active:** the newest key with `activates_at <= now`. It signs everything.
+//! - **Retired:** a newer key has become active. The key stays published until `retain_after` has
+//!   passed since it stopped signing, so tokens it signed keep verifying.
 //!
-//! Because the active key is derived from the time, a published successor takes over on
-//! schedule even if the reconcile loop runs late, and nothing depends on a timer firing on time.
-//! A stored phase field would need a write to happen on time and could drift.
+//! A published successor takes over on schedule even if the reconcile loop runs late.
 //! [`KeyRing::tick`] is a pure function of the ring, the time and the policy (plus a key
-//! generator), so the whole schedule is tested without a clock or storage.
+//! generator), so tests need no clock or storage.
 //!
 //! # Why keys are published ahead
 //!
-//! Verifiers cache the JWK set. kube-apiserver 1.34 to 1.36 use go-oidc v2, which re-fetches the
-//! set on an unknown `kid` only once the cached copy's `Cache-Control` lifetime (plus 30 s) has
-//! expired ([kube-apiserver OIDC], [go-oidc v2]). An issuer that signs with a new key the moment
-//! it exists, as Dex does ([Dex]), therefore breaks kube-apiserver for up to that lifetime. Zeabur
-//! Identity publishes each key [`RotationPolicy::publish_ahead`] (24 h) before it signs, far longer
-//! than the JWK set's `max-age` (5 min); the server refuses to start unless `max-age` is shorter.
-//! Verifiers that cache the JWK set for longer than the publish-ahead time will fail after a
-//! rotation.
+//! Verifiers cache the JWK set. kube-apiserver 1.34 to 1.36 use go-oidc v2. It re-fetches the set
+//! on an unknown `kid` only after the cached copy's `Cache-Control` lifetime (plus 30 s) has
+//! expired ([kube-apiserver OIDC], [go-oidc v2]). An issuer that signs with a new key at once
+//! therefore breaks kube-apiserver for up to that lifetime. Zeabur Identity publishes each key
+//! [`RotationPolicy::publish_ahead`] (24 h) before it signs, far longer than the JWK set's
+//! `max-age` (5 min). The server refuses to start unless `max-age` is shorter. A verifier that
+//! caches the JWK set for longer than the publish-ahead time fails after a rotation.
 //!
 //! Retired keys stay published for [`RotationPolicy::retain_after`], as [OIDC Core] §10.1.1
-//! recommends ("retain recently decommissioned signing keys for a reasonable period of time"),
-//! so every token they signed keeps verifying until it expires.
+//! recommends ("retain recently decommissioned signing keys for a reasonable period of time").
 //!
-//! With the default policy the JWK set holds one or two keys per algorithm: the active key, plus
-//! either its pending successor (from day 6) or its retired predecessor (for a day after a
-//! rotation). A third key appears only if `retain_after` exceeds
-//! `rotation_period - publish_ahead`.
+//! With the default policy the JWK set holds one or two keys per algorithm. A third key appears
+//! only if `retain_after` exceeds `rotation_period - publish_ahead`.
 //!
 //! # Clock errors
 //!
-//! A clock jumping forward advances the schedule, which is safe because keys are published
-//! ahead. A clock jumping backwards can leave no active key; [`KeyRing::tick`] then creates one
-//! that is active immediately, which a verifier may not have cached yet. Hosts are expected to run
-//! NTP.
+//! A clock that jumps forward advances the schedule. This is safe because keys are published ahead.
+//! A clock that jumps backwards can leave no active key. [`KeyRing::tick`] then creates a key that
+//! is active at once, which a verifier may not have cached yet. Hosts must run NTP.
 //!
 //! [kube-apiserver OIDC]: https://github.com/kubernetes/kubernetes/blob/master/staging/src/k8s.io/apiserver/plugin/pkg/authenticator/token/oidc/oidc.go
 //! [go-oidc v2]: https://github.com/coreos/go-oidc/blob/v2.5.0/jwks.go
-//! [Dex]: https://github.com/dexidp/dex/tree/05a275057112ba93e17db21f600b756f000f1c21
 //! [OIDC Core]: https://openid.net/specs/openid-connect-core-1_0.html
 
 use std::sync::Arc;

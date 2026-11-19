@@ -82,17 +82,19 @@ pub enum DecodeError {
 /// Returns [`KeyError::Export`] if a key cannot be exported.
 pub fn encode(rings: &[KeyRing]) -> Result<StoredKeyset, KeyError> {
     use base64::Engine as _;
-    let mut keys = Vec::new();
-    for ring in rings {
-        for record in ring.published() {
-            keys.push(StoredKey {
-                alg: ring.alg(),
-                created_at: record.created_at,
-                activates_at: record.activates_at,
-                pkcs8: base64::engine::general_purpose::STANDARD.encode(record.key.to_pkcs8()?),
-            });
-        }
-    }
+    let keys = rings
+        .iter()
+        .flat_map(|ring| {
+            ring.published().iter().map(|record| {
+                Ok(StoredKey {
+                    alg: ring.alg(),
+                    created_at: record.created_at,
+                    activates_at: record.activates_at,
+                    pkcs8: base64::engine::general_purpose::STANDARD.encode(record.key.to_pkcs8()?),
+                })
+            })
+        })
+        .collect::<Result<Vec<_>, KeyError>>()?;
     Ok(StoredKeyset {
         version: SCHEMA_VERSION,
         keys,
