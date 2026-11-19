@@ -261,10 +261,9 @@ function wirePassword(section: HTMLElement): void {
 
 function localizeDates(): void {
   const format = new Intl.DateTimeFormat(root?.dataset.lang, { dateStyle: "medium" })
-  for (const time of document.querySelectorAll<HTMLTimeElement>("time[data-format]")) {
+  for (const time of document.querySelectorAll<HTMLTimeElement>("time[datetime]")) {
     const date = new Date(time.dateTime)
-    if (!Number.isNaN(date.getTime()))
-      time.textContent = (time.dataset.format ?? "%date%").replace("%date%", format.format(date))
+    if (!Number.isNaN(date.getTime())) time.textContent = format.format(date)
   }
 }
 

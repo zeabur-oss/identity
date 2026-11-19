@@ -40,7 +40,7 @@ description: Change Zeabur Identity's sign-in pages (askama templates, the desig
 - **CSP rules.** No inline `<script>`, `<style>`, `style=""` or `on*=` handlers; no URLs to other
   origins; scripts write only `textContent`, `hidden` and `location` (Trusted Types `'none'`). The
   page tests enforce this.
-- **Text.** Every string is a field of `Messages` in `crates/zeabur-identity-ui/src/i18n.rs` with English,
+- **Text.** Every string is a field of `Messages` in `crates/zeabur-identity-ui/src/i18n.rs`, one file per language under `src/i18n/`, with English,
   Traditional Chinese (Taiwan usage, 通行密鑰) and Simplified Chinese (mainland usage, 通行密钥)
   values; scripts get their own messages from `data-msg-*` attributes, and show the `detail` of a
   refusal, which the server writes in the page language. A missing translation is a
