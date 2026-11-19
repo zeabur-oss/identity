@@ -29,10 +29,11 @@ functions, as the askama macros in `templates/ds.html`. The pages look like Zeab
 the Zeabur mark over a centred card, Geist, the violet gradient button and the white one, on
 zGray-50 (zGray-950 in dark mode). `scripts/build-ui.sh` generates `ds.html`, runs Tailwind CSS v4
 over `app.css`, which scans the templates for class names, runs `bun build --minify` over each
-page's script and copies the font from the package. The output goes to `ui/dist`, which is not
-committed; `build.rs` embeds it when `ZEABUR_IDENTITY_UI_DIST` points at it, and nothing is loaded
-from another origin. A debug build without it embeds empty placeholders, and a release build
-fails. `ds.html` is committed, since askama reads templates from the crate. CI fails if `ds.html`
+page's script, copies the font from the package and lists every file in `manifest.json`. The
+output goes to `ui/dist`, which is not committed; `build.rs` embeds the files that manifest lists
+when `ZEABUR_IDENTITY_UI_DIST` points at it, and nothing is loaded from another origin. A debug
+build without it embeds no assets, and a release build fails. A template links an asset with
+`crate::assets::url("login.js")`. `ds.html` is committed, since askama reads templates from the crate. CI fails if `ds.html`
 differs from the sources, runs the page tests with the build embedded, formats, lints and
 typechecks the scripts, and runs `scripts/ui-budget.sh`, which limits the
 brotli-compressed size to 9 KiB for `app.css` and 3 KiB for each script.

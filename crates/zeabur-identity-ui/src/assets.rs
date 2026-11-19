@@ -42,80 +42,27 @@ impl Asset {
     }
 }
 
-static ASSETS: [Asset; 5] = [
-    Asset {
-        name: "app.css",
-        content_type: "text/css; charset=utf-8",
-        stored: include_bytes!(concat!(env!("ZEABUR_IDENTITY_UI_DIR"), "/app.css.br")),
-        brotli: true,
-        decoded: OnceLock::new(),
-    },
-    Asset {
-        name: "login.js",
-        content_type: "text/javascript; charset=utf-8",
-        stored: include_bytes!(concat!(env!("ZEABUR_IDENTITY_UI_DIR"), "/login.js.br")),
-        brotli: true,
-        decoded: OnceLock::new(),
-    },
-    Asset {
-        name: "setup.js",
-        content_type: "text/javascript; charset=utf-8",
-        stored: include_bytes!(concat!(env!("ZEABUR_IDENTITY_UI_DIR"), "/setup.js.br")),
-        brotli: true,
-        decoded: OnceLock::new(),
-    },
-    Asset {
-        name: "account.js",
-        content_type: "text/javascript; charset=utf-8",
-        stored: include_bytes!(concat!(env!("ZEABUR_IDENTITY_UI_DIR"), "/account.js.br")),
-        brotli: true,
-        decoded: OnceLock::new(),
-    },
-    Asset {
-        name: "Geist-Variable.woff2",
-        content_type: "font/woff2",
-        stored: include_bytes!(concat!(
-            env!("ZEABUR_IDENTITY_UI_DIR"),
-            "/Geist-Variable.woff2"
-        )),
-        brotli: false,
-        decoded: OnceLock::new(),
-    },
-];
+// `static ASSETS`, which build.rs writes from the manifest of `ZEABUR_IDENTITY_UI_DIST`.
+include!(concat!(env!("OUT_DIR"), "/assets.rs"));
 
-/// Content hashes appended to asset URLs, so they can be cached forever.
-#[derive(Debug, Clone)]
-pub struct Versions {
-    /// `app.css`.
-    pub css: String,
-    /// `login.js`.
-    pub login_js: String,
-    /// `setup.js`.
-    pub setup_js: String,
-    /// `account.js`.
-    pub account_js: String,
-}
+/// Content hashes appended to asset URLs, so they can be cached forever, hashed once.
+static VERSIONS: LazyLock<Vec<String>> = LazyLock::new(|| {
+    ASSETS
+        .iter()
+        .map(|a| hex(&sha256(a.stored)).chars().take(16).collect())
+        .collect()
+});
 
-/// The embedded assets' versions, hashed once.
-pub static VERSIONS: LazyLock<Versions> = LazyLock::new(Versions::compute);
-
-impl Versions {
-    fn compute() -> Self {
-        let version = |name: &str| {
-            ASSETS
-                .iter()
-                .find(|a| a.name == name)
-                .map_or_else(String::new, |a| {
-                    hex(&sha256(a.stored)).chars().take(16).collect()
-                })
-        };
-        Self {
-            css: version("app.css"),
-            login_js: version("login.js"),
-            setup_js: version("setup.js"),
-            account_js: version("account.js"),
-        }
-    }
+/// The URL a page links an asset by, with its version: `url("login.js")`. An asset the build did
+/// not embed has no version and is served as 404.
+#[must_use]
+pub fn url(name: &str) -> String {
+    let version = ASSETS
+        .iter()
+        .position(|a| a.name == name)
+        .and_then(|i| VERSIONS.get(i))
+        .map_or("", String::as_str);
+    format!("/assets/{name}?v={version}")
 }
 
 /// `GET /assets/{name}`, for every embedded asset.

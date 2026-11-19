@@ -19,7 +19,7 @@
 </div>
 {%- endmacro -%}
 {%- block title %}{{ m.account_title }}{% endblock -%}
-{%- block head %}<script type="module" src="/assets/account.js?v={{ assets.account_js }}"></script>{% endblock -%}
+{%- block head %}<script type="module" src="{{ crate::assets::url("account.js") }}"></script>{% endblock -%}
 {%- block content %}
 <div id="account" class="flex flex-col gap-5" data-lang="{{ lang.tag() }}"
      data-reauth-options="/account/reauth/options" data-reauth="/account/reauth"

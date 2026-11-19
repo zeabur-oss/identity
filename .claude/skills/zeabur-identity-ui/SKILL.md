@@ -8,8 +8,8 @@ description: Change Zeabur Identity's sign-in pages (askama templates, the desig
 - **Where things are.** Sources: `ui/src/*.ts` (one script per page, no framework),
   `ui/styles/app.css` (Tailwind v4 input; imports `@zeabur-oss/design-system/tokens.css`). Templates:
   `crates/zeabur-identity-ui/templates/` (askama). Built output: `ui/dist/` (not committed;
-  `crates/zeabur-identity-ui/build.rs` embeds it when `ZEABUR_IDENTITY_UI_DIST` points at it, empty
-  placeholders otherwise in a debug build). Page routes live in
+  `crates/zeabur-identity-ui/build.rs` embeds what its `manifest.json` lists when `ZEABUR_IDENTITY_UI_DIST` points at it, no
+  assets otherwise in a debug build; a template links one with `crate::assets::url("login.js")`). Page routes live in
   `crates/zeabur-identity-signin/src/pages.rs`; rendering in `crates/zeabur-identity-ui/src/pages.rs`.
 - **Design system.** `@zeabur-oss/design-system` is a dependency in `ui/package.json`, as in web.
   `ui/scripts/gen-classes.ts` calls its React-free `cva` functions

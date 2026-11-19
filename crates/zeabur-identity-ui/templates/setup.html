@@ -4,7 +4,7 @@
 {%- import "ds.html" as ds -%}
 {%- import "upstream.html" as upstream -%}
 {%- block title %}{{ m.setup_title }}{% endblock -%}
-{%- block head %}<script type="module" src="/assets/setup.js?v={{ assets.setup_js }}"></script>{% endblock -%}
+{%- block head %}<script type="module" src="{{ crate::assets::url("setup.js") }}"></script>{% endblock -%}
 {%- block content %}
 {% call ui::card() %}
   {{ ui::card_header(m.setup_title, m.setup_subtitle) }}
