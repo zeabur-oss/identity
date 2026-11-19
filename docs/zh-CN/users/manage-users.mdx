@@ -195,6 +195,21 @@ kubectl -n zeabur-identity get events --field-selector involvedObject.name=alice
 
 不要用 `invite` 为已能登录的用户添加通行密钥或关联账号。如果链接交到错误的人手上，持有者就能以该用户的身份登录。用户已无法登录时，请按照[退出登录、找回账号与移除用户](./offboarding.mdx)中的账号恢复流程处理。
 
+### 在 Linux 桌面上使用通行密钥
+
+在 Ubuntu 桌面上，如果没有安装能保存通行密钥的密码管理工具，Chrome 和 Firefox 只会要求插入安全密钥，不提供保存在电脑里的通行密钥，测试时也没有出现手机选项。Zeabur Identity 要求把通行密钥保存在安全密钥里，所以密钥必须能保存通行密钥，只支持 U2F 的旧款密钥不能用。
+
+| 浏览器 | 场景 | 结果 |
+|---|---|---|
+| Chrome 158、Firefox 160 | 没有密码管理工具 | 只能用安全密钥创建通行密钥。取消后，页面显示“通行密钥对话框在完成前就关闭了，请重试。” |
+| Chrome、Firefox | 密码管理工具（1Password、Bitwarden） | 尚未测试 |
+| Chrome、Firefox | 手机扫描二维码 | 尚未测试 |
+| Chrome、Firefox | 实体安全密钥 | 尚未测试 |
+
+测试环境是 Ubuntu 26.04.1（arm64）的虚拟机，没有蓝牙。
+
+系统无法创建通行密钥时，用户可以在设置页面选“使用密码”，之后用用户名和密码登录。管理员默认还要设置验证器 App，登录时输入密码和 App 显示的验证码，详见[管理员账号与会话](./admin-sessions.mdx)。
+
 ### 由管理员移除通行密钥或已关联的账号
 
 管理员也可以直接列出并删除 `Credential`：

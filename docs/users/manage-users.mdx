@@ -195,6 +195,21 @@ Regular accounts can also link upstream accounts, such as GitHub, on the account
 
 Don't use `invite` to add passkeys or link accounts for users who can already sign in. If the link reaches the wrong person, that person can sign in as the user. If the user can no longer sign in, follow the recovery process in [Sign out, recover, and remove users](./offboarding.mdx).
 
+### Use passkeys on a Linux desktop
+
+On an Ubuntu desktop without a password manager that stores passkeys, Chrome and Firefox ask only for a security key. They offer no passkey stored on the computer, and the tests showed no phone option. Zeabur Identity requires the passkey to live on the key, so the key must be able to store passkeys. Older keys that support only U2F don't work.
+
+| Browser | Setup | Result |
+|---|---|---|
+| Chrome 158, Firefox 160 | No password manager | Only a security key can create a passkey. After you cancel, the page shows "The passkey dialog closed early. Try again." |
+| Chrome, Firefox | Password manager (1Password, Bitwarden) | Not tested yet |
+| Chrome, Firefox | Phone over QR code | Not tested yet |
+| Chrome, Firefox | Physical security key | Not tested yet |
+
+We tested on Ubuntu 26.04.1 (arm64) in a virtual machine without Bluetooth.
+
+When the system can't create a passkey, users can choose "Use a password" on the setup page and then sign in with their username and password. Admins also set up an authenticator app by default, and sign in with the password and the code from the app. See [Admin accounts and sessions](./admin-sessions.mdx).
+
 ### Remove passkeys or linked accounts as an admin
 
 Admins can also list and delete `Credential` objects directly:
