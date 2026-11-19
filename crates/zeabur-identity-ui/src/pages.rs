@@ -426,6 +426,12 @@ impl Date {
             text,
         }
     }
+
+    /// The date as a `<time>` element; the script swaps its text for the reader's locale. Both
+    /// fields are digits and dashes, so nothing needs escaping.
+    fn time(&self) -> String {
+        format!("<time datetime=\"{}\">{}</time>", self.iso, self.text)
+    }
 }
 
 struct PasskeyItem<'a> {

@@ -1558,7 +1558,7 @@ mod tests {
                 .unwrap();
             assert!(stored.iter().all(|p| p.label.is_none()));
             let html = page(&h, Some(&dana.cookie)).await;
-            assert!(html.contains("data-format=\"Passkey added %date%\""));
+            assert!(html.contains("Passkey added <time datetime=\""));
         }
 
         #[tokio::test]

@@ -104,7 +104,7 @@
 {%- if !apps.is_empty() %}
 <div data-slot="apps" class="flex flex-col gap-3">
   {%- for app in apps %}
-  <a href="{{ app.url }}" class="{{ ds::button("secondary", "lg") }} w-full"><span class="truncate">{{ m.open_app.replace("%app%", app.name) }}</span>{{ icons::icon("ArrowUpRight") }}</a>
+  <a href="{{ app.url }}" class="{{ ds::button("secondary", "lg") }} w-full"><span class="truncate">{{ (m.open_app)(app.name) }}</span>{{ icons::icon("ArrowUpRight") }}</a>
   {%- endfor %}
 </div>
 {%- endif %}

@@ -14,8 +14,8 @@
     <span data-slot="badge" class="{{ ds::badge() }}">{{ m.session_this }}</span>
     {%- endif %}
   </div>
-  <p class="text-[0.8125rem] leading-5 break-words text-secondary"><time datetime="{{ s.signed_in.iso }}" data-format="{{ m.session_signed_in }}">{{ m.session_signed_in.replace("%date%", s.signed_in.text) }}</time>
-    {%- if let Some(credential) = s.credential %} · {{ m.session_passkey.replace("%name%", credential) }}{% endif %}</p>
+  <p class="text-[0.8125rem] leading-5 break-words text-secondary">{{ (m.session_signed_in)(&s.signed_in.time())|safe }}
+    {%- if let Some(credential) = s.credential %} · {{ (m.session_passkey)(credential) }}{% endif %}</p>
 </div>
 {%- endmacro -%}
 {%- block title %}{{ m.account_title }}{% endblock -%}
@@ -63,7 +63,7 @@
     <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
       <div class="flex min-w-0 flex-1 flex-col gap-0.5">
         <h1 class="text-base leading-6 font-semibold text-main">{{ m.account_title }}</h1>
-        <p class="text-[0.8125rem] leading-5 break-words text-secondary">{{ m.signed_in_as.replace("%user%", view.username) }}</p>
+        <p class="text-[0.8125rem] leading-5 break-words text-secondary">{{ (m.signed_in_as)(view.username) }}</p>
       </div>
       <button type="button" id="sign-out" data-post="/account/sign-out" class="{{ ds::button("secondary", "sm") }}">{{ m.sign_out }}</button>
     </div>
@@ -89,7 +89,7 @@
             <p class="text-[0.8125rem] leading-5 text-secondary">
               {%- if view.passkeys.is_empty() %}{{ m.passkeys_none }}
               {%- else if view.passkeys.len() == 1 %}{{ m.passkeys_one }}
-              {%- else %}{{ m.passkeys_many.replace("%count%", &view.passkeys.len().to_string()) }}{% endif -%}
+              {%- else %}{{ (m.passkeys_many)(view.passkeys.len()) }}{% endif -%}
             </p>
           </div>
           {%- if view.passkey_confirms %}
@@ -118,7 +118,7 @@
                 <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
                   <p class="min-w-0 text-sm leading-5 font-medium break-words text-main">
                     {%- if let Some(label) = p.label %}{{ label }}
-                    {%- else if let Some(added) = p.added %}<time datetime="{{ added.iso }}" data-format="{{ m.passkey_unnamed_dated }}">{{ m.passkey_unnamed_dated.replace("%date%", added.text) }}</time>
+                    {%- else if let Some(added) = p.added %}{{ (m.passkey_unnamed_dated)(&added.time())|safe }}
                     {%- else %}{{ m.passkey_unnamed }}{% endif -%}
                   </p>
                   {%- if p.this_device %}
@@ -127,8 +127,8 @@
                 </div>
                 <p class="text-[0.8125rem] leading-5 text-secondary">
                   {%- if !p.storage.is_empty() %}<span>{{ p.storage }}</span>{% endif -%}
-                  {%- if let Some(added) = p.added %}{% if !p.storage.is_empty() %} · {% endif %}<time datetime="{{ added.iso }}" data-format="{{ m.passkey_added }}">{{ m.passkey_added.replace("%date%", added.text) }}</time>{% endif -%}
-                  {%- if let Some(used) = p.last_used %}<br><time datetime="{{ used.iso }}" data-format="{{ m.passkey_last_used }}">{{ m.passkey_last_used.replace("%date%", used.text) }}</time>{% endif -%}
+                  {%- if let Some(added) = p.added %}{% if !p.storage.is_empty() %} · {% endif %}{{ (m.passkey_added)(&added.time())|safe }}{% endif -%}
+                  {%- if let Some(used) = p.last_used %}<br>{{ (m.passkey_last_used)(&used.time())|safe }}{% endif -%}
                 </p>
               </div>
               <div class="flex gap-2">
@@ -201,7 +201,7 @@
           <div class="flex min-w-0 flex-1 basis-32 flex-col gap-0.5">
             <h3 class="text-sm leading-5 font-medium break-words text-main">{{ l.provider.label }}</h3>
             <p class="text-[0.8125rem] leading-5 text-secondary">
-              {%- if let Some(linked) = l.linked %}<time datetime="{{ linked.iso }}" data-format="{{ m.linked_on }}">{{ m.linked_on.replace("%date%", linked.text) }}</time>
+              {%- if let Some(linked) = l.linked %}{{ (m.linked_on)(&linked.time())|safe }}
               {%- else %}{{ m.linked }}{% endif -%}
             </p>
           </div>
@@ -227,7 +227,7 @@
           <p class="text-[0.8125rem] leading-5 text-secondary">{{ m.not_linked }}</p>
         </div>
         {%- if view.passkey_confirms %}
-        <button type="button" data-link="{{ p.id }}" data-post="/account/links/start" aria-label="{{ m.link_with.replace("%provider%", p.label) }}" class="{{ ds::button("secondary", "sm") }}">{{ m.link }}</button>
+        <button type="button" data-link="{{ p.id }}" data-post="/account/links/start" aria-label="{{ (m.link_with)(p.label) }}" class="{{ ds::button("secondary", "sm") }}">{{ m.link }}</button>
         {%- endif %}
       </li>
       {%- endfor %}
@@ -255,7 +255,7 @@
     <div class="flex">{{ session_row(s, m) }}</div>
     {%- endif %}
     {%- if !view.other_sessions.is_empty() %}
-    {% call ui::disclosure(m.sessions_others.replace("%count%", &view.other_sessions.len().to_string())) %}
+    {% call ui::disclosure((m.sessions_others)(view.other_sessions.len())) %}
     <ul class="flex flex-col divide-y divide-v2-border">
       {%- for s in view.other_sessions %}
       <li data-session="{{ s.name }}" class="flex flex-wrap items-center gap-x-3 gap-y-2 py-3 first:pt-0 last:pb-0">

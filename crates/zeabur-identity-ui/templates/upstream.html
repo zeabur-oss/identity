@@ -5,7 +5,7 @@
 {%- if !providers.is_empty() %}
 <div id="upstream" class="flex flex-col gap-3">
   {%- for p in providers %}
-  <button type="button" data-start="{{ zeabur_identity_core::protocol::upstream_start_path(p.id) }}" class="{{ ds::button("secondary", "lg") }} w-full">{{ icons::icon(p.icon) }}<span class="truncate">{{ m.continue_with.replace("%provider%", p.label) }}</span></button>
+  <button type="button" data-start="{{ zeabur_identity_core::protocol::upstream_start_path(p.id) }}" class="{{ ds::button("secondary", "lg") }} w-full">{{ icons::icon(p.icon) }}<span class="truncate">{{ (m.continue_with)(p.label) }}</span></button>
   {%- endfor %}
 </div>
 {%- endif %}
