@@ -88,6 +88,7 @@ use clap::ValueEnum;
 use k8s_openapi::api::core::v1::{Secret, Service};
 use kube::Client;
 use kube::api::{Api, Patch, PatchParams};
+use kube::runtime::wait::{self, await_condition};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use thiserror::Error;
@@ -190,6 +191,9 @@ pub enum KubeConfigError {
     /// An option is invalid.
     #[error(transparent)]
     Config(#[from] ConfigError),
+    /// Watching a Certificate failed.
+    #[error("watching the certificate failed: {0}")]
+    Watch(#[from] wait::Error),
     /// The configuration could not be serialised.
     #[error("rendering the configuration failed: {0}")]
     Render(#[from] serde_json::Error),
@@ -491,28 +495,25 @@ where
     }
 }
 
+/// Watches the Certificate until cert-manager reports it `Ready` for its current spec.
 async fn wait_until_ready(
     certificates: &Api<Certificate>,
     namespace: &str,
     name: &'static str,
 ) -> Result<(), KubeConfigError> {
-    let deadline = tokio::time::Instant::now() + ISSUE_TIMEOUT;
-    loop {
-        if certificates
-            .get_opt(name)
-            .await?
-            .as_ref()
-            .is_some_and(Certificate::is_ready)
-        {
-            return Ok(());
-        }
-        if tokio::time::Instant::now() >= deadline {
-            return Err(KubeConfigError::NotIssued {
-                namespace: namespace.to_owned(),
-                name,
-            });
-        }
-        tokio::time::sleep(Duration::from_secs(2)).await;
+    let ready = |certificate: Option<&Certificate>| certificate.is_some_and(Certificate::is_ready);
+    match tokio::time::timeout(
+        ISSUE_TIMEOUT,
+        await_condition(certificates.clone(), name, ready),
+    )
+    .await
+    {
+        Ok(Ok(_)) => Ok(()),
+        Ok(Err(error)) => Err(error.into()),
+        Err(_elapsed) => Err(KubeConfigError::NotIssued {
+            namespace: namespace.to_owned(),
+            name,
+        }),
     }
 }
 

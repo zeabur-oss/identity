@@ -4,6 +4,9 @@
 //! Only RS256 and ES256 are accepted, each key is used with its own algorithm only, and a token
 //! that names a critical header extension is refused because none is understood
 //! (RFC 7515 §4.1.11; RFC 8725 §3.1). The caller validates the claims.
+//!
+//! This is not `jsonwebtoken`: version 11 accepts any `crit` header and binds no key to an
+//! algorithm. The tests use it as an independent check.
 
 use aws_lc_rs::signature::{
     ECDSA_P256_SHA256_FIXED, RSA_PKCS1_2048_8192_SHA256, RsaPublicKeyComponents, UnparsedPublicKey,

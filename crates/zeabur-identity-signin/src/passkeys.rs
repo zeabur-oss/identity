@@ -7,13 +7,15 @@
 //! report 0, a counter is only a signal (WebAuthn Level 3 §6.1.1), and storing it would cost a
 //! write per sign-in.
 
+use serde::Deserialize;
 use thiserror::Error;
 use webauthn_rs::prelude::{
-    CreationChallengeResponse, Credential, DiscoverableAuthentication, Passkey,
-    PasskeyRegistration, PublicKeyCredential, RegisterPublicKeyCredential,
+    AuthenticationResult, CreationChallengeResponse, Credential, DiscoverableAuthentication,
+    Passkey, PasskeyRegistration, PublicKeyCredential, RegisterPublicKeyCredential,
     RequestChallengeResponse, Url, Uuid, Webauthn, WebauthnBuilder, WebauthnError,
 };
-use webauthn_rs_proto::ResidentKeyRequirement;
+use webauthn_rs_core::internals::AuthenticatorData;
+use webauthn_rs_core::proto::{Registration, ResidentKeyRequirement};
 use zeabur_identity_core::config::BaseUrl;
 
 /// A failed ceremony. Details are logged by the caller; users see a generic message.
@@ -88,7 +90,8 @@ impl Passkeys {
             .start_passkey_registration(handle, username, display_name, exclude)
             .map_err(|e| PasskeyError::Verification(e.to_string()))?;
         // Sign-in uses discoverable credentials (no username first), so the credential must be
-        // resident. webauthn-rs defaults to non-resident for broad compatibility.
+        // resident. webauthn-rs defaults to non-resident for broad compatibility; its resident-key
+        // registration needs an attestation CA list, and this relying party asks for none.
         if let Some(selection) = options.public_key.authenticator_selection.as_mut() {
             selection.require_resident_key = true;
             selection.resident_key = Some(ResidentKeyRequirement::Required);
@@ -150,7 +153,7 @@ impl Passkeys {
         response: &PublicKeyCredential,
         state: DiscoverableAuthentication,
         passkey: &Passkey,
-    ) -> Result<(), PasskeyError> {
+    ) -> Result<AuthenticationResult, PasskeyError> {
         let result = self
             .webauthn
             .finish_discoverable_authentication_v2(response, state, passkey)
@@ -167,57 +170,34 @@ impl Passkeys {
         if !result.user_verified() {
             return Err(PasskeyError::NotUserVerified);
         }
-        Ok(())
+        Ok(result)
     }
 }
 
 pub use zeabur_identity_store::passkey_credential_name as credential_name;
 
-/// What a registration response says about the authenticator.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Authenticator {
-    /// AAGUID, lowercase and hyphenated; `None` when the authenticator sends zeros, as with
-    /// attestation `none` on some platforms.
-    pub aaguid: Option<String>,
-    /// BE: the credential may be synced.
-    pub backup_eligible: bool,
-}
-
-const FLAG_BE: u8 = 0x08;
-const FLAG_AT: u8 = 0x40;
-
-/// Reads the AAGUID and flags from the registration response's `authData`.
+/// The AAGUID in a registration response, lowercase and hyphenated; `None` when the
+/// authenticator sends zeros, as some platforms do under attestation `none`.
 ///
-/// webauthn-rs drops the AAGUID under attestation `none`, so this reads it directly. The AAGUID
-/// is only shown. BE
-/// decides whether an admin may register the passkey when admins need a device-bound passkey. The
-/// authenticator reports BE itself: attestation is `none`, so nothing verifies it.
+/// webauthn-rs keeps the AAGUID only for attestation formats it verifies, so this reads the
+/// attestation object (WebAuthn Level 3 §6.5.4) again. The AAGUID is only shown.
 #[must_use]
-pub fn authenticator(response: &RegisterPublicKeyCredential) -> Authenticator {
-    auth_data(&response.response.attestation_object).map_or_else(Authenticator::default, |data| {
-        let flags = data.get(32).copied().unwrap_or(0);
-        let aaguid = data
-            .get(37..53)
-            .filter(|_| flags & FLAG_AT != 0)
-            .filter(|bytes| bytes.iter().any(|b| *b != 0))
-            .and_then(|bytes| Uuid::from_slice(bytes).ok())
-            .map(|uuid| uuid.hyphenated().to_string());
-        Authenticator {
-            aaguid,
-            backup_eligible: flags & FLAG_BE != 0,
-        }
-    })
+pub fn aaguid(response: &RegisterPublicKeyCredential) -> Option<String> {
+    let object: AttestationObject<'_> =
+        serde_cbor_2::from_slice(&response.response.attestation_object).ok()?;
+    let data = AuthenticatorData::<Registration>::try_from(object.auth_data).ok()?;
+    let aaguid = data.acd?.aaguid;
+    aaguid
+        .iter()
+        .any(|b| *b != 0)
+        .then(|| Uuid::from_bytes(aaguid).hyphenated().to_string())
 }
 
-/// Whether the authenticator reported the backup eligibility flag (BE) in a sign-in assertion.
-/// The flags follow the 32-byte RP ID hash in the signed authenticator data.
-#[must_use]
-pub fn assertion_backup_eligible(response: &PublicKeyCredential) -> bool {
-    response
-        .response
-        .authenticator_data
-        .get(32)
-        .is_some_and(|flags| flags & FLAG_BE != 0)
+/// The part of the attestation object that holds the authenticator data.
+#[derive(Deserialize)]
+struct AttestationObject<'a> {
+    #[serde(rename = "authData")]
+    auth_data: &'a [u8],
 }
 
 /// The backup flags of a registered passkey (WebAuthn Level 3 §6.1).
@@ -236,84 +216,6 @@ pub fn backup_flags(passkey: &Passkey) -> BackupFlags {
     BackupFlags {
         eligible: credential.backup_eligible,
         state: credential.backup_state,
-    }
-}
-
-/// The `authData` byte string in a CBOR attestation object (WebAuthn Level 3 §6.5.4): a map
-/// with text keys `fmt`, `attStmt` and `authData`. Only definite lengths are accepted, as CTAP2
-/// canonical encoding requires.
-fn auth_data(object: &[u8]) -> Option<&[u8]> {
-    let mut reader = Cbor { bytes: object };
-    let (major, entries) = reader.head()?;
-    if major != 5 {
-        return None;
-    }
-    for _ in 0..entries {
-        let (major, length) = reader.head()?;
-        if major != 3 {
-            return None;
-        }
-        let key = reader.take(length)?;
-        if key == b"authData" {
-            let (major, length) = reader.head()?;
-            return (major == 2).then(|| reader.take(length)).flatten();
-        }
-        reader.skip(0)?;
-    }
-    None
-}
-
-struct Cbor<'a> {
-    bytes: &'a [u8],
-}
-
-impl<'a> Cbor<'a> {
-    fn byte(&mut self) -> Option<u8> {
-        let (first, rest) = self.bytes.split_first()?;
-        self.bytes = rest;
-        Some(*first)
-    }
-
-    fn take(&mut self, length: u64) -> Option<&'a [u8]> {
-        let length = usize::try_from(length).ok()?;
-        if length > self.bytes.len() {
-            return None;
-        }
-        let (taken, rest) = self.bytes.split_at(length);
-        self.bytes = rest;
-        Some(taken)
-    }
-
-    /// Major type and argument of the next item.
-    fn head(&mut self) -> Option<(u8, u64)> {
-        let initial = self.byte()?;
-        let argument = match initial & 0x1F {
-            small @ 0..=23 => u64::from(small),
-            24 => u64::from(self.byte()?),
-            25 => u64::from(u16::from_be_bytes(self.take(2)?.try_into().ok()?)),
-            26 => u64::from(u32::from_be_bytes(self.take(4)?.try_into().ok()?)),
-            27 => u64::from_be_bytes(self.take(8)?.try_into().ok()?),
-            _ => return None,
-        };
-        Some((initial >> 5, argument))
-    }
-
-    fn skip(&mut self, depth: usize) -> Option<()> {
-        if depth > 16 {
-            return None;
-        }
-        let (major, argument) = self.head()?;
-        match major {
-            0 | 1 | 7 => Some(()),
-            2 | 3 => self.take(argument).map(|_| ()),
-            4 => (0..argument).try_for_each(|_| self.skip(depth + 1)),
-            5 => (0..argument).try_for_each(|_| {
-                self.skip(depth + 1)?;
-                self.skip(depth + 1)
-            }),
-            6 => self.skip(depth + 1),
-            _ => None,
-        }
     }
 }
 
@@ -358,33 +260,26 @@ mod tests {
     #[test]
     fn reads_the_aaguid_from_auth_data() {
         let aaguid = Uuid::parse_str("ea9b8d66-4d01-1d21-3ce4-b6b48cb575d4").unwrap();
+        // RP ID hash, flags UP UV BE BS AT, counter, AAGUID, credential ID h'07', key {}.
         let mut data = vec![0; 32];
-        data.push(0x45 | FLAG_BE | 0x10);
+        data.push(0x5D);
         data.extend_from_slice(&[0; 4]);
         data.extend_from_slice(aaguid.as_bytes());
-        data.extend_from_slice(&[0, 1, 7]);
-        let object = attestation_object(&data);
-        let found = auth_data(&object).map(<[u8]>::to_vec);
-        assert_eq!(found, Some(data.clone()));
+        data.extend_from_slice(&[0, 1, 7, 0xA0]);
         let mut response: RegisterPublicKeyCredential = serde_json::from_value(serde_json::json!({
             "id": "AA", "rawId": "AA", "type": "public-key", "extensions": {},
             "response": {"attestationObject": "", "clientDataJSON": ""}
         }))
         .unwrap();
-        response.response.attestation_object = object;
-        assert_eq!(
-            authenticator(&response),
-            Authenticator {
-                aaguid: Some(aaguid.to_string()),
-                backup_eligible: true
-            }
-        );
+        response.response.attestation_object = attestation_object(&data);
+        assert_eq!(super::aaguid(&response), Some(aaguid.to_string()));
         // Zero AAGUID (attestation "none" on some platforms) and garbage give nothing.
         data[37..53].fill(0);
         response.response.attestation_object = attestation_object(&data);
-        assert_eq!(authenticator(&response).aaguid, None);
+        assert_eq!(super::aaguid(&response), None);
         for garbage in [&[][..], &[0xA1], &[0xBF, 0xFF], &[0xA1, 0x7B, 0xFF]] {
-            assert_eq!(auth_data(garbage), None);
+            response.response.attestation_object = garbage.to_vec();
+            assert_eq!(super::aaguid(&response), None);
         }
     }
 
