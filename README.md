@@ -40,37 +40,22 @@ To move from zeabur.com to your own server, or for anything else about Zeabur, s
 
 ## Use it on its own
 
-Zeabur Identity also works without Zeabur, on any self-managed Kubernetes cluster.
+Zeabur Identity also works without Zeabur, on any self-managed Kubernetes cluster. It replaces the
+one admin kubeconfig that never expires and gets copied to every laptop: `kubectl` opens your
+browser, each person signs in with their own account, and the token they get lasts minutes, not
+years.
 
-**Delete `admin.conf`. Sign in to your cluster with your own account.**
+https://github.com/user-attachments/assets/ddb72043-07fc-4a30-b39c-a1e749c33361
 
-Most self-managed clusters are run with one admin kubeconfig that never expires, gets copied to
-every laptop, and cannot be revoked. Zeabur Identity replaces it with a sign-in: `kubectl` opens
-your browser, you sign in with a passkey, SSO, or a password, and you get a token that lasts
-minutes, not years.
+*Alice signs in with a password. She can list pods, but restarting a deployment returns 403. The
+admin signs in with a password and an authenticator code, and the restart goes through.*
 
-https://github.com/user-attachments/assets/4c6e29f2-341c-4622-8cc5-4337e13e53b5
+### How it works
 
-*Signing in to [Aptakube](https://aptakube.com) with a passkey: the cluster opens for browsing,
-and restarting a deployment is refused with 403 for an account without that right.*
-
-### Why Zeabur Identity
-
-- **Passkeys, SSO, or passwords.** Touch ID, Windows Hello, or a security key. Teammates can also
-  link a GitHub or Google account, or a company account through an OpenID provider, or set a
-  password of at least 15 characters.
-- **Admin rights belong to admin accounts.** Keep a separate admin account for cluster changes.
-  By default it signs in with a passkey, or a password and an authenticator app code; you can
-  require passkeys only. Its tokens last 5 minutes. Everyday accounts get only the rights you bind
-  to their groups.
-- **No forever key on anyone's laptop.** Tokens last minutes, and kube-apiserver checks them on
-  every request. Every session ends 12 hours after sign-in. Revoke a person's sessions and their
-  access ends when the token in hand expires, within ten minutes.
-- **Runs inside the cluster it protects.** One small pod, no database, no extra servers. Users,
-  credentials, and clients are Kubernetes objects. Tested in CI on k3s; RKE2 uses the same
-  configuration. OpenID Connect apps such as Argo CD or Grafana can use the same issuer.
-
-### What it looks like
+1. You run `kubectl get pods`. Your browser opens Zeabur Identity's sign-in page.
+2. You sign in. `kubectl` gets a token and renews it quietly while you work. Every session ends 12
+   hours after sign-in.
+3. kube-apiserver checks the token itself. Zeabur Identity never sits in the path of your requests.
 
 <table>
   <tr>
@@ -84,21 +69,22 @@ and restarting a deployment is refused with 403 for an account without that righ
     </picture></td>
   </tr>
   <tr>
-    <td align="center"><b>Everyday sign-in</b><br>passkey or GitHub</td>
-    <td align="center"><b>Joining</b><br>a one-time invitation link</td>
+    <td align="center"><b>Sign-in</b><br>password, passkey or GitHub</td>
+    <td align="center"><b>Joining</b><br>a one-time link to set up a passkey or a password</td>
   </tr>
 </table>
 
-### How it works
-
-1. You run `kubectl get pods`. Your browser opens Zeabur Identity's sign-in page.
-2. You sign in. `kubectl` receives a token valid for ten minutes and renews it quietly while you
-   work.
-3. Kubernetes checks the token itself. Zeabur Identity never sits in the path of your requests.
-
-Need to change something? Sign in with your admin account. It has full rights at once, without a
-second sign-in. For stricter rules, such as security keys only for admins, see
-[Admin accounts and sessions](docs/users/admin-sessions.mdx).
+- **Rights come from your RBAC.** Each person is `zeabur:<username>` with groups
+  `zeabur:<group>`, so bind roles to groups as usual. Their tokens last 10 minutes.
+- **Admin accounts are separate.** They are in `zeabur:admins` with `cluster-admin`. By default
+  they sign in with a passkey, or a password and an authenticator code, and their tokens last 5
+  minutes. To require
+  security keys only, see [Admin accounts and sessions](docs/users/admin-sessions.mdx).
+- **Access ends when you say so.** End a person's sessions and their access stops when the token
+  in hand expires, within ten minutes.
+- **Runs inside the cluster it protects.** One small pod, no database, no extra servers. Users,
+  credentials and clients are Kubernetes objects. Tested in CI on k3s; RKE2 uses the same
+  configuration. OpenID Connect apps such as Argo CD or Grafana can use the same issuer.
 
 ### Get started
 
