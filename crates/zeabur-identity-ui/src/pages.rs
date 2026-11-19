@@ -6,6 +6,7 @@ use std::time::Duration;
 use askama::Template;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
+use time::OffsetDateTime;
 
 use super::assets::{VERSIONS, Versions};
 use super::harden;
@@ -405,33 +406,26 @@ struct Date {
 
 impl Date {
     fn new(secs: u64) -> Self {
-        let days = i64::try_from(secs / 86_400).unwrap_or(0);
-        let rest = secs % 86_400;
-        let (year, month, day) = civil(days);
+        let at = i64::try_from(secs)
+            .ok()
+            .and_then(|secs| OffsetDateTime::from_unix_timestamp(secs).ok())
+            .unwrap_or(OffsetDateTime::UNIX_EPOCH);
+        let text = format!(
+            "{:04}-{:02}-{:02}",
+            at.year(),
+            u8::from(at.month()),
+            at.day()
+        );
         Self {
             iso: format!(
-                "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
-                rest / 3600,
-                rest / 60 % 60,
-                rest % 60
+                "{text}T{:02}:{:02}:{:02}Z",
+                at.hour(),
+                at.minute(),
+                at.second()
             ),
-            text: format!("{year:04}-{month:02}-{day:02}"),
+            text,
         }
     }
-}
-
-/// Days since 1970-01-01 to a proleptic Gregorian date (Howard Hinnant's `civil_from_days`).
-const fn civil(days: i64) -> (i64, i64, i64) {
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = yoe + era * 400 + if month <= 2 { 1 } else { 0 };
-    (year, month, day)
 }
 
 struct PasskeyItem<'a> {

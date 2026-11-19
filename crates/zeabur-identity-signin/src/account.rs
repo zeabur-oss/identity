@@ -57,7 +57,7 @@ use zeabur_identity_ui::pages::{
 };
 
 use crate::device::Requester;
-use crate::passkeys::{BackupFlags, authenticator, backup_flags};
+use crate::passkeys::{BackupFlags, backup_flags};
 use crate::problem::Problem;
 use crate::upstream::provider::{Descriptor, GITHUB_ISSUER, GOOGLE_ISSUER};
 use crate::{
@@ -1114,7 +1114,7 @@ where
                 tracing::warn!(reason = PASSKEY_FAILED.kind, %error, "passkey registration verification failed");
                 PASSKEY_FAILED
             })?;
-        let device_bound = !authenticator(&request.credential).backup_eligible;
+        let device_bound = !backup_flags(&passkey).eligible;
         check_account(
             &service.oauth.directory,
             &account.user,

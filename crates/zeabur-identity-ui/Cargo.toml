@@ -17,6 +17,7 @@ askama.workspace = true
 axum.workspace = true
 brotli-decompressor.workspace = true
 form_urlencoded.workspace = true
+time.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]

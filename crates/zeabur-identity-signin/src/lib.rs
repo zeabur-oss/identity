@@ -42,7 +42,7 @@ use zeabur_identity_store::{
 
 use crate::account::{Audit, record};
 use crate::device::Requester;
-use crate::passkeys::{Passkeys, authenticator, backup_flags, credential_name};
+use crate::passkeys::{Passkeys, aaguid, backup_flags, credential_name};
 use crate::password::Passwords;
 use crate::problem::{Extensions, Problem, UnknownCredential};
 use crate::upstream::provider::Providers;
@@ -312,15 +312,14 @@ pub(crate) fn new_passkey(
     now: UnixTime,
 ) -> Result<NewPasskey, Problem> {
     let credential_id: Vec<u8> = AsRef::<[u8]>::as_ref(passkey.cred_id()).to_vec();
-    let found = authenticator(response);
     Ok(NewPasskey {
         name: credential_name(&credential_id),
         user: user.to_owned(),
         credential_id: URL_SAFE_NO_PAD.encode(&credential_id),
         record: serde_json::to_string(passkey).map_err(internal)?,
         label: clean_label(label),
-        aaguid: found.aaguid,
-        backup_eligible: found.backup_eligible,
+        aaguid: aaguid(response),
+        backup_eligible: backup_flags(passkey).eligible,
         created_at: now,
     })
 }
@@ -414,7 +413,7 @@ where
         return Err(PASSKEY_FAILED.into());
     }
     let passkey: Passkey = serde_json::from_str(&stored.record).map_err(internal)?;
-    service
+    let result = service
         .passkeys
         .finish_sign_in(response, state, &passkey)
         .map_err(|error| {
@@ -423,8 +422,7 @@ where
         })?;
     // Checked after the assertion verifies, so the answer says nothing about unproven keys.
     // A credential can become eligible for backup after enrolment, so both must say no.
-    let device_bound =
-        !backup_flags(&passkey).eligible && !passkeys::assertion_backup_eligible(response);
+    let device_bound = !backup_flags(&passkey).eligible && !result.backup_eligible();
     check_account(
         &service.oauth.directory,
         &user,
@@ -691,7 +689,7 @@ where
                 PASSKEY_FAILED
             })?;
         // Refused before the token is used, so the person can try again with another passkey.
-        let device_bound = !authenticator(&request.credential).backup_eligible;
+        let device_bound = !backup_flags(&passkey).eligible;
         check_account(&service.oauth.directory, &owner, Method::Passkey { device_bound }).await?;
         if service
             .used_ceremonies
