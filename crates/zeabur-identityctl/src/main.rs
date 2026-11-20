@@ -15,9 +15,10 @@ use crate::cli::{
     ClientOutput, Command, InviteArgs, KubeConfigArgs, SetupLinkArgs, SigningAlg,
 };
 
-fn main() -> ExitCode {
+#[tokio::main]
+async fn main() -> ExitCode {
     match Cli::parse().command {
-        Command::SetupLink(args) => setup_link(&args),
+        Command::SetupLink(args) => setup_link(&args).await,
         Command::Crds => print_json(zeabur_identity_api::definitions_json()),
         Command::Rbac { namespace } => {
             print_json(zeabur_identity_k8s::rbac::manifests_json(&namespace))
@@ -32,9 +33,9 @@ fn main() -> ExitCode {
             },
         )),
         Command::Resources => resources(),
-        Command::KubeConfig(args) => kube_config(&args),
-        Command::Invite(args) => invite(&args),
-        Command::AccountType(args) => account_type(&args),
+        Command::KubeConfig(args) => kube_config(&args).await,
+        Command::Invite(args) => invite(&args).await,
+        Command::AccountType(args) => account_type(&args).await,
         Command::Client {
             command: ClientCommand::Create(args),
         } => client_create(args),
@@ -99,10 +100,7 @@ fn client_create(args: ClientCreateArgs) -> ExitCode {
     code
 }
 
-fn invite(args: &InviteArgs) -> ExitCode {
-    let Some(runtime) = current_thread_runtime() else {
-        return ExitCode::FAILURE;
-    };
+async fn invite(args: &InviteArgs) -> ExitCode {
     let invitee = zeabur_identity_k8s::invitations::Invitee {
         username: args.username.clone(),
         display_name: args.display_name.clone(),
@@ -113,7 +111,7 @@ fn invite(args: &InviteArgs) -> ExitCode {
             AccountType::Regular
         },
     };
-    let result = runtime.block_on(async {
+    let result = async {
         let client = kube::Client::try_default().await?;
         zeabur_identity_k8s::invitations::invite(
             client,
@@ -126,7 +124,8 @@ fn invite(args: &InviteArgs) -> ExitCode {
         )
         .await
         .map_err(|error| -> Box<dyn std::error::Error> { Box::new(error) })
-    });
+    }
+    .await;
     match result {
         Ok(created) => {
             if !created.created_user {
@@ -150,15 +149,12 @@ fn invite(args: &InviteArgs) -> ExitCode {
     }
 }
 
-fn account_type(args: &AccountTypeArgs) -> ExitCode {
-    let Some(runtime) = current_thread_runtime() else {
-        return ExitCode::FAILURE;
-    };
+async fn account_type(args: &AccountTypeArgs) -> ExitCode {
     let account_type = match args.account_type {
         AccountTypeArg::Admin => AccountType::Admin,
         AccountTypeArg::Regular => AccountType::Regular,
     };
-    let result = runtime.block_on(async {
+    let result = async {
         let client = kube::Client::try_default().await?;
         zeabur_identity_k8s::users::set_account_type(
             client,
@@ -167,7 +163,8 @@ fn account_type(args: &AccountTypeArgs) -> ExitCode {
             account_type,
         )
         .await
-    });
+    }
+    .await;
     match result {
         Ok(_) => {
             let note = match account_type {
@@ -188,25 +185,7 @@ fn account_type(args: &AccountTypeArgs) -> ExitCode {
     }
 }
 
-fn current_thread_runtime() -> Option<tokio::runtime::Runtime> {
-    match tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-    {
-        Ok(runtime) => Some(runtime),
-        Err(error) => {
-            output::stderr(&format!(
-                "error: unable to start the async runtime: {error}"
-            ));
-            None
-        }
-    }
-}
-
-fn kube_config(args: &KubeConfigArgs) -> ExitCode {
-    let Some(runtime) = current_thread_runtime() else {
-        return ExitCode::FAILURE;
-    };
+async fn kube_config(args: &KubeConfigArgs) -> ExitCode {
     let request = zeabur_identity_k8s::kube_config::Request {
         namespace: args.namespace.clone(),
         distro: args.distro,
@@ -215,12 +194,13 @@ fn kube_config(args: &KubeConfigArgs) -> ExitCode {
         audiences: args.audiences.clone(),
         max_token_lifetime: args.max_token_lifetime,
     };
-    let result = runtime.block_on(async {
+    let result = async {
         let client = kube::Client::try_default().await?;
         zeabur_identity_k8s::kube_config::prepare(client, &request)
             .await
             .map_err(|error| -> Box<dyn std::error::Error> { Box::new(error) })
-    });
+    }
+    .await;
     match result {
         Ok(configuration) => {
             output::stdout(configuration.trim_end());
@@ -237,11 +217,8 @@ fn kube_config(args: &KubeConfigArgs) -> ExitCode {
     }
 }
 
-fn setup_link(args: &SetupLinkArgs) -> ExitCode {
-    let Some(runtime) = current_thread_runtime() else {
-        return ExitCode::FAILURE;
-    };
-    let result = runtime.block_on(async {
+async fn setup_link(args: &SetupLinkArgs) -> ExitCode {
+    let result = async {
         let client = kube::Client::try_default().await?;
         let now = zeabur_identity_core::clock::SystemClock.now();
         zeabur_identity_k8s::setup::issue_setup_link(
@@ -255,7 +232,8 @@ fn setup_link(args: &SetupLinkArgs) -> ExitCode {
         )
         .await
         .map_err(|error| -> Box<dyn std::error::Error> { Box::new(error) })
-    });
+    }
+    .await;
     match result {
         Ok(link) => {
             output::stdout(&link.url);
