@@ -148,7 +148,8 @@ mod tests {
     }
 
     /// The chart's CRDs must match the code, one JSON document each. Regenerate with
-    /// `cargo run -q -- crds | jq -r '.items[] | "---", tojson' > deploy/chart/identity/crds/crds.yaml`.
+    /// `cargo run -q -- crds | jq -r '.items[] | "---", tojson' >
+    /// deploy/chart/identity/crds/crds.yaml`.
     #[test]
     fn committed_chart_crds_are_current() {
         let committed = include_str!("../../../deploy/chart/identity/crds/crds.yaml");
