@@ -8,38 +8,23 @@ use clap::Parser as _;
 use tracing_subscriber::filter::Targets;
 use tracing_subscriber::layer::SubscriberExt as _;
 use tracing_subscriber::util::SubscriberInitExt as _;
-use zeabur_identity::cli::{Cli, Command, LogFormat, ServeArgs, SetupLinkArgs, WORKER_THREADS};
+use zeabur_identity::cli::{Cli, Command, LogFormat, ServeArgs, SetupLinkArgs};
 use zeabur_identity::serve::ServeError;
 use zeabur_identity_core::clock::Clock as _;
 use zeabur_identity_k8s::setup::LinkError;
 
-fn main() -> ExitCode {
+/// Two worker threads keep idle memory low.
+#[tokio::main(worker_threads = 2)]
+async fn main() -> ExitCode {
     let cli = Cli::parse();
     init_logging(match &cli.command {
         Some(Command::SetupLink(_)) => LogFormat::Json,
         None => cli.serve.log_format,
     });
-    let runtime = match tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(WORKER_THREADS)
-        .enable_all()
-        .build()
-    {
-        Ok(runtime) => runtime,
-        Err(error) => {
-            tracing::error!(
-                reason = "runtime_creation_failed",
-                %error,
-                "starting the async runtime failed"
-            );
-            return ExitCode::FAILURE;
-        }
-    };
-    runtime.block_on(async {
-        match &cli.command {
-            Some(Command::SetupLink(args)) => setup_link(args).await,
-            None => serve(&cli.serve).await,
-        }
-    })
+    match &cli.command {
+        Some(Command::SetupLink(args)) => setup_link(args).await,
+        None => serve(&cli.serve).await,
+    }
 }
 
 async fn setup_link(args: &SetupLinkArgs) -> ExitCode {

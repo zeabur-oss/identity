@@ -12,9 +12,6 @@ use crate::config::{ServeConfig, Store};
 /// `Cache-Control: max-age` for discovery documents and the JWK set.
 pub const METADATA_MAX_AGE: Duration = Duration::from_mins(5);
 
-/// Tokio worker threads. Two keep idle memory low.
-pub const WORKER_THREADS: usize = 2;
-
 /// Log output format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum LogFormat {
