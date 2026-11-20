@@ -1,12 +1,14 @@
 {
   "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/v3.33.1/schema.json",
-  // The pages that scripts/build-ui.sh builds, and the script that lists them in the manifest.
+  // The pages that scripts/build-ui.sh builds, the script that lists them in the manifest, and the
+  // oxlint rule that .oxlintrc.json loads.
   "entry": [
     "src/login.ts",
     "src/setup.ts",
     "src/account.ts",
     "styles/app.css",
-    "scripts/manifest.ts"
+    "scripts/manifest.ts",
+    "lint/no-unsound-cast.js"
   ],
   // A page imports only webauthn.ts, password.ts and the generated contract.ts, never another page.
   "boundaries": {
@@ -22,7 +24,10 @@
       { "from": "password", "allow": [] },
       { "from": "contract", "allow": [] }
     ],
-    "coverage": { "requireAllFiles": true, "allowUnmatched": ["styles/**", "scripts/**"] }
+    "coverage": {
+      "requireAllFiles": true,
+      "allowUnmatched": ["styles/**", "scripts/**", "lint/**"]
+    }
   },
   "audit": { "deadCodeBaseline": "fallow-baseline.json" },
   "rules": { "policy-violation": "off" }
