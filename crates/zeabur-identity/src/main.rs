@@ -15,10 +15,9 @@ use zeabur_identity_k8s::setup::LinkError;
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    match (&cli.command, &cli.serve) {
-        (Some(Command::SetupLink(args)), _) => setup_link(args),
-        (None, Some(args)) => serve(args),
-        (None, None) => ExitCode::from(2),
+    match &cli.command {
+        Some(Command::SetupLink(args)) => setup_link(args),
+        None => serve(&cli.serve),
     }
 }
 

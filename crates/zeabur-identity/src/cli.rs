@@ -38,9 +38,10 @@ pub struct Cli {
     /// Without a command, the server runs.
     #[command(subcommand)]
     pub command: Option<Command>,
-    /// The server's flags; `None` with a command.
+    /// The server's flags. None is required here: their environment variables, set in the pod,
+    /// would otherwise make clap ask for them under a command too.
     #[command(flatten)]
-    pub serve: Option<ServeArgs>,
+    pub serve: ServeArgs,
 }
 
 /// One-off commands, run with the pod's service account.
@@ -73,9 +74,9 @@ pub struct SetupLinkArgs {
 #[derive(Debug, Args)]
 pub struct ServeArgs {
     /// Issuer identifier: an https URL with no path and no trailing slash. It must match
-    /// kube-apiserver's `issuer.url` byte for byte.
+    /// kube-apiserver's `issuer.url` byte for byte. Required.
     #[arg(long, env = "ZEABUR_IDENTITY_ISSUER", value_parser = parse_issuer)]
-    pub issuer: BaseUrl,
+    pub issuer: Option<BaseUrl>,
 
     /// Address of the public HTTP listener. TLS is terminated in front of it.
     #[arg(long, env = "ZEABUR_IDENTITY_LISTEN", default_value = "0.0.0.0:8080")]
@@ -153,10 +154,13 @@ impl ServeArgs {
     ///
     /// # Errors
     ///
-    /// Returns [`ConfigError`] if the values are inconsistent.
+    /// Returns [`ConfigError`] if the issuer is missing or the values are inconsistent.
     pub fn config(&self) -> Result<ServeConfig, ConfigError> {
+        let issuer = self.issuer.clone().ok_or(ConfigError::Incomplete(
+            "--issuer (ZEABUR_IDENTITY_ISSUER) is required",
+        ))?;
         let config = ServeConfig {
-            issuer: self.issuer.clone(),
+            issuer,
             listen: self.listen,
             rotation: RotationPolicy::DEFAULT,
             metadata_max_age: METADATA_MAX_AGE,
@@ -192,7 +196,7 @@ mod tests {
     }
 
     fn parse(args: &[&str]) -> Result<ServeArgs, clap::Error> {
-        cli(args).map(|cli| cli.serve.expect("server flags"))
+        cli(args).map(|cli| cli.serve)
     }
 
     #[test]
@@ -227,6 +231,7 @@ mod tests {
 
     #[test]
     fn rejects_bad_issuers_and_inconsistent_timings() {
+        assert!(parse(&[]).unwrap().config().is_err());
         assert!(parse(&["--issuer", "http://login.example.com"]).is_err());
         let args = parse(&[
             "--issuer",
