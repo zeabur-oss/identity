@@ -44,36 +44,46 @@ function fromBase64url(value: string): ArrayBuffer {
   return bytes.buffer
 }
 
-type Descriptor = { id: string; type: string; transports?: string[] }
+/** A credential descriptor as webauthn-rs sends it: the ID is base64url. */
+type WireDescriptor = Omit<PublicKeyCredentialDescriptor, "id"> & { id: string }
 
-function descriptors(list: unknown): PublicKeyCredentialDescriptor[] | undefined {
-  if (!Array.isArray(list)) return undefined
-  return (list as Descriptor[]).map(
-    (d) => ({ ...d, id: fromBase64url(d.id) }) as PublicKeyCredentialDescriptor,
-  )
+type WireCreation = Omit<
+  PublicKeyCredentialCreationOptions,
+  "challenge" | "user" | "excludeCredentials"
+> & {
+  challenge: string
+  user: Omit<PublicKeyCredentialUserEntity, "id"> & { id: string }
+  excludeCredentials?: WireDescriptor[]
+}
+
+type WireRequest = Omit<PublicKeyCredentialRequestOptions, "challenge" | "allowCredentials"> & {
+  challenge: string
+  allowCredentials?: WireDescriptor[]
+}
+
+function descriptors(
+  list: WireDescriptor[] | undefined,
+): PublicKeyCredentialDescriptor[] | undefined {
+  return list?.map((d) => ({ ...d, id: fromBase64url(d.id) }))
 }
 
 /** `CreationChallengeResponse` JSON → options for `navigator.credentials.create`. */
 export function creationOptions(json: Json): PublicKeyCredentialCreationOptions {
-  const o = json.publicKey as Json
-  const user = o.user as Json
+  const { publicKey: o } = json as { publicKey: WireCreation }
   return {
-    ...(o as unknown as PublicKeyCredentialCreationOptions),
-    challenge: fromBase64url(o.challenge as string),
-    user: {
-      ...(user as unknown as PublicKeyCredentialUserEntity),
-      id: fromBase64url(user.id as string),
-    },
+    ...o,
+    challenge: fromBase64url(o.challenge),
+    user: { ...o.user, id: fromBase64url(o.user.id) },
     excludeCredentials: descriptors(o.excludeCredentials),
   }
 }
 
 /** `RequestChallengeResponse` JSON → options for `navigator.credentials.get`. */
 export function requestOptions(json: Json): PublicKeyCredentialRequestOptions {
-  const o = json.publicKey as Json
+  const { publicKey: o } = json as { publicKey: WireRequest }
   return {
-    ...(o as unknown as PublicKeyCredentialRequestOptions),
-    challenge: fromBase64url(o.challenge as string),
+    ...o,
+    challenge: fromBase64url(o.challenge),
     allowCredentials: descriptors(o.allowCredentials) ?? [],
   }
 }
@@ -225,9 +235,12 @@ export function cancelled(error: unknown): boolean {
   )
 }
 
-type Signals = {
-  signalAllAcceptedCredentials?: (options: Accepted) => Promise<void>
-  signalUnknownCredential?: (options: UnknownCredential) => Promise<void>
+// The signal methods are WebAuthn Level 3 and missing from lib.dom; older browsers lack them.
+declare global {
+  interface PublicKeyCredentialConstructor {
+    signalAllAcceptedCredentials?(options: Accepted): Promise<void>
+    signalUnknownCredential?(options: UnknownCredential): Promise<void>
+  }
 }
 
 /**
@@ -237,21 +250,16 @@ type Signals = {
  * manager extension never settles them, so this waits half a second at most.
  */
 export async function signal(body: Json): Promise<void> {
+  const { accepted } = body as AccountChanged | AccountSignedIn | PasskeySignedIn
+  const { unknownCredential } = body as Problem
+  const api = window.PublicKeyCredential
   const sent = [
-    send(
-      "signalAllAcceptedCredentials",
-      (body as AccountChanged | AccountSignedIn | PasskeySignedIn).accepted,
-    ),
-    send("signalUnknownCredential", (body as Problem).unknownCredential),
+    (async () => {
+      if (accepted) await api?.signalAllAcceptedCredentials?.(accepted)
+    })(),
+    (async () => {
+      if (unknownCredential) await api?.signalUnknownCredential?.(unknownCredential)
+    })(),
   ]
   await Promise.race([Promise.allSettled(sent), new Promise((resolve) => setTimeout(resolve, 500))])
-}
-
-async function send<K extends keyof Signals>(
-  name: K,
-  options: Parameters<NonNullable<Signals[K]>>[0] | undefined,
-): Promise<void> {
-  const api = window.PublicKeyCredential as unknown as Signals | undefined
-  const method = api?.[name] as ((options: object) => Promise<void>) | undefined
-  if (options && typeof method === "function") await method.call(api, options)
 }
