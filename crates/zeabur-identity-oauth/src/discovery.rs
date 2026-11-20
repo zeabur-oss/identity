@@ -154,7 +154,7 @@ mod tests {
             "subject_types_supported",
             "id_token_signing_alg_values_supported",
         ] {
-            assert!(doc.get(member).is_some(), "{member}");
+            assert!(!doc[member].is_null(), "{member}");
         }
         // Discovery §4.3 / RFC 8414 §3.3: identical to the issuer identifier.
         assert_eq!(doc["issuer"], "https://login.example.com");
@@ -204,8 +204,8 @@ mod tests {
             "kube-apiserver requires the same issuer"
         );
         assert_eq!(inside["jwks_uri"], "https://10.43.0.53:8443/jwks");
-        public.as_object_mut().unwrap().remove("jwks_uri");
-        inside.as_object_mut().unwrap().remove("jwks_uri");
+        public["jwks_uri"] = Value::Null;
+        inside["jwks_uri"] = Value::Null;
         assert_eq!(public, inside);
     }
 }

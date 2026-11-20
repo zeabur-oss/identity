@@ -207,7 +207,7 @@ mod tests {
             assert_eq!(key["use"], "sig");
             for private in ["d", "p", "q", "dp", "dq", "qi"] {
                 assert!(
-                    key.get(private).is_none(),
+                    !zeabur_identity_test_support::has_member(key, private),
                     "private member {private} published"
                 );
             }

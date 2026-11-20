@@ -580,7 +580,10 @@ mod tests {
     #[test]
     fn generic_configuration_has_no_anonymous_section() {
         let file = authentication_configuration(&options(Distro::Generic, true)).unwrap();
-        assert!(body(&file).get("anonymous").is_none());
+        assert!(!zeabur_identity_test_support::has_member(
+            &body(&file),
+            "anonymous"
+        ));
     }
 
     #[test]
@@ -588,7 +591,8 @@ mod tests {
         let file = authentication_configuration(&options(Distro::K3s, false)).unwrap();
         let issuer = &body(&file)["jwt"][0]["issuer"];
         assert!(
-            issuer.get("discoveryURL").is_none() && issuer.get("certificateAuthority").is_none()
+            !zeabur_identity_test_support::has_member(issuer, "discoveryURL")
+                && !zeabur_identity_test_support::has_member(issuer, "certificateAuthority")
         );
     }
 

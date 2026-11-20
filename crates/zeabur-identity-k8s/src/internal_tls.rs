@@ -339,7 +339,7 @@ mod tests {
                 "issuerRef": {"name": ROOT_ISSUER, "kind": "Issuer", "group": "cert-manager.io"},
             })
         );
-        assert!(ca.get("status").is_none());
+        assert!(!zeabur_identity_test_support::has_member(&ca, "status"));
     }
 
     #[test]

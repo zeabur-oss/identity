@@ -638,12 +638,7 @@ async fn subject_lookup_reads_current_authorization_without_per_request_lists() 
     assert_eq!(mock.gets("users/absent").await, 2);
     assert_eq!(mock.backend.lock().await.lists[USERS], 1);
     let cached = directory.user_index.find(|_| true).unwrap();
-    assert!(
-        serde_json::to_value(cached.as_ref())
-            .unwrap()
-            .get("spec")
-            .is_none()
-    );
+    assert!(serde_json::to_value(cached.as_ref()).unwrap()["spec"].is_null());
 }
 
 #[tokio::test]

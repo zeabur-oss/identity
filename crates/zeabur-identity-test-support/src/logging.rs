@@ -93,8 +93,8 @@ mod tests {
         let records = capture.records();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0]["target"], "zeabur_identity::audit");
-        assert!(records[0].get("span").is_none());
-        assert!(records[0].get("spans").is_none());
+        assert!(!crate::has_member(&records[0], "span"));
+        assert!(!crate::has_member(&records[0], "spans"));
         assert!(
             !serde_json::to_string(&records)
                 .unwrap()

@@ -60,7 +60,7 @@ mod tests {
             "json",
         ]);
         let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-        assert!(json.get("secret").is_none(), "{json}");
+        assert!(json["secret"].is_null(), "{json}");
         let registration: ClientRegistration = serde_json::from_value(json).unwrap();
         assert_eq!(registration.manifest.spec.kind, ClientType::Public);
         assert_eq!(registration.manifest.spec.secret_hash, None);

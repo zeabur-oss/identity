@@ -282,7 +282,10 @@ mod tests {
         assert!(public.secret.is_none());
         let value = serde_json::to_value(&public.client).unwrap();
         assert_eq!(value["spec"]["type"], "Public");
-        assert!(value["spec"].get("secretHash").is_none());
+        assert!(!zeabur_identity_test_support::has_member(
+            &value["spec"],
+            "secretHash"
+        ));
     }
 
     /// The policy, by example. `tests/redirect_uris.rs` checks generated candidates against

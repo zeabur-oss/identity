@@ -9,3 +9,14 @@ avoid-breaking-exported-api = false
 
 # Proper nouns that doc_markdown would otherwise ask to wrap in backticks.
 doc-valid-idents = ["ClusterIP", "UserInfo", "OpenID", "WebAuthn", "PostgreSQL", "EdDSA", "JWKs", "GitOps", "AuthenticationConfiguration", "MacBook", ".."]
+
+# A field read through `Value` that is renamed or misspelled still compiles and reads `None`. Read
+# JSON through a typed struct instead; data of any shape takes an `expect` on the smallest item.
+disallowed-methods = [
+  { path = "serde_json::Value::get", reason = "read a known shape through a `k8s_openapi` type or a local `#[derive(Deserialize)]` struct" },
+  { path = "serde_json::Value::get_mut", reason = "change a known shape through its typed struct, not through `Value`" },
+  { path = "serde_json::Value::pointer", reason = "read a known shape through a `k8s_openapi` type or a local `#[derive(Deserialize)]` struct" },
+  { path = "serde_json::Value::pointer_mut", reason = "change a known shape through its typed struct, not through `Value`" },
+  { path = "serde_json::Value::as_object_mut", reason = "build a known shape as a typed struct and serialise it" },
+  { path = "serde_json::Value::as_array_mut", reason = "build a known shape as a typed struct and serialise it" },
+]

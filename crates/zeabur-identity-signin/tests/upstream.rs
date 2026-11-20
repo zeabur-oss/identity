@@ -50,6 +50,7 @@ mod tests {
         MemoryDirectory, MemoryGrantStore, MemorySetupStore, NewExternal, NewGrant,
         SetupStore as _, User, external_credential_name,
     };
+    use zeabur_identity_test_support::has_member;
     use zeabur_identity_test_support::logging::Capture;
     use zeabur_identity_ui::i18n::Lang;
 
@@ -146,7 +147,9 @@ mod tests {
         if let Value::Object(map) = overrides {
             for (k, v) in map {
                 if v.is_null() {
-                    document.as_object_mut().unwrap().remove(&k);
+                    if let Value::Object(members) = &mut document {
+                        members.remove(&k);
+                    }
                 } else {
                     document[k] = v;
                 }
@@ -503,10 +506,10 @@ mod tests {
             }
             // A logged provider is the one the path names. Only a configured provider is logged
             // (see `callback_classification_requires_verified_unexpired_pending`).
-            if let Some(logged) = fields.get("provider") {
-                assert_eq!(logged.as_str(), provider.as_deref());
+            if has_member(fields, "provider") {
+                assert_eq!(fields["provider"].as_str(), provider.as_deref());
             }
-            assert!(fields.get("client").is_none());
+            assert!(!has_member(fields, "client"));
         }
         let serialized = serde_json::to_string(&audits).unwrap();
         for secret in query_secrets.iter().map(String::as_str).chain(
@@ -596,9 +599,9 @@ mod tests {
     ) {
         let fields = &reply.audit.as_ref().unwrap()["fields"];
         assert_eq!(fields["event"], event);
-        assert_eq!(fields.get("reason").and_then(Value::as_str), reason);
-        assert_eq!(fields.get("user").and_then(Value::as_str), user);
-        assert_eq!(fields.get("subject").and_then(Value::as_str), subject);
+        assert_eq!(fields["reason"].as_str(), reason);
+        assert_eq!(fields["user"].as_str(), user);
+        assert_eq!(fields["subject"].as_str(), subject);
     }
 
     async fn authorize(h: &Harness, scope: &str) -> String {
@@ -746,7 +749,7 @@ mod tests {
             serde_json::from_slice(&URL_SAFE_NO_PAD.decode(payload).unwrap()).unwrap();
         assert_eq!(claims["sub"], "uid-alice");
         // No passkey: no `amr`.
-        assert!(claims.get("amr").is_none(), "{claims}");
+        assert!(!has_member(&claims, "amr"), "{claims}");
     }
 
     #[tokio::test]
@@ -932,7 +935,7 @@ mod tests {
             .unwrap();
         let claims: Value =
             serde_json::from_slice(&URL_SAFE_NO_PAD.decode(payload).unwrap()).unwrap();
-        claims.get("amr").cloned().unwrap_or(Value::Null)
+        claims["amr"].clone()
     }
 
     #[tokio::test]
@@ -1301,7 +1304,7 @@ mod tests {
                 .contains(SECRET_ERROR)
         );
         let audit = failed.audit.as_ref().unwrap();
-        assert!(audit["fields"].get("error").is_none());
+        assert!(!has_member(&audit["fields"], "error"));
         assert!(!serde_json::to_string(audit).unwrap().contains(SECRET_ERROR));
     }
 
@@ -2156,7 +2159,9 @@ mod tests {
             .unwrap();
             assert_eq!(pending["issuer"], GOOGLE_ISSUER);
             if change.is_null() {
-                pending.as_object_mut().unwrap().remove("issuer");
+                if let Value::Object(members) = &mut pending {
+                    members.remove("issuer");
+                }
             } else {
                 pending["issuer"] = change;
             }

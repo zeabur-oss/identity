@@ -195,9 +195,9 @@ mod tests {
         assert_eq!(value["alg"], "ES256");
         assert_eq!(value["crv"], "P-256");
         assert_eq!(value["kid"], jwk.kid);
-        assert!(value.get("key_ops").is_none());
+        assert!(value["key_ops"].is_null());
         assert!(
-            value.get("d").is_none(),
+            value["d"].is_null(),
             "private members must never be published"
         );
     }

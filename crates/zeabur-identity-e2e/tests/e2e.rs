@@ -360,10 +360,8 @@ mod tests {
         let certificates: Api<DynamicObject> =
             Api::namespaced_with(client.clone(), namespace, &resource);
         let current = certificates.get(name).await.unwrap();
-        let mut conditions = current
-            .data
-            .pointer("/status/conditions")
-            .and_then(Value::as_array)
+        let mut conditions = current.data["status"]["conditions"]
+            .as_array()
             .cloned()
             .unwrap_or_default();
         conditions.push(json!({

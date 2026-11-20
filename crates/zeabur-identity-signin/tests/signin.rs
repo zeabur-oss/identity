@@ -43,7 +43,7 @@ mod tests {
         MemorySetupStore, User,
     };
     use zeabur_identity_test_support::logging::Capture;
-    use zeabur_identity_test_support::{Device, device};
+    use zeabur_identity_test_support::{Device, device, has_member};
     use zeabur_identity_ui::i18n::Lang;
 
     const ISSUER: &str = "https://login.example.com";
@@ -305,7 +305,7 @@ mod tests {
                         .unwrap()
                 );
             }
-            assert!(fields.get("client").is_none());
+            assert!(!has_member(fields, "client"));
         }
         let serialized = serde_json::to_string(&audit).unwrap();
         for (_, secret) in cookies {
@@ -365,7 +365,7 @@ mod tests {
                 assert_secret_values_absent(records, value);
             }
         }
-        if let Some(location) = value.get("redirect_to").and_then(Value::as_str)
+        if let Some(location) = value["redirect_to"].as_str()
             && let Some((_, query)) = location.split_once('?')
         {
             for (key, secret) in form_urlencoded::parse(query.as_bytes()) {
@@ -422,11 +422,10 @@ mod tests {
         .await;
         assert_eq!(reply.status, StatusCode::CREATED, "{}", reply.body);
         assert_eq!(reply.audit.as_ref().unwrap()["fields"]["user"], "admin");
-        assert!(
-            reply.audit.as_ref().unwrap()["fields"]
-                .get("subject")
-                .is_none()
-        );
+        assert!(!has_member(
+            &reply.audit.as_ref().unwrap()["fields"],
+            "subject"
+        ));
         assert_eq!(reply.body["username"], "admin");
     }
 
@@ -537,10 +536,10 @@ mod tests {
             rejected.kind(),
             "urn:zeabur-identity:problem:passkey-failed"
         );
-        assert!(rejected.body.get("redirect_to").is_none());
+        assert!(!has_member(&rejected.body, "redirect_to"));
         let fields = &rejected.audit.as_ref().unwrap()["fields"];
-        assert!(fields.get("user").is_none());
-        assert!(fields.get("subject").is_none());
+        assert!(!has_member(fields, "user"));
+        assert!(!has_member(fields, "subject"));
         // Refused by the UV check, not by the signature, challenge or origin checks.
         let diagnostic = rejected.diagnostics.first().unwrap();
         assert_eq!(diagnostic["fields"]["reason"], "passkey-failed");
@@ -952,9 +951,9 @@ mod tests {
             "urn:zeabur-identity:problem:passkey-failed"
         );
         let fields = &rejected.audit.as_ref().unwrap()["fields"];
-        assert!(fields.get("user").is_none());
-        assert!(fields.get("subject").is_none());
-        assert!(fields.get("error").is_none());
+        assert!(!has_member(fields, "user"));
+        assert!(!has_member(fields, "subject"));
+        assert!(!has_member(fields, "error"));
         let diagnostic = rejected.diagnostics.first().unwrap();
         assert_eq!(diagnostic["fields"]["reason"], "passkey-failed");
         // Failed signature verification does not consume the valid ceremony.
@@ -993,16 +992,14 @@ mod tests {
         let reply = sign_in(&h, &mut stranger).await;
         assert_eq!(reply.status, StatusCode::UNAUTHORIZED);
         assert_eq!(reply.kind(), "urn:zeabur-identity:problem:passkey-failed");
-        assert!(
-            reply.audit.as_ref().unwrap()["fields"]
-                .get("user")
-                .is_none()
-        );
-        assert!(
-            reply.audit.as_ref().unwrap()["fields"]
-                .get("subject")
-                .is_none()
-        );
+        assert!(!has_member(
+            &reply.audit.as_ref().unwrap()["fields"],
+            "user"
+        ));
+        assert!(!has_member(
+            &reply.audit.as_ref().unwrap()["fields"],
+            "subject"
+        ));
 
         let mut device = device();
         enrol(&h, &mut device).await;
@@ -1020,8 +1017,8 @@ mod tests {
         assert_eq!(reply.status, StatusCode::UNAUTHORIZED);
         // Disabled users are rejected before signature verification, so no identity is asserted.
         let fields = &reply.audit.as_ref().unwrap()["fields"];
-        assert!(fields.get("user").is_none());
-        assert!(fields.get("subject").is_none());
+        assert!(!has_member(fields, "user"));
+        assert!(!has_member(fields, "subject"));
     }
 
     #[tokio::test]
@@ -1066,7 +1063,7 @@ mod tests {
                     .unwrap();
             assert_eq!(body["detail"], messages.messages().setup_invalid, "{lang}");
             assert_eq!(body["next"], "new-link");
-            assert!(body.get("refresh").is_none());
+            assert!(!has_member(&body, "refresh"));
         }
     }
 
@@ -1166,7 +1163,7 @@ mod tests {
             reply.kind(),
             "urn:zeabur-identity:problem:device-passkey-needed"
         );
-        assert!(reply.body.get("redirect_to").is_none());
+        assert!(!has_member(&reply.body, "redirect_to"));
     }
 
     #[tokio::test]
@@ -1243,7 +1240,7 @@ mod tests {
             assert_eq!(fields["outcome"], "failure");
             assert_eq!(fields["user"], "admin");
             assert_eq!(fields["subject"], ADMIN_UID);
-            assert!(fields.get("error").is_none());
+            assert!(!has_member(fields, "error"));
             let diagnostic = reply.diagnostics.first().unwrap();
             assert_eq!(diagnostic["fields"]["reason"], "authorization_failed");
             let error = diagnostic["fields"]["error"].as_str().unwrap();
@@ -1279,8 +1276,8 @@ mod tests {
         let reply = post(&h.app, "/setup/options", json!({ "token": token }), &[]).await;
         assert_eq!(reply.status, StatusCode::UNAUTHORIZED);
         let fields = &reply.audit.as_ref().unwrap()["fields"];
-        assert!(fields.get("user").is_none());
-        assert!(fields.get("subject").is_none());
+        assert!(!has_member(fields, "user"));
+        assert!(!has_member(fields, "subject"));
     }
 
     mod account {

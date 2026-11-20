@@ -36,7 +36,7 @@ fn typescript() -> String {
     for (name, schema) in &definitions {
         out.push('\n');
         doc(&mut out, schema, "");
-        if schema.get("properties").is_some() {
+        if member(schema, "properties").is_some() {
             writeln!(out, "export type {name} = {}", object(schema, "")).unwrap();
         } else {
             writeln!(out, "export type {name} = {}", ty(schema, "")).unwrap();
@@ -45,8 +45,17 @@ fn typescript() -> String {
     out
 }
 
+/// A keyword of a JSON Schema document. Only the keywords this generator renders are read.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "JSON Schema is open-ended, so the generator reads the keywords it renders by name"
+)]
+fn member<'a>(schema: &'a Value, keyword: &str) -> Option<&'a Value> {
+    schema.get(keyword)
+}
+
 fn doc(out: &mut String, schema: &Value, indent: &str) {
-    if let Some(text) = schema.get("description").and_then(Value::as_str) {
+    if let Some(text) = member(schema, "description").and_then(Value::as_str) {
         writeln!(out, "{indent}/** {} */", text.replace('\n', " ")).unwrap();
     }
 }
@@ -74,18 +83,17 @@ fn object(schema: &Value, indent: &str) -> String {
 }
 
 fn ty(schema: &Value, indent: &str) -> String {
-    if let Some(reference) = schema.get("$ref").and_then(Value::as_str) {
+    if let Some(reference) = member(schema, "$ref").and_then(Value::as_str) {
         return reference.rsplit('/').next().unwrap().to_owned();
     }
-    if let Some(value) = schema.get("const") {
+    if let Some(value) = member(schema, "const") {
         return value.to_string();
     }
-    if let Some(values) = schema.get("enum").and_then(Value::as_array) {
+    if let Some(values) = member(schema, "enum").and_then(Value::as_array) {
         return union(values.iter().map(Value::to_string));
     }
-    if let Some(alternatives) = schema
-        .get("oneOf")
-        .or_else(|| schema.get("anyOf"))
+    if let Some(alternatives) = member(schema, "oneOf")
+        .or_else(|| member(schema, "anyOf"))
         .and_then(Value::as_array)
     {
         return union(alternatives.iter().map(|a| ty(a, indent)));

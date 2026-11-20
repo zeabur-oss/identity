@@ -83,7 +83,7 @@ mod tests {
         for _ in 0..50 {
             let created = serde_json::from_value::<DynamicObject>(object.clone()).unwrap();
             if let Ok(created) = api.create(&PostParams::default(), &created).await {
-                if created.data["spec"].get("type").is_some() {
+                if !created.data["spec"]["type"].is_null() {
                     return;
                 }
                 api.delete(name, &DeleteParams::default()).await.unwrap();

@@ -35,6 +35,7 @@ mod tests {
         Client, CreateGrant, Directory as _, Grant, GrantStore, MemoryDirectory, MemoryGrantStore,
         NewGrant, Rotation, StoreError, User, Verification,
     };
+    use zeabur_identity_test_support::has_member;
     use zeabur_identity_test_support::logging::Capture;
 
     const ISSUER: &str = "https://login.example.com";
@@ -422,8 +423,8 @@ mod tests {
             "secret exclusion requires captured audit records"
         );
         for record in &audit {
-            assert!(record.get("span").is_none());
-            assert!(record.get("spans").is_none());
+            assert!(!has_member(record, "span"));
+            assert!(!has_member(record, "spans"));
         }
         let serialized = serde_json::to_string(&audit).unwrap();
         for secret in secrets.iter().copied().chain([
@@ -488,7 +489,7 @@ mod tests {
             at["exp"].as_u64().unwrap() - at["iat"].as_u64().unwrap(),
             600
         );
-        assert!(at.get("azp").is_none() && at.get("nonce").is_none());
+        assert!(!has_member(&at, "azp") && !has_member(&at, "nonce"));
 
         let (header, id) = verify(&h, body["id_token"].as_str().unwrap(), "kubectl");
         assert_eq!(header.typ.as_deref(), Some("JWT"));
@@ -497,7 +498,7 @@ mod tests {
         assert_eq!(id["auth_time"], START);
         assert_eq!(id["name"], "alice example");
         assert!(
-            id.get("client_id").is_none(),
+            !has_member(&id, "client_id"),
             "ID tokens never look like access tokens"
         );
         audit_outcomes(&h, "oauth.code_exchange", &["success"]);
@@ -581,7 +582,7 @@ mod tests {
         let (header, id) = verify(&h, reply.json()["id_token"].as_str().unwrap(), "web");
         assert_eq!(header.alg, jsonwebtoken::Algorithm::RS256);
         assert!(
-            id.get("name").is_none(),
+            !has_member(&id, "name"),
             "no profile scope, no profile claims"
         );
         let (_, at) = verify(&h, reply.json()["access_token"].as_str().unwrap(), "web");
@@ -637,7 +638,7 @@ mod tests {
                 assert_eq!(event["fields"]["subject"], "uid-alice");
             } else {
                 for identity in ["client", "user", "subject"] {
-                    assert!(event["fields"].get(identity).is_none());
+                    assert!(!has_member(&event["fields"], identity));
                 }
             }
         }
@@ -645,7 +646,7 @@ mod tests {
         assert!(
             failed_refresh
                 .iter()
-                .all(|record| record["fields"].get("client").is_none())
+                .all(|record| !has_member(&record["fields"], "client"))
         );
         assert_no_secrets(
             &h,
@@ -682,7 +683,7 @@ mod tests {
         let replay = audit_outcomes(&h, "oauth.replay", &["failure"]);
         assert_eq!(replay[0]["fields"]["reason"], "code_reused");
         assert_eq!(replay[0]["fields"]["client"], "kubectl");
-        assert!(replay[0]["fields"].get("user").is_none());
+        assert!(!has_member(&replay[0]["fields"], "user"));
         assert_no_secrets(
             &h,
             &[
@@ -791,7 +792,7 @@ mod tests {
         let binding = audit_outcomes(&h, "oauth.client_binding", &["failure"]);
         assert_eq!(binding[0]["fields"]["reason"], "client_mismatch");
         assert_eq!(binding[0]["fields"]["client"], "web");
-        assert!(binding[0]["fields"].get("user").is_none());
+        assert!(!has_member(&binding[0]["fields"], "user"));
         assert_no_secrets(&h, &[&code, &late]);
     }
 
@@ -810,7 +811,7 @@ mod tests {
         assert_ne!(first, second);
         let (_, id) = verify(&h, reply.json()["id_token"].as_str().unwrap(), "kubectl");
         assert_eq!(id["auth_time"], START, "auth_time is the original sign-in");
-        assert!(id.get("nonce").is_none());
+        assert!(!has_member(&id, "nonce"));
 
         let rotated = refresh(&h, &second).await.json();
         let third = rotated["refresh_token"].as_str().unwrap().to_owned();
@@ -1318,8 +1319,8 @@ mod tests {
         assert_eq!(events[0]["fields"]["client"], "web");
         for index in [0, 1, 3] {
             assert_eq!(events[index]["fields"]["reason"], "accepted");
-            assert!(events[index]["fields"].get("user").is_none());
-            assert!(events[index]["fields"].get("subject").is_none());
+            assert!(!has_member(&events[index]["fields"], "user"));
+            assert!(!has_member(&events[index]["fields"], "subject"));
         }
         assert_eq!(events[2]["fields"]["reason"], "unsupported_token_type");
         assert_no_secrets(
@@ -1751,7 +1752,7 @@ mod tests {
                 let events = audit_outcomes(&h, "oauth.code_exchange", &["failure"]);
                 assert_eq!(events[0]["fields"]["reason"], reason);
                 assert_eq!(events[0]["fields"]["client"], "kubectl");
-                assert!(events[0]["fields"].get("user").is_none());
+                assert!(!has_member(&events[0]["fields"], "user"));
                 let operational = if missing {
                     "keys_unavailable"
                 } else {
@@ -1858,7 +1859,7 @@ mod tests {
                 let detected = audit_outcomes(&h, event, &["failure"]);
                 assert_eq!(detected[0]["fields"]["reason"], reason);
                 assert_eq!(detected[0]["fields"]["client"], client);
-                assert!(detected[0]["fields"].get("user").is_none());
+                assert!(!has_member(&detected[0]["fields"], "user"));
             }
             assert_no_secrets(&h, &secrets.iter().map(String::as_str).collect::<Vec<_>>());
             let family = zeabur_identity_oauth::refresh::RefreshToken::parse(token).unwrap();
@@ -1904,7 +1905,7 @@ mod tests {
             let events = audit_outcomes(&h, event, &["failure"]);
             assert_eq!(events[0]["fields"]["reason"], "invalid_client");
             for identity in ["client", "user", "subject"] {
-                assert!(events[0]["fields"].get(identity).is_none());
+                assert!(!has_member(&events[0]["fields"], identity));
             }
             assert_no_secrets(
                 &h,
@@ -1954,8 +1955,8 @@ mod tests {
         assert_eq!(events[0]["fields"]["reason"], "not_form");
         assert_eq!(events[1]["fields"]["reason"], "invalid_request");
         assert_eq!(events[2]["fields"]["reason"], "invalid_request");
-        assert!(events[0]["fields"].get("client").is_none());
-        assert!(events[1]["fields"].get("client").is_none());
+        assert!(!has_member(&events[0]["fields"], "client"));
+        assert!(!has_member(&events[1]["fields"], "client"));
         assert_eq!(events[2]["fields"]["client"], "kubectl");
         assert_no_secrets(
             &h,
@@ -2025,8 +2026,8 @@ mod tests {
         assert_eq!(events[1]["fields"]["reason"], "unsupported_grant_type");
         assert_eq!(events[2]["fields"]["reason"], "invalid_request");
         assert_eq!(events[3]["fields"]["reason"], "not_form");
-        assert!(events[3]["fields"].get("client").is_none());
-        assert!(events[4]["fields"].get("client").is_none());
+        assert!(!has_member(&events[3]["fields"], "client"));
+        assert!(!has_member(&events[4]["fields"], "client"));
         assert_no_secrets(&h, &["password", "duplicate-form-code-sentinel"]);
     }
 }
