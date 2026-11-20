@@ -5,7 +5,7 @@
     "": {
       "name": "zeabur-identity-ui",
       "dependencies": {
-        "@zeabur-oss/design-system": "0.1.4",
+        "@zeabur-oss/design-system": "0.1.5",
       },
       "devDependencies": {
         "@tailwindcss/cli": "4.3.5",
@@ -220,7 +220,7 @@
 
     "@typescript/typescript-win32-x64": ["@typescript/typescript-win32-x64@7.0.2", "", { "os": "win32", "cpu": "x64" }, "sha512-0BQ3HkAHHlKLSp1qRvf3SUhGpGsDuhB/jgFw75guyqbxJqEaS0Cw/VFO8i2nHglJUzQCRtMMR/IBAKE3ETMC4g=="],
 
-    "@zeabur-oss/design-system": ["@zeabur-oss/design-system@0.1.4", "", { "peerDependencies": { "@base-ui/react": "^1.8.0", "class-variance-authority": "^0.7.1", "cn": "^0.4.0", "react": "^19.3.0", "react-dom": "^19.3.0", "recharts": "^3.8.0", "sonner": "^2.0.8", "tailwindcss": "^4.3.0" }, "optionalPeers": ["recharts", "sonner"] }, "sha512-Q6brBPO8f0JC0PkjYXaxuuOXNjdcgpwOHGsfOGWr4QlognrwbSv1MrL75qDxGRzpp2GSNP7TO9213HSMlpzSAA=="],
+    "@zeabur-oss/design-system": ["@zeabur-oss/design-system@0.1.5", "", { "peerDependencies": { "@base-ui/react": "^1.8.0", "class-variance-authority": "^0.7.1", "cn": "^0.4.0", "react": "^19.3.0", "react-dom": "^19.3.0", "recharts": "^3.8.0", "sonner": "^2.0.8", "tailwindcss": "^4.3.0" }, "optionalPeers": ["recharts", "sonner"] }, "sha512-MDwiX7tYe0miDHHTCBvbyx0n6jRm0pQNcLSecHGzEQon8pe1JH6QoZwiA65+o/H4MatsupX3+kjw0pxRhNCwgA=="],
 
     "bun-types": ["bun-types@1.4.4", "", { "dependencies": { "@types/node": "*", "undici-types": "*" } }, "sha512-yjrJh5oGX7mMPKGd19YXyIjmEuj4G4zNC30bs7PM9Az7NQ3ndF3j6hbeRdvJTRQEhJ/FYQwW0a2moweEi2hMxQ=="],
 
