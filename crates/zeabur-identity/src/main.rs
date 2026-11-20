@@ -8,32 +8,26 @@ use clap::Parser as _;
 use tracing_subscriber::filter::Targets;
 use tracing_subscriber::layer::SubscriberExt as _;
 use tracing_subscriber::util::SubscriberInitExt as _;
-use zeabur_identity::cli::{Cli, Command, LogFormat, ServeArgs, SetupLinkArgs, WORKER_THREADS};
+use zeabur_identity::cli::{Cli, Command, LogFormat, ServeArgs, SetupLinkArgs};
 use zeabur_identity::serve::ServeError;
 use zeabur_identity_core::clock::Clock as _;
 use zeabur_identity_k8s::setup::LinkError;
 
-fn main() -> ExitCode {
+#[tokio::main]
+async fn main() -> ExitCode {
     let cli = Cli::parse();
+    init_logging(match &cli.command {
+        Some(Command::SetupLink(_)) => LogFormat::Json,
+        None => cli.serve.log_format,
+    });
     match &cli.command {
-        Some(Command::SetupLink(args)) => setup_link(args),
-        None => serve(&cli.serve),
+        Some(Command::SetupLink(args)) => setup_link(args).await,
+        None => serve(&cli.serve).await,
     }
 }
 
-fn setup_link(args: &SetupLinkArgs) -> ExitCode {
-    init_logging(LogFormat::Json);
-    let runtime = match tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-    {
-        Ok(runtime) => runtime,
-        Err(error) => {
-            tracing::error!(reason = "runtime_creation_failed", %error, "starting the async runtime failed");
-            return ExitCode::FAILURE;
-        }
-    };
-    let result = runtime.block_on(async {
+async fn setup_link(args: &SetupLinkArgs) -> ExitCode {
+    let result = async {
         let client = kube::Client::try_default().await.map_err(LinkError::from)?;
         let now = zeabur_identity_core::clock::SystemClock.now();
         zeabur_identity_k8s::setup::store_setup_token(
@@ -46,7 +40,8 @@ fn setup_link(args: &SetupLinkArgs) -> ExitCode {
             now,
         )
         .await
-    });
+    }
+    .await;
     match result {
         Ok(expires_at) => {
             tracing::info!(user = %args.user, expires_at = expires_at.as_secs(), "setup token stored");
@@ -63,8 +58,7 @@ fn setup_link(args: &SetupLinkArgs) -> ExitCode {
     }
 }
 
-fn serve(args: &ServeArgs) -> ExitCode {
-    init_logging(args.log_format);
+async fn serve(args: &ServeArgs) -> ExitCode {
     let config = match args.config() {
         Ok(config) => config,
         Err(error) => {
@@ -77,22 +71,7 @@ fn serve(args: &ServeArgs) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let runtime = match tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(WORKER_THREADS)
-        .enable_all()
-        .build()
-    {
-        Ok(runtime) => runtime,
-        Err(error) => {
-            tracing::error!(
-                reason = "runtime_creation_failed",
-                %error,
-                "starting the async runtime failed"
-            );
-            return ExitCode::FAILURE;
-        }
-    };
-    match runtime.block_on(zeabur_identity::serve::serve(config)) {
+    match zeabur_identity::serve::serve(config).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             let reason = match &error {

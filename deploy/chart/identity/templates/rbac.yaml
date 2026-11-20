@@ -1,0 +1,12 @@
+{{- /* files/rbac.json is `zeabur-identityctl rbac`, which a test keeps current. */ -}}
+{{- range (.Files.Get "files/rbac.json" | fromJson).items }}
+---
+{{- $object := deepCopy . }}
+{{- $labels := merge (dict) ($object.metadata.labels | default dict) (fromYaml (include "identity.labels" $)) }}
+{{- $_ := set $object.metadata "labels" $labels }}
+{{- if or (eq $object.kind "Namespace") (eq $object.kind "Secret") }}
+{{- /* The accounts and the signing keys outlive the release. */}}
+{{- $_ := set $object.metadata "annotations" (dict "helm.sh/resource-policy" "keep") }}
+{{- end }}
+{{ toYaml $object }}
+{{- end }}

@@ -1,0 +1,57 @@
+# Zeabur Identity. Everything goes into the namespace zeabur-identity, whatever the release's
+# namespace, so zeabur-identityctl and the docs find it.
+
+image:
+  repository: ghcr.io/zeabur-oss/identity
+  # Defaults to the chart's version. Ignored when digest is set.
+  tag: ""
+  # The image by content: sha256:<64 hex digits>. A released chart sets it to the image index
+  # published with it.
+  digest: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+global:
+  # The domain the addresses are under: Identity is identity.<domain>. Empty: <ip>.sslip.io, where
+  # <ip> is the first node's ExternalIP, else its InternalIP. A parent chart shares it.
+  domain: ""
+
+# The issuer: an https URL with no path. It must match kube-apiserver's issuer byte for byte.
+# Empty: https://identity.<global.domain>.
+issuer: ""
+
+# Let people redeem invitation links (`zeabur-identityctl invite`, Zeabur's Members page).
+invitations: true
+
+ingress:
+  enabled: true
+  # Empty: the cluster's default IngressClass (Traefik on K3s).
+  className: ""
+  # The cert-manager ClusterIssuer that signs the address's certificate. Empty: no annotation;
+  # bring the TLS Secret yourself.
+  clusterIssuer: letsencrypt
+  annotations: {}
+  tls:
+    secretName: zeabur-identity-tls
+
+# The first administrator. On install, NOTES shows a setup link for this user, valid for
+# validFor (at most 168h). A hook Job stores the link's hash; the token is in NOTES only.
+# To issue another link later: zeabur-identityctl setup-link.
+admin:
+  setupLink: true
+  user: admin
+  validFor: 24h
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 24Mi
+  limits:
+    memory: 128Mi
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

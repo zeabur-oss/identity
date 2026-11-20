@@ -130,7 +130,8 @@ kubectl create -f upgrade-record/upstreamproviders.before.json
 - `--github-client-id`、`--github-client-secret-file`、`--google-client-id`、`--google-client-secret-file`：改用 `UpstreamProvider` 对象（步骤 3）。
 - `--store`：服务器始终把状态存在 Kubernetes 对象中。
 - `--upstream-ca-file`：镜像自带的 CA 已经信任 GitHub 与 Google。如果集群要经过会用自己的 CA 重新签发 TLS 的代理才能访问它们，把这个 CA 挂载到一个目录，并在 Deployment 上同时设置 `SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt` 与 `SSL_CERT_DIR=<该目录>`。
-- `--key-rotation-period`、`--key-publish-ahead`、`--key-retain-after`、`--metadata-max-age`、`--worker-threads`、`--key-secret`：服务器始终使用原来的默认值。
+- `--key-rotation-period`、`--key-publish-ahead`、`--key-retain-after`、`--metadata-max-age`、`--key-secret`：服务器始终使用原来的默认值。
+- `--worker-threads`：服务器按 CPU 数量启动工作线程，每个 CPU 一个。
 
 #### 2. 允许访问 Google 的发现地址
 

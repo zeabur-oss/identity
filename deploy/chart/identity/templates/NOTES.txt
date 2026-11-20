@@ -1,0 +1,22 @@
+Zeabur Identity's issuer: {{ include "identity.issuer" . }}
+{{- if and .Release.IsInstall .Values.admin.setupLink }}
+
+Create the first administrator ({{ .Values.admin.user }}) in a browser. The link works once and
+expires in {{ .Values.admin.validFor }}:
+
+  {{ include "identity.issuer" . }}/setup#token={{ include "identity.setupToken" . }}
+
+The certificate can take a minute after install. If {{ .Values.admin.user }} already had a passkey
+from an earlier install, they sign in with it and this link does nothing. If the link has expired,
+issue another with:
+
+  zeabur-identityctl setup-link --issuer {{ include "identity.issuer" . }} --username {{ .Values.admin.user }}
+{{- else }}
+
+To issue a setup link:
+
+  zeabur-identityctl setup-link --issuer {{ include "identity.issuer" . }} --username {{ .Values.admin.user }}
+{{- end }}
+
+kube-apiserver must accept the sign-in tokens of {{ include "identity.issuer" . }}.
+`zeabur-identityctl kube-config --issuer {{ include "identity.issuer" . }}` prints its configuration.

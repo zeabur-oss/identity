@@ -1,7 +1,7 @@
 name: Release
 
 # Tag vX.Y.Z or vX.Y.Z-<pre-release> on main: build and smoke the CLI and the image on both
-# architectures, push the image by digest, sign it and attest its SBOMs, create the draft release
+# architectures, push the image and the Helm chart by digest, sign it and attest its SBOMs, create the draft release
 # with the assets, and verify the draft on both architectures (docs/internal/releasing.md). A
 # maintainer publishes the draft. Manual run: rehearse, which builds and smokes and publishes
 # nothing.
@@ -83,7 +83,7 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
-      packages: write # the image on ghcr.io
+      packages: write # the image and the chart on ghcr.io
       id-token: write # keyless signatures
     outputs:
       subjects: ${{ steps.publish.outputs.subjects }}
@@ -99,16 +99,23 @@ jobs:
           pattern: candidate-*
           path: candidates
       - id: publish
-        name: Push the image by digest, sign it and attest its SBOMs
+        name: Push the image and the chart by digest, sign them and attest the SBOMs
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          image=ghcr.io/${GITHUB_REPOSITORY,,}:${VERSION#v}
+          owner=${GITHUB_REPOSITORY_OWNER,,}
+          plain=${VERSION#v}
+          image=ghcr.io/${GITHUB_REPOSITORY,,}:$plain
           bun x zeabur-oss-release unpublished "$VERSION"
           crane auth login ghcr.io --username "$GITHUB_ACTOR" --password-stdin <<<"$GH_TOKEN"
-          bun x zeabur-oss-release absent "$image"
-          bun x zeabur-oss-release push-image --out published "$image" \
+          bun x zeabur-oss-release absent "$image" "ghcr.io/$owner/charts/identity:$plain"
+          # The chart runs the image pinned to the index just pushed.
+          cp -r deploy/chart/identity chart
+          bun x zeabur-oss-release push-image --out published --pin chart/values.yaml:image "$image" \
             linux/amd64=candidates/candidate-amd64/image.tar linux/arm64=candidates/candidate-arm64/image.tar
+          helm lint --strict chart --set global.domain=203.0.113.1.sslip.io
+          helm package chart --destination published
+          bun x zeabur-oss-release push-chart --out published "oci://ghcr.io/$owner/charts" "published/identity-$plain.tgz"
           # Each platform image carries its own SBOM; the index carries both.
           index=$(awk '$1 == "index" { print $2 }' published/digests.txt)
           for arch in amd64 arm64; do

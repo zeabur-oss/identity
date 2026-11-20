@@ -147,18 +147,23 @@ mod tests {
         );
     }
 
-    /// The committed manifest must match the code. Regenerate with
-    /// `cargo run -q -- crds > deploy/crds.json`.
+    /// The chart's CRDs must match the code, one JSON document each. Regenerate with
+    /// `cargo run -q -- crds | jq -r '.items[] | "---", tojson' >
+    /// deploy/chart/identity/crds/crds.yaml`.
     #[test]
-    fn committed_manifest_is_current() {
-        let committed = include_str!("../../../deploy/crds.json");
+    fn committed_chart_crds_are_current() {
+        let committed = include_str!("../../../deploy/chart/identity/crds/crds.yaml");
         // Compare parsed JSON: test builds may enable serde_json features (such as
         // `preserve_order`, through dev-dependencies) that change key order but not
         // content.
-        let parse = |s: &str| serde_json::from_str::<DefinitionList>(s).unwrap();
+        let parsed: Vec<CustomResourceDefinition> = committed
+            .split("---\n")
+            .filter(|doc| !doc.is_empty())
+            .map(|doc| serde_json::from_str(doc).unwrap())
+            .collect();
         assert!(
-            committed.ends_with('\n') && parse(committed) == parse(&definitions_json().unwrap()),
-            "deploy/crds.json is stale: run `cargo run -q -- crds > deploy/crds.json`"
+            committed.ends_with('\n') && parsed == definitions(),
+            "deploy/chart/identity/crds/crds.yaml is stale: run `cargo run -q -- crds | jq -r '.items[] | \"---\", tojson' > deploy/chart/identity/crds/crds.yaml`"
         );
     }
 }
