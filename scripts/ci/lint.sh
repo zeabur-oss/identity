@@ -12,6 +12,8 @@ static() {
   shellcheck scripts/*.sh scripts/ci/*.sh
   jactionlint
   helm lint --strict deploy/chart/identity --set global.domain=203.0.113.1.sslip.io
+  # helm lint lets a failed `required` pass; template fails on it.
+  helm template deploy/chart/identity --set issuer=https://identity.example.com >/dev/null
 }
 
 cargo_checks() {

@@ -32,7 +32,10 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- end }}
 
 {{- define "identity.issuer" -}}
-{{- $issuer := .Values.issuer | default (printf "https://identity.%s" (include "identity.domain" .)) -}}
+{{- $issuer := .Values.issuer -}}
+{{- if not $issuer -}}
+{{- $issuer = printf "https://identity.%s" (include "identity.domain" .) -}}
+{{- end -}}
 {{- if not (regexMatch "^https://[^/]+$" $issuer) -}}
 {{- fail (printf "issuer must be https:// and a host with no path, not %q" $issuer) -}}
 {{- end -}}
