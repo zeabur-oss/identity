@@ -9,6 +9,8 @@ use axum::extract::{Path, RawQuery};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
+use serde::Deserialize;
+use serde_json::json;
 use zeabur_identity_ui::pages::{
     AccountView, AppLink, ErrorReason, LinkedRow, PasskeyRow, PasswordView, ProviderButton,
     SessionRow, Storage, account_page, error_page, login_page, notice_page, page_lang, setup_page,
@@ -320,63 +322,99 @@ async fn account(Path(state): Path<String>, RawQuery(q): RawQuery, h: HeaderMap)
 async fn login_options() -> Response {
     (
         [(header::CONTENT_TYPE, "application/json")],
-        r#"{"publicKey":{"challenge":"AAAAAAAAAAAAAAAAAAAAAA","timeout":600000,"rpId":"localhost","userVerification":"required"}}"#,
+        json!({
+            "publicKey": {
+                "challenge": "AAAAAAAAAAAAAAAAAAAAAA",
+                "timeout": 600_000,
+                "rpId": "localhost",
+                "userVerification": "required",
+            }
+        })
+        .to_string(),
     )
         .into_response()
 }
 
 async fn setup_options() -> Response {
+    problem(StatusCode::BAD_REQUEST, "setup-invalid", None)
+}
+
+fn problem(status: StatusCode, kind: &str, weakness: Option<&str>) -> Response {
+    let kind = format!("urn:zeabur-identity:problem:{kind}");
+    let status_code = status.as_u16();
+    let body = weakness.map_or_else(
+        || json!({ "type": kind, "title": "", "status": status_code }),
+        |weakness| json!({ "type": kind, "title": "", "status": status_code, "weakness": weakness }),
+    );
     (
-        StatusCode::BAD_REQUEST,
+        status,
         [(header::CONTENT_TYPE, "application/problem+json")],
-        r#"{"type":"urn:zeabur-identity:problem:setup-invalid","title":"","status":400}"#,
+        body.to_string(),
     )
         .into_response()
 }
 
-fn problem(status: StatusCode, kind: &str, extra: &str) -> Response {
-    (
-        status,
-        [(header::CONTENT_TYPE, "application/problem+json")],
-        format!(
-            r#"{{"type":"urn:zeabur-identity:problem:{kind}","title":"","status":{}{extra}}}"#,
-            status.as_u16()
-        ),
-    )
-        .into_response()
+#[derive(Deserialize)]
+struct SignIn {
+    username: String,
+    #[serde(default)]
+    code: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct SetupOptions {
+    token: String,
+}
+
+#[derive(Deserialize)]
+struct Setup {
+    password: String,
+    #[serde(default)]
+    totp: Option<Totp>,
+}
+
+#[derive(Deserialize)]
+struct Totp {
+    sealed: String,
+    code: String,
 }
 
 /// The username `held` shows the held-back answer, `admin` asks for a code (`000000` is wrong);
 /// any other, a wrong password.
 async fn login_password(body: String) -> Response {
-    if body.contains(r#""username":"held""#) {
-        problem(StatusCode::TOO_MANY_REQUESTS, "password-held", "")
-    } else if body.contains(r#""username":"admin""#) {
-        if body.contains(r#""code":null"#) {
-            problem(StatusCode::UNAUTHORIZED, "code-needed", "")
-        } else {
-            problem(StatusCode::UNAUTHORIZED, "code-failed", "")
-        }
-    } else {
-        problem(StatusCode::UNAUTHORIZED, "password-failed", "")
+    let Ok(sign_in) = serde_json::from_str::<SignIn>(&body) else {
+        return problem(StatusCode::UNAUTHORIZED, "password-failed", None);
+    };
+    match (sign_in.username.as_str(), sign_in.code) {
+        ("held", _) => problem(StatusCode::TOO_MANY_REQUESTS, "password-held", None),
+        ("admin", None) => problem(StatusCode::UNAUTHORIZED, "code-needed", None),
+        ("admin", Some(_)) => problem(StatusCode::UNAUTHORIZED, "code-failed", None),
+        _ => problem(StatusCode::UNAUTHORIZED, "password-failed", None),
     }
 }
 
 /// The setup token `admin` asks for an authenticator; any other, nothing more.
 async fn setup_password_options(body: String) -> Response {
-    let totp = if body.contains(r#""token":"admin""#) {
+    let admin = serde_json::from_str::<SetupOptions>(&body).is_ok_and(|o| o.token == "admin");
+    let body = if admin {
         let uri = "otpauth://totp/identity.example.com:admin?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP&issuer=identity.example.com&algorithm=SHA1&digits=6&period=30";
         let (size, path) = qr(uri);
-        format!(
-            r#"{{"secret":"JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP","secret_display":"JBSW Y3DP EHPK 3PXP JBSW Y3DP EHPK 3PXP","uri":"{uri}","qr":{{"size":{size},"path":"{path}"}},"sealed":"preview"}}"#
-        )
+        json!({
+            "totp": {
+                "secret": "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP",
+                "secret_display": "JBSW Y3DP EHPK 3PXP JBSW Y3DP EHPK 3PXP",
+                "uri": uri,
+                "qr": { "size": size, "path": path },
+                "sealed": "preview",
+            }
+        })
     } else {
-        "null".to_owned()
+        json!({ "totp": null })
     };
     (
         StatusCode::OK,
         [(header::CONTENT_TYPE, "application/json")],
-        format!(r#"{{"totp":{totp}}}"#),
+        body.to_string(),
     )
         .into_response()
 }
@@ -404,29 +442,36 @@ fn qr(text: &str) -> (usize, String) {
 /// A password with the word `common` in it is refused as common, the code `000000` is wrong; any
 /// other is set, with recovery codes when a code came with it.
 async fn setup_password(body: String) -> Response {
-    if body.contains("common") {
-        problem(
+    let Ok(setup) = serde_json::from_str::<Setup>(&body) else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    if setup.password.contains("common") {
+        return problem(
             StatusCode::UNPROCESSABLE_ENTITY,
             "password-weak",
-            r#","weakness":"common""#,
-        )
-    } else if body.contains(r#""code":"000000""#) {
-        problem(StatusCode::UNPROCESSABLE_ENTITY, "code-failed", "")
-    } else if body.contains(r#""sealed":"preview""#) {
-        (
-            StatusCode::CREATED,
-            [(header::CONTENT_TYPE, "application/json")],
-            r#"{"username":"admin","recovery_codes":["k7qd-m2xa-p4tn","v3hc-q9ze-w6rb","f2ny-t8ks-c5mj","x4pw-d7gh-n2qe","b6rt-z3vf-j8kc","m5ea-h2wq-y7tp","s9jc-k4nd-r3xb","g8tz-p6ma-e2hw","q3wv-c7yj-t5fn","d2kb-x8re-h6sq"]}"#,
-        )
-            .into_response()
-    } else {
-        (
-            StatusCode::CREATED,
-            [(header::CONTENT_TYPE, "application/json")],
-            r#"{"username":"alice"}"#,
-        )
-            .into_response()
+            Some("common"),
+        );
     }
+    let body = match setup.totp {
+        Some(totp) if totp.code == "000000" => {
+            return problem(StatusCode::UNPROCESSABLE_ENTITY, "code-failed", None);
+        }
+        Some(totp) if totp.sealed == "preview" => json!({
+            "username": "admin",
+            "recovery_codes": [
+                "k7qd-m2xa-p4tn", "v3hc-q9ze-w6rb", "f2ny-t8ks-c5mj", "x4pw-d7gh-n2qe",
+                "b6rt-z3vf-j8kc", "m5ea-h2wq-y7tp", "s9jc-k4nd-r3xb", "g8tz-p6ma-e2hw",
+                "q3wv-c7yj-t5fn", "d2kb-x8re-h6sq",
+            ],
+        }),
+        _ => json!({ "username": "alice" }),
+    };
+    (
+        StatusCode::CREATED,
+        [(header::CONTENT_TYPE, "application/json")],
+        body.to_string(),
+    )
+        .into_response()
 }
 
 #[tokio::main]

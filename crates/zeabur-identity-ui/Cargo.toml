@@ -27,4 +27,6 @@ serde_json.workspace = true
 
 [dev-dependencies]
 qrcode.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 tokio.workspace = true

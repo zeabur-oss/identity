@@ -209,6 +209,8 @@ impl KeyStore for MemoryKeyStore {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
     use crate::rotation::RotationPolicy;
 
@@ -266,9 +268,13 @@ mod tests {
         stored.keys[0].pkcs8 = "AAAA".into();
         assert!(matches!(decode(&stored).unwrap_err(), DecodeError::Key(_)));
 
-        let json = r#"{"version":1,"keys":[],"extra":true}"#;
         assert!(
-            serde_json::from_str::<StoredKeyset>(json).is_err(),
+            serde_json::from_value::<StoredKeyset>(json!({
+                "version": 1,
+                "keys": [],
+                "extra": true,
+            }))
+            .is_err(),
             "unknown fields rejected"
         );
     }

@@ -241,6 +241,8 @@ impl From<ProviderId> for String {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
 
     #[test]
@@ -336,24 +338,29 @@ mod tests {
 
     #[test]
     fn deserializing_checks_the_same_rules() {
-        let id: ExternalId = serde_json::from_str(
-            r#"{"issuer":"https://accounts.google.com","subject":"110169484474386276334"}"#,
-        )
+        let id: ExternalId = serde_json::from_value(json!({
+            "issuer": "https://accounts.google.com",
+            "subject": "110169484474386276334",
+        }))
         .unwrap();
         assert_eq!(id.issuer.as_str(), "https://accounts.google.com");
         assert_eq!(id.subject.as_str(), "110169484474386276334");
 
         let refused = [
-            r#"{"issuer":"accounts.google.com","subject":"1"}"#,
-            r#"{"issuer":"https://github.com","subject":""}"#,
-            r#"{"issuer":"https://github.com","subject":"a b"}"#,
+            json!({ "issuer": "accounts.google.com", "subject": "1" }),
+            json!({ "issuer": "https://github.com", "subject": "" }),
+            json!({ "issuer": "https://github.com", "subject": "a b" }),
         ];
-        for json in refused {
-            assert!(serde_json::from_str::<ExternalId>(json).is_err(), "{json}");
+        for value in refused {
+            let shown = value.to_string();
+            assert!(
+                serde_json::from_value::<ExternalId>(value).is_err(),
+                "{shown}"
+            );
         }
-        assert!(serde_json::from_str::<ProviderId>(r#""GitHub""#).is_err());
+        assert!(serde_json::from_value::<ProviderId>(json!("GitHub")).is_err());
         assert_eq!(
-            serde_json::from_str::<ProviderId>(r#""github""#).unwrap(),
+            serde_json::from_value::<ProviderId>(json!("github")).unwrap(),
             ProviderId::new("github").unwrap()
         );
     }

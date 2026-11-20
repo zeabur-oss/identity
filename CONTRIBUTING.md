@@ -170,6 +170,12 @@ review signal, not an audit.
 - **Cluster tests** and **end-to-end tests** are `#[ignore]`d and require a disposable cluster
   where you are cluster admin. The setup below is what `scripts/ci/kubernetes.sh` runs, in CI and
   locally.
+- **JSON in tests** is written with `serde_json::json!`, not raw strings. Compare whole objects
+  (`assert_eq!(serde_json::to_value(&typed)?, json!({ … }))`) or deserialize one
+  (`serde_json::from_value::<Typed>(json!({ … }))`); do not index into a `Value`. Keep a raw
+  string only where the exact bytes are the subject (malformed or byte-exact parser input, a
+  signature over a body, a golden file, NDJSON), with a one-line comment that says why.
+  Production code reads and writes a known shape through a typed struct, not `json!`.
 
 ### Disposable k3d cluster
 

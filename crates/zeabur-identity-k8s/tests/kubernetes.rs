@@ -23,6 +23,7 @@ mod tests {
     use kube::core::object::NotUsed;
     use kube::{Client, Config, ResourceExt as _};
     use serde::{Deserialize, Serialize};
+    use serde_json::json;
     use tokio::sync::{Barrier, watch};
     use zeabur_identity_api::client::{ClientType, OAuthClient, OAuthClientSpec};
     use zeabur_identity_api::credential::Passkey;
@@ -2335,6 +2336,8 @@ mod tests {
         }
 
         // A merge patch is admitted as UPDATE too.
+        let disable = json!({ "spec": { "disabled": true } }).to_string();
+        let make_admin = json!({ "spec": { "accountType": "Admin" } }).to_string();
         let (ok, stderr) = kubectl(
             &[
                 "-n",
@@ -2345,7 +2348,7 @@ mod tests {
                 &as_tool,
                 "--type=merge",
                 "-p",
-                r#"{"spec":{"disabled":true}}"#,
+                &disable,
             ],
             "",
         );
@@ -2360,7 +2363,7 @@ mod tests {
                 &as_tool,
                 "--type=merge",
                 "-p",
-                r#"{"spec":{"accountType":"Admin"}}"#,
+                &make_admin,
             ],
             "",
         );
@@ -2377,7 +2380,7 @@ mod tests {
                 "ana",
                 "--type=merge",
                 "-p",
-                r#"{"spec":{"accountType":"Admin"}}"#,
+                &make_admin,
             ],
             "",
         );
