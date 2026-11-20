@@ -7,10 +7,14 @@ expires in {{ .Values.admin.validFor }}:
   {{ include "identity.issuer" . }}/setup#token={{ include "identity.setupToken" . }}
 
 The certificate can take a minute after install. If the link has expired or Identity already had
-this user, issue another with: zeabur-identityctl setup-link --username {{ .Values.admin.user }}
+this user, issue another with:
+
+  zeabur-identityctl setup-link --issuer {{ include "identity.issuer" . }} --username {{ .Values.admin.user }}
 {{- else }}
 
-To issue a setup link: zeabur-identityctl setup-link --username {{ .Values.admin.user }}
+To issue a setup link:
+
+  zeabur-identityctl setup-link --issuer {{ include "identity.issuer" . }} --username {{ .Values.admin.user }}
 {{- end }}
 
 kube-apiserver must trust this issuer (audience kubernetes, username prefix zeabur:), for example
