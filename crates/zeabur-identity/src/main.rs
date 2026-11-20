@@ -8,11 +8,59 @@ use clap::Parser as _;
 use tracing_subscriber::filter::Targets;
 use tracing_subscriber::layer::SubscriberExt as _;
 use tracing_subscriber::util::SubscriberInitExt as _;
-use zeabur_identity::cli::{LogFormat, ServeArgs, WORKER_THREADS};
+use zeabur_identity::cli::{Cli, Command, LogFormat, ServeArgs, SetupLinkArgs, WORKER_THREADS};
 use zeabur_identity::serve::ServeError;
+use zeabur_identity_core::clock::Clock as _;
+use zeabur_identity_k8s::setup::LinkError;
 
 fn main() -> ExitCode {
-    serve(&ServeArgs::parse())
+    let cli = Cli::parse();
+    match &cli.command {
+        Some(Command::SetupLink(args)) => setup_link(args),
+        None => serve(&cli.serve),
+    }
+}
+
+fn setup_link(args: &SetupLinkArgs) -> ExitCode {
+    init_logging(LogFormat::Json);
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            tracing::error!(reason = "runtime_creation_failed", %error, "starting the async runtime failed");
+            return ExitCode::FAILURE;
+        }
+    };
+    let result = runtime.block_on(async {
+        let client = kube::Client::try_default().await.map_err(LinkError::from)?;
+        let now = zeabur_identity_core::clock::SystemClock.now();
+        zeabur_identity_k8s::setup::store_setup_token(
+            client,
+            &args.namespace,
+            &args.user,
+            &args.token_hash,
+            args.valid_for,
+            false,
+            now,
+        )
+        .await
+    });
+    match result {
+        Ok(expires_at) => {
+            tracing::info!(user = %args.user, expires_at = expires_at.as_secs(), "setup token stored");
+            ExitCode::SUCCESS
+        }
+        Err(LinkError::HasCredentials { .. }) => {
+            tracing::info!(user = %args.user, "the user can already sign in; no setup token stored");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            tracing::error!(reason = "setup_link_failed", %error, "storing the setup token failed");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 fn serve(args: &ServeArgs) -> ExitCode {

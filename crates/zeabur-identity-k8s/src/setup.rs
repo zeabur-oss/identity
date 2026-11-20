@@ -356,6 +356,40 @@ pub async fn issue_setup_link(
     reset: bool,
     now: UnixTime,
 ) -> Result<SetupLink, LinkError> {
+    let token = URL_SAFE_NO_PAD.encode(random::<32>().map_err(|_crypto| LinkError::Crypto)?);
+    let expires_at = store_setup_token(
+        client,
+        namespace,
+        username,
+        &token_hash(token.as_bytes()),
+        valid_for,
+        reset,
+        now,
+    )
+    .await?;
+    Ok(SetupLink {
+        url: format!("{}#token={token}", issuer.join(SETUP_PATH)),
+        expires_at,
+    })
+}
+
+/// Stores a setup token that the caller made, as [`issue_setup_link`] does.
+///
+/// `token_hash` is `sha256:<hex>`. A Helm chart makes the token and shows the link in its notes,
+/// and this stores only the hash. Returns when the token expires.
+///
+/// # Errors
+///
+/// As [`issue_setup_link`].
+pub async fn store_setup_token(
+    client: Client,
+    namespace: &str,
+    username: &str,
+    token_hash: &str,
+    valid_for: Duration,
+    reset: bool,
+    now: UnixTime,
+) -> Result<UnixTime, LinkError> {
     check_valid_for(valid_for)?;
     let pp = PostParams::default();
     let users: Api<User> = Api::namespaced(client.clone(), namespace);
@@ -377,7 +411,6 @@ pub async fn issue_setup_link(
 
     prepare_enrolment(&client, namespace, &user, reset).await?;
 
-    let token = URL_SAFE_NO_PAD.encode(random::<32>().map_err(|_crypto| LinkError::Crypto)?);
     let expires_at = now.saturating_add(valid_for);
     let secrets: Api<Secret> = Api::namespaced(client.clone(), namespace);
     let mut secret = Secret {
@@ -402,7 +435,7 @@ pub async fn issue_setup_link(
             ),
             (
                 HASH_KEY.to_owned(),
-                ByteString(token_hash(token.as_bytes()).into_bytes()),
+                ByteString(token_hash.as_bytes().to_vec()),
             ),
         ])),
         ..Secret::default()
@@ -419,8 +452,5 @@ pub async fn issue_setup_link(
     }
     let note = issued_note(None, expires_at, reset);
     record_issued(&client, namespace, &user, "SetupLinkIssued", note, now).await?;
-    Ok(SetupLink {
-        url: format!("{}#token={token}", issuer.join(SETUP_PATH)),
-        expires_at,
-    })
+    Ok(expires_at)
 }

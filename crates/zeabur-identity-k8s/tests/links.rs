@@ -26,7 +26,9 @@ mod tests {
     use zeabur_identity_core::clock::UnixTime;
     use zeabur_identity_core::config::BaseUrl;
     use zeabur_identity_k8s::invitations::{Invitee, invite};
-    use zeabur_identity_k8s::setup::{LinkError, MAX_VALID_FOR, issue_setup_link};
+    use zeabur_identity_k8s::setup::{
+        LinkError, MAX_VALID_FOR, issue_setup_link, store_setup_token,
+    };
 
     const NOW: u64 = 1_800_000_000;
 
@@ -38,6 +40,8 @@ mod tests {
         writes: Vec<(Method, String)>,
         /// Events created.
         events: Vec<Event>,
+        /// Secrets created.
+        secrets: Vec<Secret>,
         /// Refuse to create events.
         refuse_events: bool,
     }
@@ -121,7 +125,11 @@ mod tests {
                 ok(&status_body(Status::success()))
             }
             (Method::GET, "zeabur-identity-setup") => not_found(),
-            (Method::POST, "secrets") => store_new::<Secret>(&bytes),
+            (Method::POST, "secrets") => {
+                let secret = serde_json::from_slice(&bytes).unwrap();
+                state.lock().unwrap().secrets.push(secret);
+                store_new::<Secret>(&bytes)
+            }
             (Method::POST, "invitations") => store_new::<Invitation>(&bytes),
             (Method::POST, "events") => {
                 let mut state = state.lock().unwrap();
@@ -315,6 +323,35 @@ mod tests {
                 "{link:?}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn a_token_made_elsewhere_is_stored_by_its_hash_for_the_user() {
+        let (client, state) = fake(vec![]).await;
+        let hash = format!("sha256:{}", "0a".repeat(32));
+        let now = UnixTime::from_secs(NOW);
+        let expires_at = store_setup_token(
+            client,
+            "test",
+            "alice",
+            &hash,
+            Duration::from_hours(24),
+            false,
+            now,
+        )
+        .await
+        .unwrap();
+        assert_eq!(expires_at, now.saturating_add(Duration::from_hours(24)));
+        let secrets = state.lock().unwrap().secrets.clone();
+        let secret = &secrets[0];
+        let data = secret.data.as_ref().unwrap();
+        assert_eq!(data["token-hash"].0, hash.as_bytes());
+        assert_eq!(data["user"].0, b"alice");
+        let owner = &secret.metadata.owner_references.as_ref().unwrap()[0];
+        assert_eq!(
+            (owner.kind.as_str(), owner.uid.as_str()),
+            ("User", "uid-alice")
+        );
     }
 
     #[tokio::test]
