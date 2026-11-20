@@ -386,19 +386,23 @@ mod tests {
 
     /// The members of a request or reply body that must not reach the logs.
     #[derive(Default, Deserialize)]
-    #[serde(default, rename_all = "camelCase")]
+    #[serde(default)]
     struct Secrets {
         token: Option<String>,
         password: Option<String>,
         current: Option<String>,
         new: Option<String>,
         id: Option<String>,
+        #[serde(rename = "rawId")]
         raw_id: Option<String>,
         #[serde(rename = "clientDataJSON")]
         client_data_json: Option<String>,
+        #[serde(rename = "authenticatorData")]
         authenticator_data: Option<String>,
         signature: Option<String>,
+        #[serde(rename = "attestationObject")]
         attestation_object: Option<String>,
+        #[serde(rename = "userHandle")]
         user_handle: Option<String>,
         challenge: Option<String>,
         access_token: Option<String>,
@@ -407,6 +411,7 @@ mod tests {
         redirect_to: Option<String>,
         credential: Option<Box<Self>>,
         response: Option<Box<Self>>,
+        #[serde(rename = "publicKey")]
         public_key: Option<PublicKey>,
         user: Option<Box<Self>>,
         rp: Option<Box<Self>>,
@@ -476,6 +481,53 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    /// A leak check that reads no member of its input passes every log, so each wire name must
+    /// be seen: a body carrying only that member, found in a log line, must fail the check.
+    #[test]
+    fn every_secret_member_is_detected_in_a_log_line() {
+        let members = [
+            "token",
+            "password",
+            "current",
+            "new",
+            "id",
+            "rawId",
+            "clientDataJSON",
+            "authenticatorData",
+            "signature",
+            "attestationObject",
+            "userHandle",
+            "challenge",
+            "access_token",
+            "id_token",
+            "refresh_token",
+            "publicKey",
+        ];
+        for member in members {
+            let body = format!(r#"{{"{member}":"sentinel-{member}"}}"#);
+            let line = format!("INFO sentinel-{member}");
+            let leaked =
+                std::panic::catch_unwind(|| Secrets::read(&body).assert_absent_from(&line));
+            assert!(leaked.is_err(), "a leaked {member} went unnoticed");
+            Secrets::read(&body).assert_absent_from("INFO nothing here");
+        }
+        let body = r#"{"redirect_to":"https://rp.test/cb?code=sentinel-code&state=s"}"#;
+        let leaked = std::panic::catch_unwind(|| {
+            Secrets::read(body).assert_absent_from("INFO sentinel-code");
+        });
+        assert!(
+            leaked.is_err(),
+            "a leaked authorization code went unnoticed"
+        );
+        for nested in ["credential", "response", "user", "rp"] {
+            let body = format!(r#"{{"{nested}":{{"token":"sentinel-{nested}"}}}}"#);
+            let leaked = std::panic::catch_unwind(|| {
+                Secrets::read(&body).assert_absent_from(&format!("INFO sentinel-{nested}"));
+            });
+            assert!(leaked.is_err(), "a leaked {nested} member went unnoticed");
         }
     }
 
