@@ -16,6 +16,7 @@ mod tests {
     use jsonwebtoken::{DecodingKey, Validation, decode, decode_header};
     use serde::de::DeserializeOwned;
     use serde::{Deserialize, Serialize};
+    use serde_json::json;
     use tokio::sync::Barrier;
     use tower::ServiceExt as _;
     use tracing::instrument::WithSubscriber as _;
@@ -1989,7 +1990,9 @@ mod tests {
             .method(Method::POST)
             .uri("/revoke")
             .header(header::CONTENT_TYPE, "application/json")
-            .body(Body::from(r#"{"token":"non-form-token-sentinel"}"#))
+            .body(Body::from(
+                json!({ "token": "non-form-token-sentinel" }).to_string(),
+            ))
             .unwrap();
         assert_eq!(send(&h.app, request).await.error(), "invalid_request");
         let duplicate = post(

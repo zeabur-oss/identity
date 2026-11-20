@@ -201,6 +201,7 @@ pub fn parse_jwk_set(json: &[u8]) -> Result<Vec<VerificationKey>, VerifyError> {
 #[cfg(test)]
 mod tests {
     use serde::{Deserialize, Serialize};
+    use serde_json::json;
 
     use super::*;
     use crate::jws::sign_compact;
@@ -272,7 +273,7 @@ mod tests {
         let token = sign_compact(&signing, "JWT", &Subject { sub: "a" }).unwrap();
 
         let mut parts: Vec<&str> = token.split('.').collect();
-        let forged = URL_SAFE_NO_PAD.encode(br#"{"sub":"b"}"#);
+        let forged = URL_SAFE_NO_PAD.encode(json!({ "sub": "b" }).to_string());
         parts[1] = &forged;
         assert_eq!(
             verify_compact(
@@ -296,9 +297,12 @@ mod tests {
         );
 
         // `alg: none` and critical extensions are refused.
-        let body = URL_SAFE_NO_PAD.encode(br#"{"sub":"a"}"#);
-        for header in [r#"{"alg":"none"}"#, r#"{"alg":"ES256","crit":["exp"]}"#] {
-            let token = format!("{}.{body}.", URL_SAFE_NO_PAD.encode(header));
+        let body = URL_SAFE_NO_PAD.encode(json!({ "sub": "a" }).to_string());
+        for header in [
+            json!({ "alg": "none" }),
+            json!({ "alg": "ES256", "crit": ["exp"] }),
+        ] {
+            let token = format!("{}.{body}.", URL_SAFE_NO_PAD.encode(header.to_string()));
             assert_eq!(
                 verify_compact(&token, std::slice::from_ref(&verification), &Algorithm::ALL),
                 Err(VerifyError::Header)
