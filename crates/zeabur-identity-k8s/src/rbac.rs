@@ -227,10 +227,10 @@ pub fn manifests_json(namespace: &str) -> serde_json::Result<String> {
 mod tests {
     use super::*;
 
-    /// Regenerate with `cargo run -q -- rbac > deploy/rbac.json`.
+    /// Regenerate with `cargo run -q -- rbac > deploy/chart/identity/files/rbac.json`.
     #[test]
     fn committed_manifest_is_current() {
-        let committed = include_str!("../../../deploy/rbac.json");
+        let committed = include_str!("../../../deploy/chart/identity/files/rbac.json");
         // Compare parsed JSON: test builds may enable serde_json features (such as
         // `preserve_order`, through dev-dependencies) that change key order but not
         // content.
@@ -238,7 +238,7 @@ mod tests {
         assert!(
             committed.ends_with('\n')
                 && parse(committed) == parse(&manifests_json(DEFAULT_NAMESPACE).unwrap()),
-            "deploy/rbac.json is stale: run `cargo run -q -- rbac > deploy/rbac.json`"
+            "deploy/chart/identity/files/rbac.json is stale: run `cargo run -q -- rbac > deploy/chart/identity/files/rbac.json`"
         );
     }
 

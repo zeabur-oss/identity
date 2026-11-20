@@ -11,6 +11,7 @@ static() {
   nixfmt --check flake.nix
   shellcheck scripts/*.sh scripts/ci/*.sh
   jactionlint
+  helm lint --strict deploy/chart/identity --set global.domain=203.0.113.1.sslip.io
 }
 
 cargo_checks() {

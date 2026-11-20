@@ -67,10 +67,12 @@
               brotli
               python3 # .claude/skills/zeabur-identity-ui/contrast.py
 
-              # Kubernetes integration tests
+              # Kubernetes integration tests and the Helm chart
               kind
               k3d
               kubectl
+              kubernetes-helm
+              jq
             ];
 
             env = {

@@ -17,8 +17,8 @@ The interface: `zeabur-identity-ui`.
 - Implementing a MUST/SHOULD updates `docs/reference/conformance.mdx` (`zeabur-identity-spec-work`).
 
 ## Generated files
-- Regenerate committed outputs in the same commit: `cargo run -q -p zeabur-identityctl -- crds >
-  deploy/crds.json`, `… -- rbac > deploy/rbac.json` (tests fail when they are stale), and
+- Regenerate committed outputs in the same commit: `cargo run -q -p zeabur-identityctl -- crds | jq -r '.items[] | "---", tojson' >
+  deploy/chart/identity/crds/crds.yaml`, `… -- rbac > deploy/chart/identity/files/rbac.json` (tests fail when they are stale), and
   `templates/ds.html` (`./scripts/build-ui.sh`, which also builds `ui/dist`, not committed).
 
 ## Scale

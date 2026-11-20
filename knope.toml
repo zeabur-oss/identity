@@ -16,6 +16,7 @@ versioned_files = [
   { path = "Cargo.lock", dependency = "zeabur-identity-ui" },
   { path = "Cargo.lock", dependency = "zeabur-identityctl" },
   "ui/package.json",
+  { path = "deploy/chart/identity/Chart.yaml", regex = '(?m)^version: (?<version>\S+)$' },
 ]
 changelog = "CHANGELOG.md"
 
