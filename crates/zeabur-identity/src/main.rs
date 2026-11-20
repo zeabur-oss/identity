@@ -13,8 +13,7 @@ use zeabur_identity::serve::ServeError;
 use zeabur_identity_core::clock::Clock as _;
 use zeabur_identity_k8s::setup::LinkError;
 
-/// Two worker threads keep idle memory low.
-#[tokio::main(worker_threads = 2)]
+#[tokio::main]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
     init_logging(match &cli.command {
