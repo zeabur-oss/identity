@@ -206,13 +206,16 @@ pub(crate) mod tests {
     }
 
     fn kids(published: &Published) -> Vec<String> {
-        let value: serde_json::Value = serde_json::from_slice(&published.jwks()).unwrap();
-        value["keys"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|k| k["kid"].as_str().unwrap().to_owned())
-            .collect()
+        #[derive(serde::Deserialize)]
+        struct Key {
+            kid: String,
+        }
+        #[derive(serde::Deserialize)]
+        struct Set {
+            keys: Vec<Key>,
+        }
+        let set: Set = serde_json::from_slice(&published.jwks()).unwrap();
+        set.keys.into_iter().map(|key| key.kid).collect()
     }
 
     #[tokio::test]

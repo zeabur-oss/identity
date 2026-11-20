@@ -129,69 +129,74 @@ impl ProviderMetadata {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::Value;
+    use serde::Deserialize;
 
     use super::*;
+
+    /// The members read back from the served document.
+    #[derive(Debug, PartialEq, Deserialize)]
+    struct Document {
+        issuer: String,
+        authorization_endpoint: String,
+        token_endpoint: String,
+        jwks_uri: String,
+        response_types_supported: Vec<String>,
+        subject_types_supported: Vec<String>,
+        id_token_signing_alg_values_supported: Vec<String>,
+        scopes_supported: Vec<String>,
+        response_modes_supported: Vec<String>,
+        grant_types_supported: Vec<String>,
+        code_challenge_methods_supported: Vec<String>,
+        request_uri_parameter_supported: bool,
+        authorization_response_iss_parameter_supported: bool,
+    }
 
     fn issuer() -> BaseUrl {
         BaseUrl::parse("issuer", "https://login.example.com").unwrap()
     }
 
-    fn document(jwks_base: &BaseUrl) -> Value {
+    fn document(jwks_base: &BaseUrl) -> Document {
         serde_json::from_slice(&ProviderMetadata::new(&issuer(), jwks_base).to_bytes()).unwrap()
     }
 
     #[test]
     fn required_members_are_present() {
         let doc = document(&issuer());
-        // Discovery §3 REQUIRED members.
-        for member in [
-            "issuer",
-            "authorization_endpoint",
-            "token_endpoint",
-            "jwks_uri",
-            "response_types_supported",
-            "subject_types_supported",
-            "id_token_signing_alg_values_supported",
-        ] {
-            assert!(!doc[member].is_null(), "{member}");
-        }
-        // Discovery §4.3 / RFC 8414 §3.3: identical to the issuer identifier.
-        assert_eq!(doc["issuer"], "https://login.example.com");
-        assert_eq!(doc["jwks_uri"], "https://login.example.com/jwks");
-        // Discovery §3: "The algorithm RS256 MUST be included."
-        let algs = doc["id_token_signing_alg_values_supported"]
-            .as_array()
-            .unwrap();
-        assert!(algs.contains(&Value::from("RS256")));
-        assert!(algs.contains(&Value::from("ES256")));
-        // Discovery §3: scopes_supported "MUST support the openid scope value".
-        assert!(
-            doc["scopes_supported"]
-                .as_array()
-                .unwrap()
-                .contains(&Value::from("openid"))
+        // Discovery §3 REQUIRED members: the typed parse fails when one is missing.
+        assert_eq!(
+            doc.authorization_endpoint,
+            issuer().join(AUTHORIZATION_PATH)
         );
+        assert_eq!(doc.token_endpoint, issuer().join(TOKEN_PATH));
+        assert_eq!(doc.subject_types_supported, ["public"]);
+        // Discovery §4.3 / RFC 8414 §3.3: identical to the issuer identifier.
+        assert_eq!(doc.issuer, "https://login.example.com");
+        assert_eq!(doc.jwks_uri, "https://login.example.com/jwks");
+        // Discovery §3: "The algorithm RS256 MUST be included."
+        assert!(
+            doc.id_token_signing_alg_values_supported
+                .contains(&"RS256".to_owned())
+        );
+        assert!(
+            doc.id_token_signing_alg_values_supported
+                .contains(&"ES256".to_owned())
+        );
+        // Discovery §3: scopes_supported "MUST support the openid scope value".
+        assert!(doc.scopes_supported.contains(&"openid".to_owned()));
     }
 
     #[test]
     fn does_not_inherit_misleading_defaults() {
         let doc = document(&issuer());
-        assert_eq!(doc["request_uri_parameter_supported"], false);
+        assert!(!doc.request_uri_parameter_supported);
+        assert_eq!(doc.response_modes_supported, ["query"]);
         assert_eq!(
-            doc["response_modes_supported"],
-            serde_json::json!(["query"])
+            doc.grant_types_supported,
+            ["authorization_code", "refresh_token"]
         );
-        assert_eq!(
-            doc["grant_types_supported"],
-            serde_json::json!(["authorization_code", "refresh_token"])
-        );
-        assert_eq!(
-            doc["code_challenge_methods_supported"],
-            serde_json::json!(["S256"])
-        );
-        assert_eq!(doc["authorization_response_iss_parameter_supported"], true);
-        assert_eq!(doc["response_types_supported"], serde_json::json!(["code"]));
+        assert_eq!(doc.code_challenge_methods_supported, ["S256"]);
+        assert!(doc.authorization_response_iss_parameter_supported);
+        assert_eq!(doc.response_types_supported, ["code"]);
     }
 
     #[test]
@@ -200,12 +205,12 @@ mod tests {
         let mut public = document(&issuer());
         let mut inside = document(&internal);
         assert_eq!(
-            inside["issuer"], public["issuer"],
+            inside.issuer, public.issuer,
             "kube-apiserver requires the same issuer"
         );
-        assert_eq!(inside["jwks_uri"], "https://10.43.0.53:8443/jwks");
-        public["jwks_uri"] = Value::Null;
-        inside["jwks_uri"] = Value::Null;
+        assert_eq!(inside.jwks_uri, "https://10.43.0.53:8443/jwks");
+        public.jwks_uri.clear();
+        inside.jwks_uri.clear();
         assert_eq!(public, inside);
     }
 }

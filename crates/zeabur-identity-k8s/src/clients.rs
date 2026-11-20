@@ -230,6 +230,8 @@ fn percent_encoding_well_formed(uri: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use kube::Resource as _;
+
     use super::*;
 
     fn new_client(kind: ClientType) -> NewClient {
@@ -263,13 +265,16 @@ mod tests {
     #[test]
     fn emitted_objects_satisfy_the_schema_rules() {
         let confidential = register(new_client(ClientType::Confidential), "ns").unwrap();
-        let value = serde_json::to_value(&confidential.client).unwrap();
-        assert_eq!(value["apiVersion"], "identity.zeabur.com/v1alpha1");
-        assert_eq!(value["kind"], "OAuthClient");
-        assert_eq!(value["metadata"]["name"], "dashboard");
-        assert_eq!(value["metadata"]["namespace"], "ns");
-        assert_eq!(value["spec"]["type"], "Confidential");
-        let hash = value["spec"]["secretHash"].as_str().unwrap();
+        let client = &confidential.client;
+        assert_eq!(
+            OAuthClient::api_version(&()),
+            "identity.zeabur.com/v1alpha1"
+        );
+        assert_eq!(OAuthClient::kind(&()), "OAuthClient");
+        assert_eq!(client.metadata.name.as_deref(), Some("dashboard"));
+        assert_eq!(client.metadata.namespace.as_deref(), Some("ns"));
+        assert_eq!(client.spec.kind, ClientType::Confidential);
+        let hash = client.spec.secret_hash.as_deref().unwrap();
         let digits = hash.strip_prefix("sha256:").unwrap();
         assert_eq!(digits.len(), 64);
         assert!(
@@ -280,12 +285,8 @@ mod tests {
 
         let public = register(new_client(ClientType::Public), "ns").unwrap();
         assert!(public.secret.is_none());
-        let value = serde_json::to_value(&public.client).unwrap();
-        assert_eq!(value["spec"]["type"], "Public");
-        assert!(!zeabur_identity_test_support::has_member(
-            &value["spec"],
-            "secretHash"
-        ));
+        assert_eq!(public.client.spec.kind, ClientType::Public);
+        assert!(public.client.spec.secret_hash.is_none());
     }
 
     /// The policy, by example. `tests/redirect_uris.rs` checks generated candidates against

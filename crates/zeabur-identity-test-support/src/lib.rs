@@ -3,15 +3,6 @@
 pub mod certificate;
 pub mod logging;
 
-/// Whether the JSON object `value` has a member called `name`, for asserting that a field is
-/// absent.
-#[must_use]
-pub fn has_member(value: &serde_json::Value, name: &str) -> bool {
-    value
-        .as_object()
-        .is_some_and(|members| members.contains_key(name))
-}
-
 use passkey::authenticator::{Authenticator, UiHint, UserCheck, UserValidationMethod};
 use passkey::client::Client as PasskeyClient;
 use passkey::crypto::aws_lc_rs::AwsLcRsBackend;

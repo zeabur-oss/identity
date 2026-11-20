@@ -14,7 +14,8 @@ mod tests {
     use http_body_util::BodyExt as _;
     use jsonwebtoken::jwk::JwkSet;
     use jsonwebtoken::{DecodingKey, Validation, decode, decode_header};
-    use serde_json::Value;
+    use serde::de::DeserializeOwned;
+    use serde::{Deserialize, Serialize};
     use tokio::sync::Barrier;
     use tower::ServiceExt as _;
     use tracing::instrument::WithSubscriber as _;
@@ -35,8 +36,7 @@ mod tests {
         Client, CreateGrant, Directory as _, Grant, GrantStore, MemoryDirectory, MemoryGrantStore,
         NewGrant, Rotation, StoreError, User, Verification,
     };
-    use zeabur_identity_test_support::has_member;
-    use zeabur_identity_test_support::logging::Capture;
+    use zeabur_identity_test_support::logging::{Capture, Record};
 
     const ISSUER: &str = "https://login.example.com";
     const VERIFIER: &str = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
@@ -206,6 +206,72 @@ mod tests {
         }
     }
 
+    /// RFC 6749 §5.1 and OIDC Core §3.1.3.3, with the refresh lifetime the server adds.
+    #[derive(Debug, Deserialize)]
+    struct TokenResponse {
+        access_token: String,
+        token_type: String,
+        expires_in: u64,
+        #[serde(default)]
+        scope: Option<String>,
+        #[serde(default)]
+        id_token: Option<String>,
+        #[serde(default)]
+        refresh_token: Option<String>,
+        #[serde(default)]
+        refresh_expires_in: Option<u64>,
+    }
+
+    /// RFC 6749 §5.2.
+    #[derive(Debug, Deserialize)]
+    struct ErrorBody {
+        error: String,
+        #[serde(default)]
+        error_description: Option<String>,
+    }
+
+    /// RFC 9126 §2.2.
+    #[derive(Debug, Deserialize)]
+    struct Par {
+        request_uri: String,
+        expires_in: u64,
+    }
+
+    /// The claims of an access token, an ID token and the UserInfo response (RFC 9068 §2.2,
+    /// OIDC Core §2 and §5.1).
+    #[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
+    struct Claims {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        iss: Option<String>,
+        sub: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        aud: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exp: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        iat: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        jti: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        auth_time: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        client_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        azp: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        nonce: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        preferred_username: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        groups: Option<Vec<String>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        amr: Option<Vec<String>>,
+    }
+
     struct Reply {
         status: StatusCode,
         headers: HeaderMap,
@@ -213,14 +279,17 @@ mod tests {
     }
 
     impl Reply {
-        fn json(&self) -> Value {
+        fn json<T: DeserializeOwned>(&self) -> T {
             serde_json::from_slice(&self.body).unwrap()
+        }
+        fn tokens(&self) -> TokenResponse {
+            self.json()
         }
         fn location(&self) -> String {
             self.headers[header::LOCATION].to_str().unwrap().to_owned()
         }
         fn error(&self) -> String {
-            self.json()["error"].as_str().unwrap().to_owned()
+            self.json::<ErrorBody>().error
         }
     }
 
@@ -371,7 +440,7 @@ mod tests {
         .await
     }
 
-    fn verify(h: &Harness, token: &str, audience: &str) -> (jsonwebtoken::Header, Value) {
+    fn verify(h: &Harness, token: &str, audience: &str) -> (jsonwebtoken::Header, Claims) {
         let header = decode_header(token).unwrap();
         let jwk = h.jwks.find(header.kid.as_deref().unwrap()).unwrap();
         let mut validation = Validation::new(header.alg);
@@ -379,33 +448,33 @@ mod tests {
         validation.set_issuer(&[ISSUER]);
         validation.validate_exp = false;
         let data =
-            decode::<Value>(token, &DecodingKey::from_jwk(jwk).unwrap(), &validation).unwrap();
+            decode::<Claims>(token, &DecodingKey::from_jwk(jwk).unwrap(), &validation).unwrap();
         (header, data.claims)
     }
 
-    fn audit_outcomes(h: &Harness, event: &str, outcomes: &[&str]) -> Vec<Value> {
+    fn audit_outcomes(h: &Harness, event: &str, outcomes: &[&str]) -> Vec<Record> {
         let records: Vec<_> = h
             .capture
             .records()
             .into_iter()
             .filter(|record| {
-                record["target"] == "zeabur_identity::audit" && record["fields"]["event"] == event
+                record.target == "zeabur_identity::audit" && record.field("event") == Some(event)
             })
             .collect();
         assert_eq!(records.len(), outcomes.len(), "{records:#?}");
         for (record, outcome) in records.iter().zip(outcomes) {
-            assert_eq!(record["fields"]["outcome"], *outcome, "{record:#?}");
+            assert_eq!(record.field("outcome"), Some(*outcome), "{record:#?}");
             if *outcome == "success" && matches!(event, "oauth.code_exchange" | "oauth.refresh") {
-                assert_eq!(record["fields"]["user"], "alice");
-                assert_eq!(record["fields"]["subject"], "uid-alice");
-                assert_eq!(record["fields"]["client"], "kubectl");
+                assert_eq!(record.field("user"), Some("alice"));
+                assert_eq!(record.field("subject"), Some("uid-alice"));
+                assert_eq!(record.field("client"), Some("kubectl"));
             }
         }
         assert!(
             h.capture
                 .records()
                 .iter()
-                .all(|record| { record["fields"]["event"] != "auth.sign_in" }),
+                .all(|record| { record.field("event") != Some("auth.sign_in") }),
             "OAuth operations are not fresh sign-ins"
         );
         records
@@ -416,17 +485,17 @@ mod tests {
             .capture
             .records()
             .into_iter()
-            .filter(|record| record["target"] == "zeabur_identity::audit")
+            .filter(|record| record.target == "zeabur_identity::audit")
             .collect();
         assert!(
             !audit.is_empty(),
             "secret exclusion requires captured audit records"
         );
         for record in &audit {
-            assert!(!has_member(record, "span"));
-            assert!(!has_member(record, "spans"));
+            assert!(!record.extra.contains_key("span"));
+            assert!(!record.extra.contains_key("spans"));
         }
-        let serialized = serde_json::to_string(&audit).unwrap();
+        let serialized = format!("{audit:?}");
         for secret in secrets.iter().copied().chain([
             VERIFIER,
             CHALLENGE,
@@ -473,32 +542,29 @@ mod tests {
         let reply = exchange(&h, &code).await;
         assert_eq!(reply.status, StatusCode::OK);
         assert_eq!(reply.headers[header::CACHE_CONTROL], "no-store");
-        let body = reply.json();
-        assert_eq!(body["token_type"], "Bearer");
-        assert_eq!(body["expires_in"], 600);
-        assert_eq!(body["scope"], "openid profile groups");
+        let body = reply.tokens();
+        assert_eq!(body.token_type, "Bearer");
+        assert_eq!(body.expires_in, 600);
+        assert_eq!(body.scope.as_deref(), Some("openid profile groups"));
 
-        let (header, at) = verify(&h, body["access_token"].as_str().unwrap(), "kubernetes");
+        let (header, at) = verify(&h, body.access_token.as_str(), "kubernetes");
         assert_eq!(header.typ.as_deref(), Some("at+jwt"));
         assert_eq!(header.alg, jsonwebtoken::Algorithm::ES256);
-        assert_eq!(at["client_id"], "kubectl");
-        assert_eq!(at["sub"], "uid-alice");
-        assert_eq!(at["preferred_username"], "alice");
-        assert_eq!(at["groups"], serde_json::json!(["developers"]));
-        assert_eq!(
-            at["exp"].as_u64().unwrap() - at["iat"].as_u64().unwrap(),
-            600
-        );
-        assert!(!has_member(&at, "azp") && !has_member(&at, "nonce"));
+        assert_eq!(at.client_id.as_deref(), Some("kubectl"));
+        assert_eq!(at.sub, "uid-alice");
+        assert_eq!(at.preferred_username.as_deref(), Some("alice"));
+        assert_eq!(at.groups, Some(vec!["developers".to_owned()]));
+        assert_eq!(at.exp.unwrap() - at.iat.unwrap(), 600);
+        assert!(at.azp.is_none() && at.nonce.is_none());
 
-        let (header, id) = verify(&h, body["id_token"].as_str().unwrap(), "kubectl");
+        let (header, id) = verify(&h, body.id_token.as_deref().unwrap(), "kubectl");
         assert_eq!(header.typ.as_deref(), Some("JWT"));
-        assert_eq!(id["azp"], "kubectl");
-        assert_eq!(id["nonce"], "nonce-1");
-        assert_eq!(id["auth_time"], START);
-        assert_eq!(id["name"], "alice example");
+        assert_eq!(id.azp.as_deref(), Some("kubectl"));
+        assert_eq!(id.nonce.as_deref(), Some("nonce-1"));
+        assert_eq!(id.auth_time, Some(START));
+        assert_eq!(id.name.as_deref(), Some("alice example"));
         assert!(
-            !has_member(&id, "client_id"),
+            id.client_id.is_none(),
             "ID tokens never look like access tokens"
         );
         audit_outcomes(&h, "oauth.code_exchange", &["success"]);
@@ -507,9 +573,9 @@ mod tests {
             &[
                 &code,
                 &flow,
-                body["access_token"].as_str().unwrap(),
-                body["id_token"].as_str().unwrap(),
-                body["refresh_token"].as_str().unwrap(),
+                body.access_token.as_str(),
+                body.id_token.as_deref().unwrap(),
+                body.refresh_token.as_deref().unwrap(),
             ],
         );
     }
@@ -578,16 +644,14 @@ mod tests {
         // client_secret_basic works; the ID token is RS256 as registered.
         let reply = post(&h.app, "/token", &pairs, Some(("web", WEB_SECRET))).await;
         assert_eq!(reply.status, StatusCode::OK);
-        let basic_tokens = reply.json();
-        let (header, id) = verify(&h, reply.json()["id_token"].as_str().unwrap(), "web");
+        let basic_tokens = reply.tokens();
+        let (header, id) = verify(&h, &reply.tokens().id_token.unwrap(), "web");
         assert_eq!(header.alg, jsonwebtoken::Algorithm::RS256);
-        assert!(
-            !has_member(&id, "name"),
-            "no profile scope, no profile claims"
-        );
-        let (_, at) = verify(&h, reply.json()["access_token"].as_str().unwrap(), "web");
+        assert!(id.name.is_none(), "no profile scope, no profile claims");
+        let (_, at) = verify(&h, &reply.tokens().access_token, "web");
         assert_eq!(
-            at["aud"], "web",
+            at.aud.as_deref(),
+            Some("web"),
             "a client without audiences gets itself as audience"
         );
 
@@ -598,7 +662,7 @@ mod tests {
         pairs.extend([("client_id", "web"), ("client_secret", WEB_SECRET)]);
         let reply = post(&h.app, "/token", &pairs, None).await;
         assert_eq!(reply.status, StatusCode::OK);
-        let post_tokens = reply.json();
+        let post_tokens = reply.tokens();
 
         // A public client must not send a secret; unknown clients are rejected.
         let reply = post(
@@ -622,8 +686,8 @@ mod tests {
             .records()
             .into_iter()
             .filter(|record| {
-                record["target"] == "zeabur_identity::audit"
-                    && record["fields"]["event"] == "oauth.code_exchange"
+                record.target == "zeabur_identity::audit"
+                    && record.field("event") == Some("oauth.code_exchange")
             })
             .collect();
         assert_eq!(events.len(), 5);
@@ -631,14 +695,14 @@ mod tests {
             .iter()
             .zip(["failure", "failure", "failure", "success", "success"])
         {
-            assert_eq!(event["fields"]["outcome"], outcome);
+            assert_eq!(event.field("outcome"), Some(outcome));
             if outcome == "success" {
-                assert_eq!(event["fields"]["client"], "web");
-                assert_eq!(event["fields"]["user"], "alice");
-                assert_eq!(event["fields"]["subject"], "uid-alice");
+                assert_eq!(event.field("client"), Some("web"));
+                assert_eq!(event.field("user"), Some("alice"));
+                assert_eq!(event.field("subject"), Some("uid-alice"));
             } else {
                 for identity in ["client", "user", "subject"] {
-                    assert!(!has_member(&event["fields"], identity));
+                    assert!(!event.fields.contains_key(identity));
                 }
             }
         }
@@ -646,7 +710,7 @@ mod tests {
         assert!(
             failed_refresh
                 .iter()
-                .all(|record| !has_member(&record["fields"], "client"))
+                .all(|record| !record.fields.contains_key("client"))
         );
         assert_no_secrets(
             &h,
@@ -655,12 +719,12 @@ mod tests {
                 &code,
                 &STANDARD.encode("web:wrong"),
                 "nobody",
-                basic_tokens["access_token"].as_str().unwrap(),
-                basic_tokens["id_token"].as_str().unwrap(),
-                basic_tokens["refresh_token"].as_str().unwrap(),
-                post_tokens["access_token"].as_str().unwrap(),
-                post_tokens["id_token"].as_str().unwrap(),
-                post_tokens["refresh_token"].as_str().unwrap(),
+                basic_tokens.access_token.as_str(),
+                basic_tokens.id_token.as_deref().unwrap(),
+                basic_tokens.refresh_token.as_deref().unwrap(),
+                post_tokens.access_token.as_str(),
+                post_tokens.id_token.as_deref().unwrap(),
+                post_tokens.refresh_token.as_deref().unwrap(),
             ],
         );
     }
@@ -671,7 +735,7 @@ mod tests {
         let code = sign_in(&h, "alice", &kubectl_authorize(&[])).await;
         let first = exchange(&h, &code).await;
         assert_eq!(first.status, StatusCode::OK);
-        let refresh_token = first.json()["refresh_token"].as_str().unwrap().to_owned();
+        let refresh_token = first.tokens().refresh_token.unwrap();
 
         let second = exchange(&h, &code).await;
         assert_eq!(second.status, StatusCode::BAD_REQUEST);
@@ -681,16 +745,16 @@ mod tests {
         audit_outcomes(&h, "oauth.code_exchange", &["success", "failure"]);
         audit_outcomes(&h, "oauth.refresh", &["failure"]);
         let replay = audit_outcomes(&h, "oauth.replay", &["failure"]);
-        assert_eq!(replay[0]["fields"]["reason"], "code_reused");
-        assert_eq!(replay[0]["fields"]["client"], "kubectl");
-        assert!(!has_member(&replay[0]["fields"], "user"));
+        assert_eq!(replay[0].field("reason"), Some("code_reused"));
+        assert_eq!(replay[0].field("client"), Some("kubectl"));
+        assert!(!replay[0].fields.contains_key("user"));
         assert_no_secrets(
             &h,
             &[
                 &code,
                 &refresh_token,
-                first.json()["access_token"].as_str().unwrap(),
-                first.json()["id_token"].as_str().unwrap(),
+                &first.tokens().access_token,
+                &first.tokens().id_token.unwrap(),
             ],
         );
     }
@@ -788,11 +852,11 @@ mod tests {
                 "failure", "failure", "failure", "success", "failure", "failure", "failure",
             ],
         );
-        assert_eq!(events[5]["fields"]["client"], "web");
+        assert_eq!(events[5].field("client"), Some("web"));
         let binding = audit_outcomes(&h, "oauth.client_binding", &["failure"]);
-        assert_eq!(binding[0]["fields"]["reason"], "client_mismatch");
-        assert_eq!(binding[0]["fields"]["client"], "web");
-        assert!(!has_member(&binding[0]["fields"], "user"));
+        assert_eq!(binding[0].field("reason"), Some("client_mismatch"));
+        assert_eq!(binding[0].field("client"), Some("web"));
+        assert!(!binding[0].fields.contains_key("user"));
         assert_no_secrets(&h, &[&code, &late]);
     }
 
@@ -800,21 +864,25 @@ mod tests {
     async fn refresh_rotates_and_reuse_revokes_the_family() {
         let h = harness().await;
         let code = sign_in(&h, "alice", &kubectl_authorize(&[])).await;
-        let issued = exchange(&h, &code).await.json();
-        let first = issued["refresh_token"].as_str().unwrap().to_owned();
+        let issued = exchange(&h, &code).await.tokens();
+        let first = issued.refresh_token.as_deref().unwrap().to_owned();
 
         h.clock.advance(300);
         let reply = refresh(&h, &first).await;
         assert_eq!(reply.status, StatusCode::OK);
         assert_eq!(reply.headers[header::CACHE_CONTROL], "no-store");
-        let second = reply.json()["refresh_token"].as_str().unwrap().to_owned();
+        let second = reply.tokens().refresh_token.unwrap();
         assert_ne!(first, second);
-        let (_, id) = verify(&h, reply.json()["id_token"].as_str().unwrap(), "kubectl");
-        assert_eq!(id["auth_time"], START, "auth_time is the original sign-in");
-        assert!(!has_member(&id, "nonce"));
+        let (_, id) = verify(&h, &reply.tokens().id_token.unwrap(), "kubectl");
+        assert_eq!(
+            id.auth_time,
+            Some(START),
+            "auth_time is the original sign-in"
+        );
+        assert!(id.nonce.is_none());
 
-        let rotated = refresh(&h, &second).await.json();
-        let third = rotated["refresh_token"].as_str().unwrap().to_owned();
+        let rotated = refresh(&h, &second).await.tokens();
+        let third = rotated.refresh_token.as_deref().unwrap().to_owned();
         // Someone replays the second token (already rotated): the whole family dies.
         assert_eq!(refresh(&h, &second).await.error(), "invalid_grant");
         assert_eq!(refresh(&h, &third).await.error(), "invalid_grant");
@@ -825,8 +893,8 @@ mod tests {
             &["success", "success", "failure", "failure"],
         );
         let detection = audit_outcomes(&h, "oauth.replay", &["failure"]);
-        assert_eq!(detection[0]["fields"]["reason"], "refresh_reused");
-        assert_eq!(detection[0]["fields"]["client"], "kubectl");
+        assert_eq!(detection[0].field("reason"), Some("refresh_reused"));
+        assert_eq!(detection[0].field("client"), Some("kubectl"));
         assert_no_secrets(
             &h,
             &[
@@ -834,12 +902,12 @@ mod tests {
                 &first,
                 &second,
                 &third,
-                reply.json()["access_token"].as_str().unwrap(),
-                reply.json()["id_token"].as_str().unwrap(),
-                issued["access_token"].as_str().unwrap(),
-                issued["id_token"].as_str().unwrap(),
-                rotated["access_token"].as_str().unwrap(),
-                rotated["id_token"].as_str().unwrap(),
+                &reply.tokens().access_token,
+                &reply.tokens().id_token.unwrap(),
+                issued.access_token.as_str(),
+                issued.id_token.as_deref().unwrap(),
+                rotated.access_token.as_str(),
+                rotated.id_token.as_deref().unwrap(),
             ],
         );
     }
@@ -848,10 +916,7 @@ mod tests {
     async fn concurrent_reuse_of_a_refresh_token_revokes_the_family() {
         let h = Arc::new(harness().await);
         let code = sign_in(&h, "alice", &kubectl_authorize(&[])).await;
-        let token = exchange(&h, &code).await.json()["refresh_token"]
-            .as_str()
-            .unwrap()
-            .to_owned();
+        let token = exchange(&h, &code).await.tokens().refresh_token.unwrap();
         let barrier = Arc::new(Barrier::new(64));
         let tasks: Vec<_> = (0..64)
             .map(|_| {
@@ -859,8 +924,7 @@ mod tests {
                 tokio::spawn(async move {
                     barrier.wait().await;
                     let reply = refresh(&h, &token).await;
-                    (reply.status == StatusCode::OK)
-                        .then(|| reply.json()["refresh_token"].as_str().unwrap().to_owned())
+                    (reply.status == StatusCode::OK).then(|| reply.tokens().refresh_token.unwrap())
                 })
             })
             .collect();
@@ -881,10 +945,9 @@ mod tests {
         let h = harness().await;
         let token = exchange(&h, &sign_in(&h, "alice", &kubectl_authorize(&[])).await)
             .await
-            .json()["refresh_token"]
-            .as_str()
-            .unwrap()
-            .to_owned();
+            .tokens()
+            .refresh_token
+            .unwrap();
 
         let reply = post(
             &h.app,
@@ -916,8 +979,8 @@ mod tests {
         )
         .await;
         assert_eq!(reply.status, StatusCode::OK);
-        assert_eq!(reply.json()["scope"], "openid");
-        let token = reply.json()["refresh_token"].as_str().unwrap().to_owned();
+        assert_eq!(reply.tokens().scope.as_deref(), Some("openid"));
+        let token = reply.tokens().refresh_token.unwrap();
 
         // Another client presenting it kills the family.
         let reply = post(
@@ -933,10 +996,9 @@ mod tests {
         // A deleted user gets nothing more.
         let token = exchange(&h, &sign_in(&h, "alice", &kubectl_authorize(&[])).await)
             .await
-            .json()["refresh_token"]
-            .as_str()
-            .unwrap()
-            .to_owned();
+            .tokens()
+            .refresh_token
+            .unwrap();
         h.server.directory.remove_user("alice");
         assert_eq!(refresh(&h, &token).await.error(), "invalid_grant");
 
@@ -950,10 +1012,9 @@ mod tests {
         let h = harness().await;
         let token = exchange(&h, &sign_in(&h, "alice", &kubectl_authorize(&[])).await)
             .await
-            .json()["refresh_token"]
-            .as_str()
-            .unwrap()
-            .to_owned();
+            .tokens()
+            .refresh_token
+            .unwrap();
         h.clock.advance(3600);
         assert_eq!(
             refresh(&h, &token).await.error(),
@@ -964,15 +1025,14 @@ mod tests {
         // Even an active family ends at the absolute lifetime.
         let mut token = exchange(&h, &sign_in(&h, "alice", &kubectl_authorize(&[])).await)
             .await
-            .json()["refresh_token"]
-            .as_str()
-            .unwrap()
-            .to_owned();
+            .tokens()
+            .refresh_token
+            .unwrap();
         for _ in 0..14 {
             h.clock.advance(50 * 60);
             let reply = refresh(&h, &token).await;
             assert_eq!(reply.status, StatusCode::OK);
-            token = reply.json()["refresh_token"].as_str().unwrap().to_owned();
+            token = reply.tokens().refresh_token.unwrap();
         }
         h.clock.advance(50 * 60);
         assert_eq!(
@@ -1082,9 +1142,9 @@ mod tests {
         let reply = post(&h.app, "/par", &pushed, None).await;
         assert_eq!(reply.status, StatusCode::CREATED);
         assert_eq!(reply.headers[header::CACHE_CONTROL], "no-store");
-        let request_uri = reply.json()["request_uri"].as_str().unwrap().to_owned();
+        let request_uri = reply.json::<Par>().request_uri;
         assert!(request_uri.starts_with("urn:ietf:params:oauth:request_uri:"));
-        assert_eq!(reply.json()["expires_in"], 60);
+        assert_eq!(reply.json::<Par>().expires_in, 60);
 
         let authorize = |client: &str| {
             format!(
@@ -1117,10 +1177,10 @@ mod tests {
         );
 
         // Expiry, and invalid pushed requests.
-        let request_uri = post(&h.app, "/par", &pushed, None).await.json()["request_uri"]
-            .as_str()
-            .unwrap()
-            .to_owned();
+        let request_uri = post(&h.app, "/par", &pushed, None)
+            .await
+            .json::<Par>()
+            .request_uri;
         h.clock.advance(61);
         let reply = get(
             &h.app,
@@ -1159,15 +1219,11 @@ mod tests {
                 let h = harness().await;
                 let first = exchange(&h, &sign_in(&h, "alice", &kubectl_authorize(&[])).await)
                     .await
-                    .json()["refresh_token"]
-                    .as_str()
-                    .unwrap()
-                    .to_owned();
+                    .tokens()
+                    .refresh_token
+                    .unwrap();
                 let current = if rotated {
-                    refresh(&h, &first).await.json()["refresh_token"]
-                        .as_str()
-                        .unwrap()
-                        .to_owned()
+                    refresh(&h, &first).await.tokens().refresh_token.unwrap()
                 } else {
                     first.clone()
                 };
@@ -1211,14 +1267,10 @@ mod tests {
                 let h = harness().await;
                 let first = exchange(&h, &sign_in(&h, "alice", &kubectl_authorize(&[])).await)
                     .await
-                    .json()["refresh_token"]
-                    .as_str()
-                    .unwrap()
-                    .to_owned();
-                let current = refresh(&h, &first).await.json()["refresh_token"]
-                    .as_str()
-                    .unwrap()
-                    .to_owned();
+                    .tokens()
+                    .refresh_token
+                    .unwrap();
+                let current = refresh(&h, &first).await.tokens().refresh_token.unwrap();
                 let presented = if previous { &first } else { &current };
                 let reply = if wrong_client {
                     post(
@@ -1248,13 +1300,13 @@ mod tests {
                 assert_eq!(refresh(&h, &current).await.error(), "invalid_grant");
                 if wrong_client {
                     let binding = audit_outcomes(&h, "oauth.client_binding", &["failure"]);
-                    assert_eq!(binding[0]["fields"]["reason"], "client_mismatch");
-                    assert_eq!(binding[0]["fields"]["client"], "web");
+                    assert_eq!(binding[0].field("reason"), Some("client_mismatch"));
+                    assert_eq!(binding[0].field("client"), Some("web"));
                     audit_outcomes(&h, "oauth.refresh", &["success", "failure", "failure"]);
                 } else {
                     let revocation = audit_outcomes(&h, "oauth.revocation_request", &["success"]);
-                    assert_eq!(revocation[0]["fields"]["reason"], "accepted");
-                    assert_eq!(revocation[0]["fields"]["client"], "kubectl");
+                    assert_eq!(revocation[0].field("reason"), Some("accepted"));
+                    assert_eq!(revocation[0].field("client"), Some("kubectl"));
                     audit_outcomes(&h, "oauth.refresh", &["success", "failure"]);
                 }
                 assert_no_secrets(&h, &[&first, &current]);
@@ -1267,8 +1319,8 @@ mod tests {
         let h = harness().await;
         let body = exchange(&h, &sign_in(&h, "alice", &kubectl_authorize(&[])).await)
             .await
-            .json();
-        let token = body["refresh_token"].as_str().unwrap();
+            .tokens();
+        let token = body.refresh_token.as_deref().unwrap();
 
         // Another client cannot revoke it (but gets 200, RFC 7009 §2.2).
         let reply = post(
@@ -1279,8 +1331,8 @@ mod tests {
         )
         .await;
         assert_eq!(reply.status, StatusCode::OK);
-        let rotated = refresh(&h, token).await.json();
-        let token = rotated["refresh_token"].as_str().unwrap().to_owned();
+        let rotated = refresh(&h, token).await.tokens();
+        let token = rotated.refresh_token.as_deref().unwrap().to_owned();
 
         let reply = post(
             &h.app,
@@ -1296,7 +1348,7 @@ mod tests {
             &h.app,
             "/revoke",
             &[
-                ("token", body["access_token"].as_str().unwrap()),
+                ("token", body.access_token.as_str()),
                 ("client_id", "kubectl"),
             ],
             None,
@@ -1316,36 +1368,41 @@ mod tests {
             "oauth.revocation_request",
             &["success", "success", "failure", "success"],
         );
-        assert_eq!(events[0]["fields"]["client"], "web");
+        assert_eq!(events[0].field("client"), Some("web"));
         for index in [0, 1, 3] {
-            assert_eq!(events[index]["fields"]["reason"], "accepted");
-            assert!(!has_member(&events[index]["fields"], "user"));
-            assert!(!has_member(&events[index]["fields"], "subject"));
+            assert_eq!(events[index].field("reason"), Some("accepted"));
+            assert!(!events[index].fields.contains_key("user"));
+            assert!(!events[index].fields.contains_key("subject"));
         }
-        assert_eq!(events[2]["fields"]["reason"], "unsupported_token_type");
+        assert_eq!(events[2].field("reason"), Some("unsupported_token_type"));
         assert_no_secrets(
             &h,
             &[
                 &token,
-                body["access_token"].as_str().unwrap(),
-                body["id_token"].as_str().unwrap(),
-                body["refresh_token"].as_str().unwrap(),
-                rotated["access_token"].as_str().unwrap(),
-                rotated["id_token"].as_str().unwrap(),
+                body.access_token.as_str(),
+                body.id_token.as_deref().unwrap(),
+                body.refresh_token.as_deref().unwrap(),
+                rotated.access_token.as_str(),
+                rotated.id_token.as_deref().unwrap(),
             ],
         );
     }
 
     const PASSKEY: &[&str] = &["swk", "mfa"];
 
-    fn tokens_of(reply: &Reply) -> Value {
-        assert_eq!(reply.status, StatusCode::OK, "{}", reply.json());
-        reply.json()
+    fn tokens_of(reply: &Reply) -> TokenResponse {
+        assert_eq!(
+            reply.status,
+            StatusCode::OK,
+            "{}",
+            String::from_utf8_lossy(&reply.body)
+        );
+        reply.tokens()
     }
 
     fn lifetime(h: &Harness, token: &str, audience: &str) -> u64 {
         let (_, claims) = verify(h, token, audience);
-        claims["exp"].as_u64().unwrap() - claims["iat"].as_u64().unwrap()
+        claims.exp.unwrap() - claims.iat.unwrap()
     }
 
     async fn stored_user(h: &Harness, name: &str) -> User {
@@ -1358,13 +1415,18 @@ mod tests {
         h.server.directory.put_user(user);
     }
 
-    async fn sign_in_tokens(h: &Harness, user: &str, amr: &[&str], device_bound: bool) -> Value {
+    async fn sign_in_tokens(
+        h: &Harness,
+        user: &str,
+        amr: &[&str],
+        device_bound: bool,
+    ) -> TokenResponse {
         let code = sign_in_as(h, user, &kubectl_authorize(&[]), amr, device_bound).await;
         tokens_of(&exchange(h, &code).await)
     }
 
-    fn refresh_token(tokens: &Value) -> &str {
-        tokens["refresh_token"].as_str().unwrap()
+    fn refresh_token(tokens: &TokenResponse) -> &str {
+        tokens.refresh_token.as_deref().unwrap()
     }
 
     #[tokio::test]
@@ -1395,35 +1457,31 @@ mod tests {
         let regular = sign_in_tokens(&h, "alice", PASSKEY, false).await;
         let admin = sign_in_tokens(&h, "carol", PASSKEY, false).await;
         for (name, tokens, groups, seconds) in [
-            ("regular", &regular, serde_json::json!(["developers"]), 600),
+            ("regular", &regular, vec!["developers".to_owned()], 600),
             (
                 "admin",
                 &admin,
-                serde_json::json!(["developers", ADMIN_GROUP]),
+                vec!["developers".to_owned(), ADMIN_GROUP.to_owned()],
                 300,
             ),
         ] {
-            let access = tokens["access_token"].as_str().unwrap();
+            let access = tokens.access_token.as_str();
             let (_, claims) = verify(&h, access, "kubernetes");
-            assert_eq!(claims["groups"], groups, "{name}");
-            assert_eq!(tokens["expires_in"], seconds, "{name}");
+            assert_eq!(claims.groups.as_ref(), Some(&groups), "{name}");
+            assert_eq!(tokens.expires_in, seconds, "{name}");
             assert_eq!(lifetime(&h, access, "kubernetes"), seconds, "{name}");
-            let id = tokens["id_token"].as_str().unwrap();
+            let id = tokens.id_token.as_deref().unwrap();
             assert_eq!(lifetime(&h, id, "kubectl"), seconds, "{name}: ID token");
-            let info = userinfo(&h, Some(access)).await.json();
-            assert_eq!(info["groups"], groups, "{name}: UserInfo");
+            let info: Claims = userinfo(&h, Some(access)).await.json();
+            assert_eq!(info.groups.as_ref(), Some(&groups), "{name}: UserInfo");
         }
 
         // A refresh uses the account type as it is now.
         set_account_type(&h, "carol", AccountType::Regular).await;
         let refreshed = tokens_of(&refresh(&h, refresh_token(&admin)).await);
-        let (_, claims) = verify(
-            &h,
-            refreshed["access_token"].as_str().unwrap(),
-            "kubernetes",
-        );
-        assert_eq!(claims["groups"], serde_json::json!(["developers"]));
-        assert_eq!(refreshed["expires_in"], 600);
+        let (_, claims) = verify(&h, refreshed.access_token.as_str(), "kubernetes");
+        assert_eq!(claims.groups, Some(vec!["developers".to_owned()]));
+        assert_eq!(refreshed.expires_in, 600);
     }
 
     #[tokio::test]
@@ -1434,7 +1492,7 @@ mod tests {
         let code = sign_in_with(&h, "carol", &kubectl_authorize(&[]), &[]).await;
         assert_eq!(exchange(&h, &code).await.error(), "invalid_grant");
         let events = audit_outcomes(&h, "oauth.account_policy", &["failure"]);
-        assert_eq!(events[0]["fields"]["reason"], "TwoFactor");
+        assert_eq!(events[0].field("reason"), Some("TwoFactor"));
 
         // An upstream session ends when its account becomes an admin account.
         set_account_type(&h, "alice", AccountType::Admin).await;
@@ -1476,8 +1534,8 @@ mod tests {
     async fn an_admin_upstream_sign_in_needs_the_mfa_value_and_the_two_factor_level() {
         let h = harness().await;
         let enforced = sign_in_tokens(&h, "carol", &["mfa"], false).await;
-        let (_, claims) = verify(&h, enforced["access_token"].as_str().unwrap(), "kubernetes");
-        assert_eq!(claims["amr"], serde_json::json!(["mfa"]));
+        let (_, claims) = verify(&h, enforced.access_token.as_str(), "kubernetes");
+        assert_eq!(claims.amr, Some(vec!["mfa".to_owned()]));
         tokens_of(&refresh(&h, refresh_token(&enforced)).await);
 
         for amr in [&[][..], &["MFA"], &["otp"], &["fed"], &["mfa "]] {
@@ -1533,11 +1591,11 @@ mod tests {
             let h = harness().await;
             h.server.directory.put_settings(settings);
             let tokens = sign_in_tokens(&h, user, PASSKEY, true).await;
-            assert_eq!(tokens["refresh_expires_in"], idle, "{name}");
+            assert_eq!(tokens.refresh_expires_in, Some(idle), "{name}");
             // Used just before the idle limit, the family lives on.
             h.clock.advance(idle - 1);
             let tokens = tokens_of(&refresh(&h, refresh_token(&tokens)).await);
-            assert_eq!(tokens["refresh_expires_in"], idle, "{name}");
+            assert_eq!(tokens.refresh_expires_in, Some(idle), "{name}");
             h.clock.advance(idle);
             assert_eq!(
                 refresh(&h, refresh_token(&tokens)).await.error(),
@@ -1553,22 +1611,18 @@ mod tests {
         let tokens = sign_in_tokens(&h, "alice", PASSKEY, false).await;
         h.clock.advance(30 * 60);
         let refreshed = tokens_of(&refresh(&h, refresh_token(&tokens)).await);
-        let (_, id) = verify(&h, refreshed["id_token"].as_str().unwrap(), "kubectl");
-        let (_, access) = verify(
-            &h,
-            refreshed["access_token"].as_str().unwrap(),
-            "kubernetes",
-        );
-        assert_eq!(id["auth_time"], START);
-        assert_eq!(access["auth_time"], START);
+        let (_, id) = verify(&h, refreshed.id_token.as_deref().unwrap(), "kubectl");
+        let (_, access) = verify(&h, refreshed.access_token.as_str(), "kubernetes");
+        assert_eq!(id.auth_time, Some(START));
+        assert_eq!(access.auth_time, Some(START));
 
         // There is no single sign-on session. A request with max_age always goes to the sign-in
         // page, so its tokens carry the new auth_time.
         let uri = kubectl_authorize(&[("max_age", "600")]);
         assert_eq!(get(&h.app, &uri).await.location(), "/login");
         let fresh = tokens_of(&exchange(&h, &sign_in(&h, "alice", &uri).await).await);
-        let (_, id) = verify(&h, fresh["id_token"].as_str().unwrap(), "kubectl");
-        assert_eq!(id["auth_time"], START + 30 * 60);
+        let (_, id) = verify(&h, fresh.id_token.as_deref().unwrap(), "kubectl");
+        assert_eq!(id.auth_time, Some(START + 30 * 60));
     }
 
     async fn userinfo(h: &Harness, token: Option<&str>) -> Reply {
@@ -1583,17 +1637,17 @@ mod tests {
     async fn userinfo_returns_current_claims_for_access_tokens_only() {
         let h = harness().await;
         let code = sign_in(&h, "alice", &kubectl_authorize(&[])).await;
-        let tokens = exchange(&h, &code).await.json();
-        let access = tokens["access_token"].as_str().unwrap();
+        let tokens = exchange(&h, &code).await.tokens();
+        let access = tokens.access_token.as_str();
 
         let reply = userinfo(&h, Some(access)).await;
         assert_eq!(reply.status, StatusCode::OK);
         assert_eq!(reply.headers[header::CACHE_CONTROL], "no-store");
-        let claims = reply.json();
-        assert_eq!(claims["sub"], "uid-alice");
-        assert_eq!(claims["preferred_username"], "alice");
-        assert_eq!(claims["name"], "alice example");
-        assert_eq!(claims["groups"], serde_json::json!(["developers"]));
+        let claims: Claims = reply.json();
+        assert_eq!(claims.sub, "uid-alice");
+        assert_eq!(claims.preferred_username.as_deref(), Some("alice"));
+        assert_eq!(claims.name.as_deref(), Some("alice example"));
+        assert_eq!(claims.groups, Some(vec!["developers".to_owned()]));
 
         // RFC 6750 §3: no token → a bare challenge; a bad one → invalid_token.
         let reply = userinfo(&h, None).await;
@@ -1602,7 +1656,7 @@ mod tests {
             reply.headers[header::WWW_AUTHENTICATE],
             r#"Bearer realm="zeabur-identity""#
         );
-        let id_token = tokens["id_token"].as_str().unwrap();
+        let id_token = tokens.id_token.as_deref().unwrap();
         for bad in [id_token, "not-a-token", &format!("{access}x")] {
             let reply = userinfo(&h, Some(bad)).await;
             assert_eq!(reply.status, StatusCode::UNAUTHORIZED, "{bad}");
@@ -1621,9 +1675,17 @@ mod tests {
             &kubectl_authorize(&[]).replace("scope=openid+profile+groups", "scope=openid"),
         )
         .await;
-        let narrow = exchange(&h, &code).await.json();
-        let claims = userinfo(&h, narrow["access_token"].as_str()).await.json();
-        assert_eq!(claims, serde_json::json!({ "sub": "uid-alice" }));
+        let narrow = exchange(&h, &code).await.tokens();
+        let claims: Claims = userinfo(&h, Some(narrow.access_token.as_str()))
+            .await
+            .json();
+        assert_eq!(
+            claims,
+            Claims {
+                sub: "uid-alice".to_owned(),
+                ..Claims::default()
+            }
+        );
 
         // Without `openid`, UserInfo is out of scope.
         let code = sign_in(
@@ -1632,8 +1694,8 @@ mod tests {
             &kubectl_authorize(&[]).replace("scope=openid+profile+groups", "scope=groups"),
         )
         .await;
-        let plain = exchange(&h, &code).await.json();
-        let reply = userinfo(&h, plain["access_token"].as_str()).await;
+        let plain = exchange(&h, &code).await.tokens();
+        let reply = userinfo(&h, Some(plain.access_token.as_str())).await;
         assert_eq!(reply.status, StatusCode::FORBIDDEN);
 
         // A user disabled after issuance, and an expired token, get nothing.
@@ -1659,8 +1721,8 @@ mod tests {
     async fn userinfo_rejects_deleted_and_recreated_users() {
         let h = harness().await;
         let code = sign_in(&h, "alice", &kubectl_authorize(&[])).await;
-        let tokens = exchange(&h, &code).await.json();
-        let access = tokens["access_token"].as_str().unwrap();
+        let tokens = exchange(&h, &code).await.tokens();
+        let access = tokens.access_token.as_str();
         assert_eq!(userinfo(&h, Some(access)).await.status, StatusCode::OK);
 
         h.server.directory.remove_user("alice");
@@ -1686,10 +1748,9 @@ mod tests {
         let h = harness().await;
         let token = exchange(&h, &sign_in(&h, "alice", &kubectl_authorize(&[])).await)
             .await
-            .json()["refresh_token"]
-            .as_str()
-            .unwrap()
-            .to_owned();
+            .tokens()
+            .refresh_token
+            .unwrap();
         // Remove alice but not her session, then give the name to a new person.
         h.server.directory.remove_user("alice");
         h.server.directory.put_user(User {
@@ -1705,14 +1766,14 @@ mod tests {
     async fn userinfo_rejects_unknown_and_ambiguous_subjects() {
         let h = harness().await;
         let code = sign_in(&h, "alice", &kubectl_authorize(&[])).await;
-        let tokens = exchange(&h, &code).await.json();
-        let access = tokens["access_token"].as_str().unwrap();
+        let tokens = exchange(&h, &code).await.tokens();
+        let access = tokens.access_token.as_str();
         let (_, mut claims) = verify(&h, access, "kubernetes");
         let keys = h.server.keys.borrow().clone().unwrap();
         let key = keys.signer(Algorithm::Es256, h.clock.now()).unwrap();
 
         // An otherwise valid signed token for an absent subject never yields claims.
-        claims["sub"] = serde_json::json!("uid-unknown");
+        "uid-unknown".clone_into(&mut claims.sub);
         let unknown = zeabur_identity_keys::jws::sign_compact(&key, "at+jwt", &claims).unwrap();
         let reply = userinfo(&h, Some(&unknown)).await;
         assert_eq!(reply.status, StatusCode::UNAUTHORIZED);
@@ -1750,9 +1811,9 @@ mod tests {
                 };
                 assert_eq!(reply.error(), reason);
                 let events = audit_outcomes(&h, "oauth.code_exchange", &["failure"]);
-                assert_eq!(events[0]["fields"]["reason"], reason);
-                assert_eq!(events[0]["fields"]["client"], "kubectl");
-                assert!(!has_member(&events[0]["fields"], "user"));
+                assert_eq!(events[0].field("reason"), Some(reason));
+                assert_eq!(events[0].field("client"), Some("kubectl"));
+                assert!(!events[0].fields.contains_key("user"));
                 let operational = if missing {
                     "keys_unavailable"
                 } else {
@@ -1760,9 +1821,9 @@ mod tests {
                 };
                 assert!(h.capture.records().iter().any(|record| {
                     matches!(
-                        record["target"].as_str(),
+                        Some(record.target.as_str()),
                         Some("zeabur_identity_oauth::endpoints" | "zeabur_identity_oauth::tokens")
-                    ) && record["fields"]["reason"] == operational
+                    ) && record.field("reason") == Some(operational)
                 }));
                 assert_no_secrets(&h, &[&code]);
             }
@@ -1771,24 +1832,24 @@ mod tests {
         // Rotation still happens before signing; restoring keys cannot reuse the old token.
         let h = harness().await;
         let code = sign_in(&h, "alice", &kubectl_authorize(&[])).await;
-        let issued = exchange(&h, &code).await.json();
-        let token = issued["refresh_token"].as_str().unwrap();
+        let issued = exchange(&h, &code).await.tokens();
+        let token = issued.refresh_token.as_deref().unwrap();
         let keys = h.server.keys.borrow().clone();
         h.keys_sender.send(None).unwrap();
         assert_eq!(refresh(&h, token).await.error(), "temporarily_unavailable");
         h.keys_sender.send(keys).unwrap();
         assert_eq!(refresh(&h, token).await.error(), "invalid_grant");
         let events = audit_outcomes(&h, "oauth.refresh", &["failure", "failure"]);
-        assert_eq!(events[0]["fields"]["reason"], "temporarily_unavailable");
+        assert_eq!(events[0].field("reason"), Some("temporarily_unavailable"));
         let replay = audit_outcomes(&h, "oauth.replay", &["failure"]);
-        assert_eq!(replay[0]["fields"]["reason"], "refresh_reused");
+        assert_eq!(replay[0].field("reason"), Some("refresh_reused"));
         assert_no_secrets(
             &h,
             &[
                 &code,
                 token,
-                issued["access_token"].as_str().unwrap(),
-                issued["id_token"].as_str().unwrap(),
+                issued.access_token.as_str(),
+                issued.id_token.as_deref().unwrap(),
             ],
         );
     }
@@ -1798,17 +1859,19 @@ mod tests {
         for detection in ["code", "refresh", "binding", "revoke"] {
             let h = harness().await;
             let code = sign_in(&h, "alice", &kubectl_authorize(&[])).await;
-            let issued = exchange(&h, &code).await.json();
-            let token = issued["refresh_token"].as_str().unwrap();
+            let issued = exchange(&h, &code).await.tokens();
+            let token = issued.refresh_token.as_deref().unwrap();
             let mut secrets = vec![code.clone(), token.to_owned()];
             h.server.grants.fail_revoke.store(true, Ordering::SeqCst);
             let (reply, operation, client) = match detection {
                 "code" => (exchange(&h, &code).await, "oauth.code_exchange", "kubectl"),
                 "refresh" => {
-                    let rotated = refresh(&h, token).await.json();
-                    for field in ["refresh_token", "access_token", "id_token"] {
-                        secrets.push(rotated[field].as_str().unwrap().to_owned());
-                    }
+                    let rotated = refresh(&h, token).await.tokens();
+                    secrets.extend([
+                        rotated.refresh_token.clone().unwrap(),
+                        rotated.access_token.clone(),
+                        rotated.id_token.clone().unwrap(),
+                    ]);
                     (refresh(&h, token).await, "oauth.refresh", "kubectl")
                 }
                 "binding" => (
@@ -1843,11 +1906,11 @@ mod tests {
             };
             let events = audit_outcomes(&h, operation, &expected);
             let failed = events.last().unwrap();
-            assert_eq!(failed["fields"]["reason"], "server_error");
-            assert_eq!(failed["fields"]["client"], client);
+            assert_eq!(failed.field("reason"), Some("server_error"));
+            assert_eq!(failed.field("client"), Some(client));
             assert!(h.capture.records().iter().any(|record| {
-                record["target"] == "zeabur_identity_oauth::endpoints"
-                    && record["fields"]["reason"] == "storage_failed"
+                record.target == "zeabur_identity_oauth::endpoints"
+                    && record.field("reason") == Some("storage_failed")
             }));
             if detection != "revoke" {
                 let (event, reason) = match detection {
@@ -1857,9 +1920,9 @@ mod tests {
                     _ => unreachable!(),
                 };
                 let detected = audit_outcomes(&h, event, &["failure"]);
-                assert_eq!(detected[0]["fields"]["reason"], reason);
-                assert_eq!(detected[0]["fields"]["client"], client);
-                assert!(!has_member(&detected[0]["fields"], "user"));
+                assert_eq!(detected[0].field("reason"), Some(reason));
+                assert_eq!(detected[0].field("client"), Some(client));
+                assert!(!detected[0].fields.contains_key("user"));
             }
             assert_no_secrets(&h, &secrets.iter().map(String::as_str).collect::<Vec<_>>());
             let family = zeabur_identity_oauth::refresh::RefreshToken::parse(token).unwrap();
@@ -1870,8 +1933,8 @@ mod tests {
             assert_no_secrets(
                 &h,
                 &[
-                    issued["access_token"].as_str().unwrap(),
-                    issued["id_token"].as_str().unwrap(),
+                    issued.access_token.as_str(),
+                    issued.id_token.as_deref().unwrap(),
                 ],
             );
         }
@@ -1903,9 +1966,9 @@ mod tests {
                 "oauth.revocation_request"
             };
             let events = audit_outcomes(&h, event, &["failure"]);
-            assert_eq!(events[0]["fields"]["reason"], "invalid_client");
+            assert_eq!(events[0].field("reason"), Some("invalid_client"));
             for identity in ["client", "user", "subject"] {
-                assert!(!has_member(&events[0]["fields"], identity));
+                assert!(!events[0].fields.contains_key(identity));
             }
             assert_no_secrets(
                 &h,
@@ -1952,12 +2015,12 @@ mod tests {
             "oauth.revocation_request",
             &["failure", "failure", "failure"],
         );
-        assert_eq!(events[0]["fields"]["reason"], "not_form");
-        assert_eq!(events[1]["fields"]["reason"], "invalid_request");
-        assert_eq!(events[2]["fields"]["reason"], "invalid_request");
-        assert!(!has_member(&events[0]["fields"], "client"));
-        assert!(!has_member(&events[1]["fields"], "client"));
-        assert_eq!(events[2]["fields"]["client"], "kubectl");
+        assert_eq!(events[0].field("reason"), Some("not_form"));
+        assert_eq!(events[1].field("reason"), Some("invalid_request"));
+        assert_eq!(events[2].field("reason"), Some("invalid_request"));
+        assert!(!events[0].fields.contains_key("client"));
+        assert!(!events[1].fields.contains_key("client"));
+        assert_eq!(events[2].field("client"), Some("kubectl"));
         assert_no_secrets(
             &h,
             &[
@@ -1983,8 +2046,8 @@ mod tests {
         assert_eq!(reply.status, StatusCode::BAD_REQUEST);
         assert_eq!(reply.error(), "unsupported_grant_type");
         assert_eq!(
-            reply.json()["error_description"],
-            "This grant_type is not supported. Use authorization_code or refresh_token."
+            reply.json::<ErrorBody>().error_description.as_deref(),
+            Some("This grant_type is not supported. Use authorization_code or refresh_token.")
         );
         let reply = post(
             &h.app,
@@ -2021,13 +2084,13 @@ mod tests {
             "oauth.token_request",
             &["failure", "failure", "failure", "failure", "failure"],
         );
-        assert_eq!(events[0]["fields"]["reason"], "unsupported_grant_type");
-        assert_eq!(events[0]["fields"]["client"], "kubectl");
-        assert_eq!(events[1]["fields"]["reason"], "unsupported_grant_type");
-        assert_eq!(events[2]["fields"]["reason"], "invalid_request");
-        assert_eq!(events[3]["fields"]["reason"], "not_form");
-        assert!(!has_member(&events[3]["fields"], "client"));
-        assert!(!has_member(&events[4]["fields"], "client"));
+        assert_eq!(events[0].field("reason"), Some("unsupported_grant_type"));
+        assert_eq!(events[0].field("client"), Some("kubectl"));
+        assert_eq!(events[1].field("reason"), Some("unsupported_grant_type"));
+        assert_eq!(events[2].field("reason"), Some("invalid_request"));
+        assert_eq!(events[3].field("reason"), Some("not_form"));
+        assert!(!events[3].fields.contains_key("client"));
+        assert!(!events[4].fields.contains_key("client"));
         assert_no_secrets(&h, &["password", "duplicate-form-code-sentinel"]);
     }
 }

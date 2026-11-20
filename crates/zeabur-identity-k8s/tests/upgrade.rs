@@ -10,10 +10,13 @@ mod tests {
     use std::process::{Command, Stdio};
     use std::time::Duration;
 
-    use kube::api::{Api, ApiResource, DeleteParams, DynamicObject, PostParams};
+    use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
+    use kube::api::{Api, ApiResource, DeleteParams, PostParams};
+    use kube::core::Object;
+    use kube::core::object::NotUsed;
     use kube::{Client, Config, Resource as _, ResourceExt as _};
-    use serde_json::{Value, json};
-    use zeabur_identity_api::credential::Credential;
+    use serde::{Deserialize, Serialize};
+    use zeabur_identity_api::credential::{Credential, CredentialKind, CredentialSpec, Passkey};
     use zeabur_identity_api::upstream::{ExternalId, Issuer, Subject};
     use zeabur_identity_api::user::{User as UserObject, UserSpec};
     use zeabur_identity_api::{USER_LABEL, definitions};
@@ -50,23 +53,50 @@ mod tests {
         String::from_utf8_lossy(&output.stdout).into_owned()
     }
 
-    fn apply(manifest: &Value) {
+    fn apply(manifest: &impl Serialize) {
         kubectl(
             &["apply", "--server-side", "--force-conflicts", "-f", "-"],
-            &manifest.to_string(),
+            &serde_json::to_string(manifest).unwrap(),
         );
     }
 
-    fn apply_crds(items: &[Value]) {
-        apply(&json!({"apiVersion": "v1", "kind": "List", "items": items}));
+    /// A Kubernetes `List`.
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct List<'a, T> {
+        api_version: &'static str,
+        kind: &'static str,
+        items: &'a [T],
+    }
+
+    fn apply_crds(items: &[CustomResourceDefinition]) {
+        apply(&List {
+            api_version: "v1",
+            kind: "List",
+            items,
+        });
         kubectl(&["wait", "--for=condition=Established", CRD], "");
     }
 
-    fn current_crds() -> Vec<Value> {
+    /// The members of a `Credential` that released versions wrote, which this version's types
+    /// no longer have as such.
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    struct ReleasedSpec {
+        user: String,
+        #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
+        kind: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        passkey: Option<Passkey>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        external: Option<ExternalId>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provider: Option<String>,
+    }
+
+    type Released = Object<ReleasedSpec, NotUsed>;
+
+    fn current_crds() -> Vec<CustomResourceDefinition> {
         definitions()
-            .into_iter()
-            .map(|crd| serde_json::to_value(crd).unwrap())
-            .collect()
     }
 
     fn external(issuer: &str, subject: &str) -> ExternalId {
@@ -78,15 +108,14 @@ mod tests {
 
     /// Creates `spec` as a `Credential`, retrying until the API server keeps its `type`: right
     /// after a CRD change it can still serve the schema before.
-    async fn create_released(api: &Api<DynamicObject>, object: &Value) {
-        let name = object["metadata"]["name"].as_str().unwrap();
+    async fn create_released(api: &Api<Released>, object: &Released) {
+        let name = object.name_any();
         for _ in 0..50 {
-            let created = serde_json::from_value::<DynamicObject>(object.clone()).unwrap();
-            if let Ok(created) = api.create(&PostParams::default(), &created).await {
-                if !created.data["spec"]["type"].is_null() {
+            if let Ok(created) = api.create(&PostParams::default(), object).await {
+                if created.spec.kind.is_some() {
                     return;
                 }
-                api.delete(name, &DeleteParams::default()).await.unwrap();
+                api.delete(&name, &DeleteParams::default()).await.unwrap();
             }
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
@@ -95,13 +124,14 @@ mod tests {
 
     /// Waits until the API server admits a `Credential` without `type`, so it serves this
     /// version's CRD.
-    async fn wait_for_current(api: &Api<DynamicObject>, user: &str) {
-        let probe: DynamicObject = serde_json::from_value(json!({
-            "apiVersion": "identity.zeabur.com/v1alpha1", "kind": "Credential",
-            "metadata": {"name": "c-probe"},
-            "spec": {"user": user, "external": {"issuer": "https://probe.example", "subject": "1"}}
-        }))
-        .unwrap();
+    async fn wait_for_current(api: &Api<Credential>, user: &str) {
+        let probe = Credential::new(
+            "c-probe",
+            CredentialSpec {
+                user: user.to_owned(),
+                kind: CredentialKind::External(external("https://probe.example", "1")),
+            },
+        );
         for _ in 0..50 {
             if api.create(&PostParams::default(), &probe).await.is_ok() {
                 api.delete("c-probe", &DeleteParams::default())
@@ -117,7 +147,11 @@ mod tests {
     /// Stores a passkey and two linked accounts as `version` wrote them, applies this version's
     /// CRD, and uses them as Zeabur Identity's service account.
     #[expect(clippy::too_many_lines, reason = "one upgrade scenario, top to bottom")]
-    async fn check(version: &str, released_crd: &str, linked_spec: fn(&str, Value) -> Value) {
+    async fn check(
+        version: &str,
+        released_crd: &str,
+        linked_spec: fn(&str, ExternalId) -> ReleasedSpec,
+    ) {
         let admin = Client::try_default()
             .await
             .expect("KUBECONFIG must point at a test cluster");
@@ -125,10 +159,10 @@ mod tests {
         aws_lc_rs::rand::fill(&mut suffix).unwrap();
         let namespace = format!("zeabur-identity-upgrade-{:08x}", u32::from_be_bytes(suffix));
         let mut crds = current_crds();
-        crds.retain(|crd| crd["spec"]["names"]["kind"] != "Credential");
+        crds.retain(|crd| crd.spec.names.kind != "Credential");
         crds.push(serde_json::from_str(released_crd).unwrap());
         apply_crds(&crds);
-        for manifest in rbac::manifests(&namespace).unwrap() {
+        for manifest in rbac::manifests(&namespace) {
             apply(&manifest);
         }
 
@@ -157,33 +191,48 @@ mod tests {
             account_type: zeabur_identity_core::account::AccountType::Regular,
         };
         let resource = ApiResource::erase::<Credential>(&());
-        let dynamic: Api<DynamicObject> =
-            Api::namespaced_with(admin.clone(), &namespace, &resource);
-        let object = |name: &str, spec: Value| {
-            json!({"apiVersion": "identity.zeabur.com/v1alpha1", "kind": "Credential",
-                "metadata": {"name": name, "labels": {USER_LABEL: "alice"},
-                    "ownerReferences": [owner]},
-                "spec": spec})
+        let released: Api<Released> = Api::namespaced_with(admin.clone(), &namespace, &resource);
+        let object = |name: &str, spec: ReleasedSpec| {
+            let mut object = Released::new(name, &resource, spec);
+            object.metadata.labels = Some([(USER_LABEL.to_owned(), "alice".to_owned())].into());
+            object.metadata.owner_references = Some(vec![owner.clone()]);
+            object
+        };
+        let released_spec = |kind: &str| ReleasedSpec {
+            user: "alice".into(),
+            kind: Some(kind.to_owned()),
+            passkey: None,
+            external: None,
+            provider: None,
         };
         let passkey = passkey_credential_name(b"passkey");
         let github = external("https://github.com", "583231");
         let google = external("https://accounts.google.com", "1047");
         create_released(
-            &dynamic,
+            &released,
             &object(
                 &passkey,
-                json!({"user": "alice", "type": "Passkey", "passkey": {
-                    "credentialId": "cGFzc2tleQ", "record": "{}", "backupEligible": false}}),
+                ReleasedSpec {
+                    passkey: Some(Passkey {
+                        credential_id: "cGFzc2tleQ".into(),
+                        record: "{}".into(),
+                        backup_eligible: false,
+                        aaguid: None,
+                        label: None,
+                    }),
+                    ..released_spec("Passkey")
+                },
             ),
         )
         .await;
         for (id, provider) in [(&github, "github"), (&google, "google")] {
-            let spec = linked_spec(provider, serde_json::to_value(id).unwrap());
-            create_released(&dynamic, &object(&external_credential_name(id), spec)).await;
+            let spec = linked_spec(provider, id.clone());
+            create_released(&released, &object(&external_credential_name(id), spec)).await;
         }
 
         apply_crds(&current_crds());
-        wait_for_current(&dynamic, "alice").await;
+        let current: Api<Credential> = Api::namespaced(admin.clone(), &namespace);
+        wait_for_current(&current, "alice").await;
 
         let mut config = Config::infer().await.unwrap();
         config.auth_info.impersonate =
@@ -232,7 +281,7 @@ mod tests {
                 Unlink::Unlinked,
                 "{version}"
             );
-            assert!(dynamic.get_opt(&name).await.unwrap().is_none(), "{version}");
+            assert!(current.get_opt(&name).await.unwrap().is_none(), "{version}");
         }
         assert!(store.get(&passkey).await.unwrap().is_some(), "{version}");
 
@@ -245,22 +294,31 @@ mod tests {
         check(
             "v0.1.2",
             include_str!("upgrade/credential-crd-v0.1.2.json"),
-            |provider, external| {
-                let kind = if provider == "github" {
-                    "GitHub"
-                } else {
-                    "Google"
-                };
-                json!({"user": "alice", "type": kind, "external": external})
+            |provider, external| ReleasedSpec {
+                user: "alice".into(),
+                kind: Some(
+                    if provider == "github" {
+                        "GitHub"
+                    } else {
+                        "Google"
+                    }
+                    .to_owned(),
+                ),
+                passkey: None,
+                external: Some(external),
+                provider: None,
             },
         )
         .await;
         check(
             "v0.2.0",
             include_str!("upgrade/credential-crd-v0.2.0.json"),
-            |provider, external| {
-                json!({"user": "alice", "type": "Upstream", "external": external,
-                    "provider": provider})
+            |provider, external| ReleasedSpec {
+                user: "alice".into(),
+                kind: Some("Upstream".to_owned()),
+                passkey: None,
+                external: Some(external),
+                provider: Some(provider.to_owned()),
             },
         )
         .await;

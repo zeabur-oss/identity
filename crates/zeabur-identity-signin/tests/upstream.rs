@@ -18,14 +18,15 @@ mod tests {
     use base64::Engine as _;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use http_body_util::BodyExt as _;
-    use serde_json::{Value, json};
+    use serde::de::DeserializeOwned;
+    use serde::{Deserialize, Serialize};
     use tower::ServiceExt as _;
     use tracing::instrument::WithSubscriber as _;
     use zeabur_identity_api::client::ClientType;
     use zeabur_identity_api::token_hash;
     use zeabur_identity_api::upstream::{ExternalId, Issuer, ProviderId, Subject};
     use zeabur_identity_core::account::{AccountType, AdminSignIn, Settings};
-    use zeabur_identity_core::clock::{Clock, SystemClock};
+    use zeabur_identity_core::clock::{Clock, SystemClock, UnixTime};
     use zeabur_identity_core::config::BaseUrl;
     use zeabur_identity_core::crypto::{Sealer, random, sha256};
     use zeabur_identity_keys::Algorithm;
@@ -35,6 +36,7 @@ mod tests {
     use zeabur_identity_keys::rotation::RotationPolicy;
     use zeabur_identity_keys::signing::SigningKey;
     use zeabur_identity_keys::store::MemoryKeyStore;
+    use zeabur_identity_oauth::authorize::Flow as SealedFlow;
     use zeabur_identity_oauth::endpoints::{self, FLOW_COOKIE};
     use zeabur_identity_oauth::{AuthorizationServer, Lifetimes, OneTimeIds};
     use zeabur_identity_signin::account::{ACCOUNT_CLIENT, SESSION_COOKIE, SessionToken};
@@ -50,8 +52,7 @@ mod tests {
         MemoryDirectory, MemoryGrantStore, MemorySetupStore, NewExternal, NewGrant,
         SetupStore as _, User, external_credential_name,
     };
-    use zeabur_identity_test_support::has_member;
-    use zeabur_identity_test_support::logging::Capture;
+    use zeabur_identity_test_support::logging::{Capture, Record};
     use zeabur_identity_ui::i18n::Lang;
 
     const ISSUER: &str = "https://login.example.com";
@@ -72,13 +73,13 @@ mod tests {
         /// Published in Google's JWK set.
         published_key: Mutex<Option<Arc<SigningKey>>>,
         /// Overrides for Google's ID token claims.
-        id_token_overrides: Mutex<Value>,
+        id_token_overrides: Mutex<Claims>,
         fail_http: AtomicBool,
         secrets: Mutex<Vec<String>>,
         /// The OpenID provider's issuer: its discovery document is at this issuer.
         issuer: String,
-        /// Overrides for the discovery document; `null` makes it answer `500`.
-        discovery_overrides: Mutex<Value>,
+        /// The discovery document; `None` makes it answer `500`.
+        discovery_document: Mutex<Option<Discovery>>,
         /// The URL of every request the providers received.
         requests: Mutex<Vec<String>>,
     }
@@ -86,30 +87,282 @@ mod tests {
     #[derive(Clone)]
     struct FakeHttp(Arc<Fake>);
 
-    fn reply(status: StatusCode, body: &Value) -> Response<Bytes> {
+    fn reply(status: StatusCode, body: &impl Serialize) -> Response<Bytes> {
         Response::builder()
             .status(status)
-            .body(Bytes::from(body.to_string()))
+            .body(Bytes::from(serde_json::to_string(body).unwrap()))
             .unwrap()
+    }
+
+    /// A reply with no members.
+    #[derive(Serialize)]
+    #[expect(
+        clippy::empty_structs_with_brackets,
+        reason = "a unit struct serializes as null, not as an empty object"
+    )]
+    struct Empty {}
+
+    /// A request body that carries an enrolment token.
+    #[derive(Serialize)]
+    struct Token<'a> {
+        token: &'a str,
+    }
+
+    /// A request body that names a provider.
+    #[derive(Serialize)]
+    struct Choose<'a> {
+        provider: &'a str,
+    }
+
+    /// A request body that names a credential.
+    #[derive(Serialize)]
+    struct Name<'a> {
+        name: &'a str,
+    }
+
+    /// An OAuth token response (RFC 6749 section 5.1) of a fake provider.
+    #[derive(Serialize)]
+    struct ProviderToken<'a> {
+        access_token: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        id_token: Option<&'a str>,
+    }
+
+    /// An OAuth error response (RFC 6749 section 5.2) of a fake provider.
+    #[derive(Serialize)]
+    struct ProviderError<'a> {
+        error: &'a str,
+    }
+
+    /// The members of GitHub's `GET /user` reply the server reads.
+    #[derive(Serialize)]
+    struct GithubUser<'a> {
+        id: u64,
+        login: &'a str,
+    }
+
+    /// The `aud` claim: one audience or a list (OIDC Core section 2).
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    #[serde(untagged)]
+    enum Audience {
+        One(String),
+        Many(Vec<String>),
+    }
+
+    /// The claims of Google's ID token (OIDC Core section 2). As an override, a `Some` replaces
+    /// the claim of the valid token.
+    #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+    struct Claims {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        iss: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        sub: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        aud: Option<Audience>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        azp: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        exp: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        iat: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        nonce: Option<String>,
+    }
+
+    impl Claims {
+        /// These claims where set, `base` elsewhere.
+        fn over(self, base: Self) -> Self {
+            Self {
+                iss: self.iss.or(base.iss),
+                sub: self.sub.or(base.sub),
+                aud: self.aud.or(base.aud),
+                azp: self.azp.or(base.azp),
+                exp: self.exp.or(base.exp),
+                iat: self.iat.or(base.iat),
+                nonce: self.nonce.or(base.nonce),
+            }
+        }
+
+        fn iss(iss: &str) -> Self {
+            Self {
+                iss: Some(iss.to_owned()),
+                ..Self::default()
+            }
+        }
+
+        fn nonce(nonce: &str) -> Self {
+            Self {
+                nonce: Some(nonce.to_owned()),
+                ..Self::default()
+            }
+        }
+
+        fn aud(audience: Audience) -> Self {
+            Self {
+                aud: Some(audience),
+                ..Self::default()
+            }
+        }
+
+        fn azp(azp: &str) -> Self {
+            Self {
+                azp: Some(azp.to_owned()),
+                ..Self::default()
+            }
+        }
+
+        fn exp(exp: u64) -> Self {
+            Self {
+                exp: Some(exp),
+                ..Self::default()
+            }
+        }
+
+        fn iat(iat: u64) -> Self {
+            Self {
+                iat: Some(iat),
+                ..Self::default()
+            }
+        }
+    }
+
+    fn one(audience: &str) -> Audience {
+        Audience::One(audience.to_owned())
+    }
+
+    fn many(audiences: &[&str]) -> Audience {
+        Audience::Many(audiences.iter().map(|a| (*a).to_owned()).collect())
+    }
+
+    /// The members of the access token the tests read.
+    #[derive(Debug, Deserialize)]
+    struct AccessClaims {
+        sub: String,
+        amr: Option<Vec<String>>,
+    }
+
+    /// The claims in the payload of the compact JWS `token`.
+    fn access_claims(token: &str) -> AccessClaims {
+        let payload = token.split('.').nth(1).unwrap();
+        serde_json::from_slice(&URL_SAFE_NO_PAD.decode(payload).unwrap()).unwrap()
+    }
+
+    /// An OpenID Provider Metadata document (OIDC Discovery section 3) as far as the server
+    /// reads it; a `None` member is left out.
+    #[derive(Clone, Debug, Serialize)]
+    struct Discovery {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        issuer: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        authorization_endpoint: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        token_endpoint: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        jwks_uri: Option<String>,
+        response_types_supported: Vec<&'static str>,
+    }
+
+    impl Discovery {
+        /// The valid document of the provider at `issuer`.
+        fn new(issuer: &str) -> Self {
+            Self {
+                issuer: Some(issuer.to_owned()),
+                authorization_endpoint: Some("https://google.test/authorize".to_owned()),
+                token_endpoint: Some("https://google.test/token".to_owned()),
+                jwks_uri: Some("https://google.test/jwks".to_owned()),
+                response_types_supported: vec!["code"],
+            }
+        }
+    }
+
+    /// The reply of the server's JSON endpoints that start a redirect.
+    #[derive(Deserialize)]
+    struct Started {
+        redirect_to: String,
+    }
+
+    /// A problem (RFC 9457) of the server's JSON endpoints.
+    #[derive(Deserialize)]
+    struct Problem {
+        #[serde(rename = "type")]
+        kind: String,
+    }
+
+    /// The reply of an account change.
+    #[derive(Deserialize)]
+    struct Changed {
+        signed_out: bool,
+    }
+
+    /// The tokens a reply may carry.
+    #[derive(Deserialize)]
+    struct Issued {
+        #[serde(rename = "access_token")]
+        access: Option<String>,
+        #[serde(rename = "id_token")]
+        id: Option<String>,
+        #[serde(rename = "refresh_token")]
+        refresh: Option<String>,
+    }
+
+    /// A reply that may carry a redirect.
+    #[derive(Deserialize)]
+    struct Redirect {
+        redirect_to: Option<String>,
+    }
+
+    /// The members of a request body that must not reach the logs.
+    #[derive(Default, Deserialize)]
+    struct Submitted {
+        token: Option<String>,
+    }
+
+    /// What the server seals into the upstream cookie.
+    #[derive(Serialize, Deserialize)]
+    struct Pending {
+        id: String,
+        provider: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        issuer: Option<String>,
+        state: String,
+        nonce: String,
+        verifier: String,
+        link: Option<String>,
+        #[serde(default)]
+        account: Option<Bound>,
+        expires_at: UnixTime,
+    }
+
+    /// The account session a link from the account page is for.
+    #[derive(Serialize, Deserialize)]
+    struct Bound {
+        session: String,
+        user: String,
+        subject: String,
+    }
+
+    /// The text of every record, to search for leaked secrets.
+    fn log_text<'a>(records: impl IntoIterator<Item = &'a Record>) -> String {
+        records
+            .into_iter()
+            .map(Record::text)
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     /// Google's token response: an ID token with the fake's claims and overrides.
     fn google_token(fake: &Fake, nonce: &str) -> Response<Bytes> {
         let now = SystemClock.now().as_secs();
-        let mut claims = json!({
-            "iss": fake.issuer,
-            "sub": GOOGLE_SUB,
-            "aud": "google-client",
-            "exp": now + 300,
-            "iat": now,
-            "nonce": nonce,
-        });
-        let overrides = fake.id_token_overrides.lock().unwrap().clone();
-        if let Value::Object(map) = overrides {
-            for (k, v) in map {
-                claims[k] = v;
-            }
-        }
+        let valid = Claims {
+            iss: Some(fake.issuer.clone()),
+            sub: Some(GOOGLE_SUB.to_owned()),
+            aud: Some(one("google-client")),
+            azp: None,
+            exp: Some(now + 300),
+            iat: Some(now),
+            nonce: Some(nonce.to_owned()),
+        };
+        let claims = fake.id_token_overrides.lock().unwrap().clone().over(valid);
         let key = fake.google_key.lock().unwrap().clone().unwrap();
         let id_token = sign_compact(&key, "JWT", &claims).unwrap();
         fake.secrets
@@ -118,7 +371,10 @@ mod tests {
             .push(id_token.clone());
         reply(
             StatusCode::OK,
-            &json!({ "access_token": "g", "id_token": id_token }),
+            &ProviderToken {
+                access_token: "g",
+                id_token: Some(&id_token),
+            },
         )
     }
 
@@ -128,34 +384,19 @@ mod tests {
         let set = JwkSet {
             keys: vec![key.jwk()],
         };
-        reply(StatusCode::OK, &serde_json::to_value(set).unwrap())
+        reply(StatusCode::OK, &set)
     }
 
     /// The OpenID provider's discovery document, pointing at the test endpoints.
     fn discovery(fake: &Fake) -> Response<Bytes> {
-        let overrides = fake.discovery_overrides.lock().unwrap().clone();
-        if overrides.is_null() {
-            return reply(StatusCode::INTERNAL_SERVER_ERROR, &json!({}));
-        }
-        let mut document = json!({
-            "issuer": fake.issuer,
-            "authorization_endpoint": "https://google.test/authorize",
-            "token_endpoint": "https://google.test/token",
-            "jwks_uri": "https://google.test/jwks",
-            "response_types_supported": ["code"],
-        });
-        if let Value::Object(map) = overrides {
-            for (k, v) in map {
-                if v.is_null() {
-                    if let Value::Object(members) = &mut document {
-                        members.remove(&k);
-                    }
-                } else {
-                    document[k] = v;
-                }
-            }
-        }
-        reply(StatusCode::OK, &document)
+        fake.discovery_document
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map_or_else(
+                || reply(StatusCode::INTERNAL_SERVER_ERROR, &Empty {}),
+                |document| reply(StatusCode::OK, document),
+            )
     }
 
     impl HttpClient for FakeHttp {
@@ -198,11 +439,19 @@ mod tests {
                     Some(_)
                         if form.get("client_secret").map(String::as_str) == Some("gh-secret") =>
                     {
-                        reply(StatusCode::OK, &json!({ "access_token": "gh-access" }))
+                        reply(
+                            StatusCode::OK,
+                            &ProviderToken {
+                                access_token: "gh-access",
+                                id_token: None,
+                            },
+                        )
                     }
                     _ => reply(
                         StatusCode::BAD_REQUEST,
-                        &json!({ "error": "bad_verification_code" }),
+                        &ProviderError {
+                            error: "bad_verification_code",
+                        },
                     ),
                 },
                 "https://api.github.test/user" => {
@@ -211,17 +460,22 @@ mod tests {
                     if authorized {
                         reply(
                             StatusCode::OK,
-                            &json!({ "id": GITHUB_ID, "login": "octocat" }),
+                            &GithubUser {
+                                id: GITHUB_ID,
+                                login: "octocat",
+                            },
                         )
                     } else {
-                        reply(StatusCode::UNAUTHORIZED, &json!({}))
+                        reply(StatusCode::UNAUTHORIZED, &Empty {})
                     }
                 }
                 "https://google.test/token" => redeem(&form).map_or_else(
                     || {
                         reply(
                             StatusCode::BAD_REQUEST,
-                            &json!({ "error": "invalid_grant" }),
+                            &ProviderError {
+                                error: "invalid_grant",
+                            },
                         )
                     },
                     |nonce| google_token(fake, &nonce),
@@ -305,7 +559,7 @@ mod tests {
             "inv-1",
             &dana,
             &token_hash(INVITATION.as_bytes()),
-            zeabur_identity_core::clock::UnixTime::from_secs(SystemClock.now().as_secs() + 3600),
+            UnixTime::from_secs(SystemClock.now().as_secs() + 3600),
         );
         let mut providers = Vec::new();
         for id in configured {
@@ -328,7 +582,7 @@ mod tests {
         });
         let fake = Arc::new(Fake {
             issuer: google_issuer.to_owned(),
-            discovery_overrides: Mutex::new(json!({})),
+            discovery_document: Mutex::new(Some(Discovery::new(google_issuer))),
             ..Fake::default()
         });
         let google_key = Arc::new(SigningKey::generate(Algorithm::Rs256).unwrap());
@@ -406,13 +660,14 @@ mod tests {
         status: StatusCode,
         headers: HeaderMap,
         body: String,
-        audit: Option<Value>,
+        audit: Option<Record>,
+        records: Vec<Record>,
         logs: String,
     }
 
     impl Reply {
-        fn json(&self) -> Value {
-            serde_json::from_str(&self.body).unwrap_or(Value::Null)
+        fn parse<T: DeserializeOwned>(&self) -> T {
+            serde_json::from_str(&self.body).unwrap_or_else(|e| panic!("{e}: {}", self.body))
         }
         fn cookie(&self, name: &str) -> String {
             self.headers
@@ -447,7 +702,7 @@ mod tests {
                 .collect();
         let (request_parts, body) = request.into_parts();
         let body = body.collect().await.unwrap().to_bytes();
-        let submitted: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+        let submitted: Submitted = serde_json::from_slice(&body).unwrap_or_default();
         let response = app
             .clone()
             .oneshot(Request::from_parts(request_parts, Body::from(body)))
@@ -460,39 +715,37 @@ mod tests {
         let records = capture.records();
         let audits: Vec<_> = records
             .iter()
-            .filter(|r| r["target"] == "zeabur_identity::audit")
+            .filter(|r| r.target == "zeabur_identity::audit")
             .collect();
         for record in &audits {
             super::common::assert_audit_shape(record);
         }
         if path.starts_with("/upstream/") {
             assert_eq!(audits.len(), 1, "{records:?}");
-            let fields = &audits[0]["fields"];
-            assert_eq!(fields["method"], "upstream");
+            let audit = audits[0];
+            assert_eq!(audit.field("method"), Some("upstream"));
             assert_eq!(
-                fields["outcome"],
-                if parts.status.is_success() || parts.status == StatusCode::SEE_OTHER {
-                    "success"
-                } else {
-                    "failure"
-                }
+                audit.field("outcome"),
+                Some(
+                    if parts.status.is_success() || parts.status == StatusCode::SEE_OTHER {
+                        "success"
+                    } else {
+                        "failure"
+                    }
+                )
             );
             if path.ends_with("/start") {
-                assert_eq!(fields["event"], "auth.upstream_start");
+                assert_eq!(audit.field("event"), Some("auth.upstream_start"));
                 if !parts.status.is_success() {
-                    let problem: Value = serde_json::from_str(&response_body).unwrap();
+                    let problem: Problem = serde_json::from_str(&response_body).unwrap();
                     assert_eq!(
-                        fields["reason"],
-                        problem["type"]
-                            .as_str()
-                            .unwrap()
-                            .strip_prefix("urn:zeabur-identity:problem:")
-                            .unwrap()
+                        audit.field("reason"),
+                        problem.kind.strip_prefix("urn:zeabur-identity:problem:")
                     );
                 }
             } else {
                 assert!(matches!(
-                    fields["event"].as_str(),
+                    audit.field("event"),
                     Some(
                         "auth.upstream_callback"
                             | "auth.sign_in"
@@ -501,24 +754,27 @@ mod tests {
                     )
                 ));
                 if parts.status == StatusCode::BAD_REQUEST {
-                    assert!(fields["reason"].as_str().is_some());
+                    assert!(audit.field("reason").is_some());
                 }
             }
             // A logged provider is the one the path names. Only a configured provider is logged
             // (see `callback_classification_requires_verified_unexpired_pending`).
-            if has_member(fields, "provider") {
-                assert_eq!(fields["provider"].as_str(), provider.as_deref());
+            if audit.fields.contains_key("provider") {
+                assert_eq!(audit.field("provider"), provider.as_deref());
             }
-            assert!(!has_member(fields, "client"));
+            assert!(!audit.fields.contains_key("client"));
         }
-        let serialized = serde_json::to_string(&audits).unwrap();
+        let serialized = log_text(audits.iter().copied());
         for secret in query_secrets.iter().map(String::as_str).chain(
             cookies
                 .split(';')
                 .filter_map(|p| p.trim().split_once('=').map(|(_, v)| v)),
         ) {
             if !secret.is_empty() {
-                assert!(!serialized.contains(secret), "callback secret leaked");
+                assert!(
+                    !serialized.contains(secret),
+                    "callback secret leaked: {secret} in {serialized}"
+                );
             }
         }
         for secret in [
@@ -535,7 +791,7 @@ mod tests {
                 "upstream secret or subject leaked"
             );
         }
-        if let Some(token) = submitted["token"].as_str() {
+        if let Some(token) = &submitted.token {
             assert!(!serialized.contains(token), "enrollment token leaked");
         }
         for value in parts.headers.get_all(header::SET_COOKIE) {
@@ -558,9 +814,9 @@ mod tests {
             .and_then(|v| v.to_str().ok())
             .map(str::to_owned)
             .or_else(|| {
-                serde_json::from_str::<Value>(&response_body)
+                serde_json::from_str::<Redirect>(&response_body)
                     .ok()
-                    .and_then(|v| v["redirect_to"].as_str().map(str::to_owned))
+                    .and_then(|v| v.redirect_to)
             });
         if let Some(url) = redirect {
             for (key, secret) in
@@ -574,11 +830,12 @@ mod tests {
                 }
             }
         }
-        if let Ok(tokens) = serde_json::from_str::<Value>(&response_body) {
-            for key in ["access_token", "id_token", "refresh_token"] {
-                if let Some(token) = tokens[key].as_str() {
-                    assert!(!serialized.contains(token), "issued token leaked");
-                }
+        if let Ok(tokens) = serde_json::from_str::<Issued>(&response_body) {
+            for token in [tokens.access, tokens.id, tokens.refresh]
+                .into_iter()
+                .flatten()
+            {
+                assert!(!serialized.contains(&token), "issued token leaked");
             }
         }
         Reply {
@@ -586,7 +843,8 @@ mod tests {
             headers: parts.headers,
             body: response_body,
             audit: audits.first().map(|r| (*r).clone()),
-            logs: serde_json::to_string(&records).unwrap(),
+            logs: log_text(&records),
+            records,
         }
     }
 
@@ -597,11 +855,11 @@ mod tests {
         user: Option<&str>,
         subject: Option<&str>,
     ) {
-        let fields = &reply.audit.as_ref().unwrap()["fields"];
-        assert_eq!(fields["event"], event);
-        assert_eq!(fields["reason"].as_str(), reason);
-        assert_eq!(fields["user"].as_str(), user);
-        assert_eq!(fields["subject"].as_str(), subject);
+        let audit = reply.audit.as_ref().unwrap();
+        assert_eq!(audit.field("event"), Some(event));
+        assert_eq!(audit.field("reason"), reason);
+        assert_eq!(audit.field("user"), user);
+        assert_eq!(audit.field("subject"), subject);
     }
 
     async fn authorize(h: &Harness, scope: &str) -> String {
@@ -612,7 +870,12 @@ mod tests {
         reply.cookie(FLOW_COOKIE)
     }
 
-    async fn start(h: &Harness, provider: &str, body: &Value, cookies: &str) -> Reply {
+    async fn start(
+        h: &Harness,
+        provider: &str,
+        body: &(impl Serialize + Sync),
+        cookies: &str,
+    ) -> Reply {
         let mut request = Request::builder()
             .method(Method::POST)
             .uri(format!("/upstream/{provider}/start"))
@@ -621,7 +884,13 @@ mod tests {
         if !cookies.is_empty() {
             request = request.header(header::COOKIE, cookies);
         }
-        call(&h.app, request.body(Body::from(body.to_string())).unwrap()).await
+        call(
+            &h.app,
+            request
+                .body(Body::from(serde_json::to_string(body).unwrap()))
+                .unwrap(),
+        )
+        .await
     }
 
     /// Plays the provider: reads the authorization URL, issues `code` for its challenge and
@@ -672,12 +941,19 @@ mod tests {
                     .oauth
                     .sealer
                     .open("zeabur-identity/upstream/v1", sealed)
-                    .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+                    .and_then(|bytes| serde_json::from_slice::<Pending>(&bytes).ok())
             {
-                for key in ["state", "nonce", "verifier", "link", "id"] {
-                    if let Some(secret) = pending[key].as_str() {
-                        assert!(!reply.logs.contains(secret), "sealed pending secret leaked");
-                    }
+                for secret in [
+                    Some(&pending.state),
+                    Some(&pending.nonce),
+                    Some(&pending.verifier),
+                    pending.link.as_ref(),
+                    Some(&pending.id),
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    assert!(!reply.logs.contains(secret), "sealed pending secret leaked");
                 }
             }
         }
@@ -708,9 +984,9 @@ mod tests {
     /// Runs a sign-in with `provider` up to the callback; returns the callback reply.
     async fn sign_in(h: &Harness, provider: &str, code: &str) -> Reply {
         let flow = authorize(h, "openid").await;
-        let started = start(h, provider, &json!({}), &format!("{FLOW_COOKIE}={flow}")).await;
+        let started = start(h, provider, &Empty {}, &format!("{FLOW_COOKIE}={flow}")).await;
         assert_eq!(started.status, StatusCode::OK, "{}", started.body);
-        let url = started.json()["redirect_to"].as_str().unwrap().to_owned();
+        let url = started.parse::<Started>().redirect_to;
         let query = provider_issues_code(h, &url, code);
         let cookies = format!(
             "{FLOW_COOKIE}={flow}; {UPSTREAM_COOKIE}={}",
@@ -738,18 +1014,11 @@ mod tests {
             "{location}"
         );
 
-        let tokens = exchange(&h, location).await.json();
-        let payload = tokens["access_token"]
-            .as_str()
-            .unwrap()
-            .split('.')
-            .nth(1)
-            .unwrap();
-        let claims: Value =
-            serde_json::from_slice(&URL_SAFE_NO_PAD.decode(payload).unwrap()).unwrap();
-        assert_eq!(claims["sub"], "uid-alice");
+        let tokens = exchange(&h, location).await.parse::<Issued>();
+        let claims = access_claims(&tokens.access.unwrap());
+        assert_eq!(claims.sub, "uid-alice");
         // No passkey: no `amr`.
-        assert!(!has_member(&claims, "amr"), "{claims}");
+        assert_eq!(claims.amr, None, "{claims:?}");
     }
 
     #[tokio::test]
@@ -807,8 +1076,8 @@ mod tests {
         // The same state twice: the second is refused.
         link(&h, Kind::GitHub, &GITHUB_ID.to_string(), "alice").await;
         let flow = authorize(&h, "openid").await;
-        let started = start(&h, "github", &json!({}), &format!("{FLOW_COOKIE}={flow}")).await;
-        let url = started.json()["redirect_to"].as_str().unwrap().to_owned();
+        let started = start(&h, "github", &Empty {}, &format!("{FLOW_COOKIE}={flow}")).await;
+        let url = started.parse::<Started>().redirect_to;
         let query = provider_issues_code(&h, &url, "code-3");
         let cookies = format!(
             "{FLOW_COOKIE}={flow}; {UPSTREAM_COOKIE}={}",
@@ -835,8 +1104,8 @@ mod tests {
 
         // A forged state, or no cookie, is refused.
         let flow = authorize(&h, "openid").await;
-        let started = start(&h, "github", &json!({}), &format!("{FLOW_COOKIE}={flow}")).await;
-        let url = started.json()["redirect_to"].as_str().unwrap().to_owned();
+        let started = start(&h, "github", &Empty {}, &format!("{FLOW_COOKIE}={flow}")).await;
+        let url = started.parse::<Started>().redirect_to;
         provider_issues_code(&h, &url, "code-4");
         let cookies = format!(
             "{FLOW_COOKIE}={flow}; {UPSTREAM_COOKIE}={}",
@@ -860,9 +1129,9 @@ mod tests {
     #[tokio::test]
     async fn start_requires_a_pending_request() {
         let h = harness().await;
-        let reply = start(&h, "github", &json!({}), "").await;
+        let reply = start(&h, "github", &Empty {}, "").await;
         assert_eq!(reply.status, StatusCode::BAD_REQUEST);
-        let reply = start(&h, "gitlab", &json!({}), "").await;
+        let reply = start(&h, "gitlab", &Empty {}, "").await;
         assert_eq!(reply.status, StatusCode::NOT_FOUND);
         // Cross-site requests are refused before anything else.
         let reply = call(
@@ -901,10 +1170,10 @@ mod tests {
         );
 
         make_admin(&h, "dana").await;
-        let started = start(&h, "google", &json!({ "token": INVITATION }), "").await;
+        let started = start(&h, "google", &Token { token: INVITATION }, "").await;
         assert_eq!(started.status, StatusCode::FORBIDDEN, "{}", started.body);
         assert_eq!(
-            started.json()["type"],
+            started.parse::<Problem>().kind,
             "urn:zeabur-identity:problem:admin-needs-two-factor"
         );
     }
@@ -925,17 +1194,9 @@ mod tests {
     }
 
     /// The `amr` claim of the access token from the code in `location`.
-    async fn amr_after(h: &Harness, location: &str) -> Value {
-        let tokens = exchange(h, location).await.json();
-        let payload = tokens["access_token"]
-            .as_str()
-            .unwrap()
-            .split('.')
-            .nth(1)
-            .unwrap();
-        let claims: Value =
-            serde_json::from_slice(&URL_SAFE_NO_PAD.decode(payload).unwrap()).unwrap();
-        claims["amr"].clone()
+    async fn amr_after(h: &Harness, location: &str) -> Option<Vec<String>> {
+        let tokens = exchange(h, location).await.parse::<Issued>();
+        access_claims(&tokens.access.unwrap()).amr
     }
 
     #[tokio::test]
@@ -955,7 +1216,7 @@ mod tests {
             Some("uid-alice"),
         );
         let location = reply.headers[header::LOCATION].to_str().unwrap();
-        assert_eq!(amr_after(&h, location).await, json!(["mfa"]));
+        assert_eq!(amr_after(&h, location).await, Some(vec!["mfa".to_owned()]));
 
         // GitHub is not marked: still refused.
         let reply = sign_in(&h, "github", "code-2").await;
@@ -975,12 +1236,12 @@ mod tests {
         link(&h, Kind::Google, GOOGLE_SUB, "alice").await;
         let reply = sign_in(&h, "google", "code-1").await;
         let location = reply.headers[header::LOCATION].to_str().unwrap();
-        assert_eq!(amr_after(&h, location).await, Value::Null);
+        assert_eq!(amr_after(&h, location).await, None);
 
         enforce_mfa_at_google(&h);
         let reply = sign_in(&h, "google", "code-2").await;
         let location = reply.headers[header::LOCATION].to_str().unwrap();
-        assert_eq!(amr_after(&h, location).await, json!(["mfa"]));
+        assert_eq!(amr_after(&h, location).await, Some(vec!["mfa".to_owned()]));
     }
 
     /// The callback reads the provider as it is then: a mark removed while the admin is at the
@@ -1028,12 +1289,12 @@ mod tests {
         let reply = account_post(
             &h,
             "/account/links/start",
-            &json!({ "provider": "google" }),
+            &Choose { provider: "google" },
             &session.cookie,
         )
         .await;
         assert_eq!(
-            reply.json()["type"],
+            reply.parse::<Problem>().kind,
             "urn:zeabur-identity:problem:admin-needs-passkey"
         );
     }
@@ -1041,9 +1302,9 @@ mod tests {
     #[tokio::test]
     async fn an_invitation_links_an_account_once() {
         let h = harness().await;
-        let started = start(&h, "google", &json!({ "token": INVITATION }), "").await;
+        let started = start(&h, "google", &Token { token: INVITATION }, "").await;
         assert_eq!(started.status, StatusCode::OK, "{}", started.body);
-        let url = started.json()["redirect_to"].as_str().unwrap().to_owned();
+        let url = started.parse::<Started>().redirect_to;
         assert!(url.contains("scope=openid") && url.contains("nonce="));
         let query = provider_issues_code(&h, &url, "code-1");
         let cookies = format!("{UPSTREAM_COOKIE}={}", started.cookie(UPSTREAM_COOKIE));
@@ -1070,7 +1331,7 @@ mod tests {
             "{events:?}"
         );
         // The invitation is used up.
-        let again = start(&h, "google", &json!({ "token": INVITATION }), "").await;
+        let again = start(&h, "google", &Token { token: INVITATION }, "").await;
         assert_eq!(again.status, StatusCode::UNAUTHORIZED);
 
         // And the linked account now signs in as dana.
@@ -1085,25 +1346,25 @@ mod tests {
         link(&h, Kind::Google, GOOGLE_SUB, "alice").await;
         let now = SystemClock.now().as_secs();
         for (claim, value) in [
-            ("aud", json!("someone-else")),
-            ("aud", json!(["google-client", "other"])),
-            ("aud", json!([])),
-            ("azp", json!("other")),
-            ("iss", json!("https://evil.example")),
-            ("exp", json!(now - 3600)),
-            ("nonce", json!("replayed")),
-            ("iat", json!(now + 3600)),
+            ("aud", Claims::aud(one("someone-else"))),
+            ("aud", Claims::aud(many(&["google-client", "other"]))),
+            ("aud", Claims::aud(many(&[]))),
+            ("azp", Claims::azp("other")),
+            ("iss", Claims::iss("https://evil.example")),
+            ("exp", Claims::exp(now - 3600)),
+            ("nonce", Claims::nonce("replayed")),
+            ("iat", Claims::iat(now + 3600)),
         ] {
-            *h.fake.id_token_overrides.lock().unwrap() = json!({ claim: value });
+            *h.fake.id_token_overrides.lock().unwrap() = value.clone();
             let reply = sign_in(&h, "google", &format!("code-{claim}")).await;
-            assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{claim}={value}");
+            assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{claim}={value:?}");
             // A token outside its validity window points at this server's clock.
             assert_eq!(
                 reply
                     .body
                     .contains(Lang::En.messages().err_clock_skew.title),
                 matches!(claim, "exp" | "iat"),
-                "{claim}={value}"
+                "{claim}={value:?}"
             );
             assert_audit(
                 &reply,
@@ -1114,14 +1375,16 @@ mod tests {
             );
         }
         // Another audience is refused even when azp names this client (OIDC Core §3.1.3.7 step 3).
-        *h.fake.id_token_overrides.lock().unwrap() =
-            json!({ "aud": ["google-client", "other"], "azp": "google-client" });
+        *h.fake.id_token_overrides.lock().unwrap() = Claims {
+            azp: Some("google-client".to_owned()),
+            ..Claims::aud(many(&["google-client", "other"]))
+        };
         assert_eq!(
             sign_in(&h, "google", "code-azp-other").await.status,
             StatusCode::BAD_REQUEST
         );
         // Google's documentation lists both spellings of its issuer.
-        *h.fake.id_token_overrides.lock().unwrap() = json!({ "iss": "accounts.google.com" });
+        *h.fake.id_token_overrides.lock().unwrap() = Claims::iss("accounts.google.com");
         let reply = sign_in(&h, "google", "code-iss-short").await;
         assert_eq!(reply.status, StatusCode::SEE_OTHER, "{}", reply.body);
         assert_audit(
@@ -1132,15 +1395,17 @@ mod tests {
             Some("uid-alice"),
         );
         // A one-element array naming this client, with a matching azp, is accepted.
-        *h.fake.id_token_overrides.lock().unwrap() =
-            json!({ "aud": ["google-client"], "azp": "google-client" });
+        *h.fake.id_token_overrides.lock().unwrap() = Claims {
+            azp: Some("google-client".to_owned()),
+            ..Claims::aud(many(&["google-client"]))
+        };
         assert_eq!(
             sign_in(&h, "google", "code-azp").await.status,
             StatusCode::SEE_OTHER
         );
 
         // A token signed by a key outside the published set is refused.
-        *h.fake.id_token_overrides.lock().unwrap() = json!({});
+        *h.fake.id_token_overrides.lock().unwrap() = Claims::default();
         let rogue = Arc::new(SigningKey::generate(Algorithm::Rs256).unwrap());
         *h.fake.google_key.lock().unwrap() = Some(rogue);
         let reply = sign_in(&h, "google", "code-rogue").await;
@@ -1160,21 +1425,21 @@ mod tests {
             let h = harness().await;
             link(&h, Kind::Google, GOOGLE_SUB, "alice").await;
             let flow = authorize(&h, "openid").await;
-            let started = start(&h, "google", &json!({}), &format!("{FLOW_COOKIE}={flow}")).await;
+            let started = start(&h, "google", &Empty {}, &format!("{FLOW_COOKIE}={flow}")).await;
             let query = provider_issues_code(
                 &h,
-                started.json()["redirect_to"].as_str().unwrap(),
+                &started.parse::<Started>().redirect_to,
                 "secret-code-local-rejection",
             );
             let rejected_flow = match failure {
                 "invalid_flow" => "secret-forged-flow".to_owned(),
                 "expired_flow" => {
                     let oauth = &h.service.sign_in.oauth;
-                    let mut flow: Value = serde_json::from_slice(
+                    let mut flow: SealedFlow = serde_json::from_slice(
                         &oauth.sealer.open(endpoints::FLOW_PURPOSE, &flow).unwrap(),
                     )
                     .unwrap();
-                    flow["expires_at"] = json!(0);
+                    flow.expires_at = UnixTime::from_secs(0);
                     oauth
                         .sealer
                         .seal(endpoints::FLOW_PURPOSE, &serde_json::to_vec(&flow).unwrap())
@@ -1202,8 +1467,8 @@ mod tests {
                 Some("uid-alice"),
             );
             assert_eq!(
-                reply.audit.as_ref().unwrap()["fields"]["outcome"],
-                "failure"
+                reply.audit.as_ref().unwrap().field("outcome"),
+                Some("failure")
             );
             assert!(
                 h.fake.codes.lock().unwrap().is_empty(),
@@ -1215,9 +1480,9 @@ mod tests {
     #[tokio::test]
     async fn callback_classification_requires_verified_unexpired_pending() {
         let h = harness().await;
-        let started = start(&h, "google", &json!({ "token": INVITATION }), "").await;
+        let started = start(&h, "google", &Token { token: INVITATION }, "").await;
         let oauth = &h.service.sign_in.oauth;
-        let mut pending: Value = serde_json::from_slice(
+        let mut pending: Pending = serde_json::from_slice(
             &oauth
                 .sealer
                 .open(
@@ -1227,7 +1492,7 @@ mod tests {
                 .unwrap(),
         )
         .unwrap();
-        pending["expires_at"] = json!(0);
+        pending.expires_at = UnixTime::from_secs(0);
         let expired = oauth
             .sealer
             .seal(
@@ -1271,7 +1536,7 @@ mod tests {
         let h = harness().await;
         link(&h, Kind::Google, GOOGLE_SUB, "alice").await;
         let flow = authorize(&h, "openid").await;
-        let started = start(&h, "google", &json!({}), &format!("{FLOW_COOKIE}={flow}")).await;
+        let started = start(&h, "google", &Empty {}, &format!("{FLOW_COOKIE}={flow}")).await;
         let cookies = format!("{UPSTREAM_COOKIE}={}", started.cookie(UPSTREAM_COOKIE));
         let denied = callback(&h, "google", "error=secret-provider-error", &cookies).await;
         assert_audit(&denied, "auth.sign_in", Some("provider_denied"), None, None);
@@ -1287,35 +1552,30 @@ mod tests {
             None,
         );
         assert!(!failed.body.contains(SECRET_ERROR));
-        let records: Vec<Value> = serde_json::from_str(&failed.logs).unwrap();
-        let diagnostic = records
+        let diagnostic = failed
+            .records
             .iter()
-            .find(|record| record["target"] == "zeabur_identity_signin::upstream")
+            .find(|record| record.target == "zeabur_identity_signin::upstream")
             .unwrap();
         assert_eq!(
-            diagnostic["fields"]["reason"],
-            "provider_verification_failed"
+            diagnostic.field("reason"),
+            Some("provider_verification_failed")
         );
         // The operator log keeps the detail; the audit record does not.
-        assert!(
-            diagnostic["fields"]["error"]
-                .as_str()
-                .unwrap()
-                .contains(SECRET_ERROR)
-        );
+        assert!(diagnostic.field("error").unwrap().contains(SECRET_ERROR));
         let audit = failed.audit.as_ref().unwrap();
-        assert!(!has_member(&audit["fields"], "error"));
-        assert!(!serde_json::to_string(audit).unwrap().contains(SECRET_ERROR));
+        assert!(!audit.fields.contains_key("error"));
+        assert!(!log_text([audit]).contains(SECRET_ERROR));
     }
 
     #[tokio::test]
     async fn link_failures_are_not_fresh_sign_ins() {
         for already_linked in [false, true] {
             let h = harness().await;
-            let started = start(&h, "google", &json!({ "token": INVITATION }), "").await;
+            let started = start(&h, "google", &Token { token: INVITATION }, "").await;
             let query = provider_issues_code(
                 &h,
-                started.json()["redirect_to"].as_str().unwrap(),
+                &started.parse::<Started>().redirect_to,
                 "secret-code-link-failure",
             );
             if already_linked {
@@ -1347,8 +1607,8 @@ mod tests {
             };
             assert_audit(&reply, "auth.account_link", Some(reason), None, None);
             assert_eq!(
-                reply.audit.as_ref().unwrap()["fields"]["outcome"],
-                "failure"
+                reply.audit.as_ref().unwrap().field("outcome"),
+                Some("failure")
             );
         }
     }
@@ -1362,8 +1622,8 @@ mod tests {
     async fn account_session(h: &Harness, user: &str, age: u64) -> Session {
         let token = SessionToken::generate().unwrap();
         let now = SystemClock.now().as_secs();
-        let at = zeabur_identity_core::clock::UnixTime::from_secs(now - age);
-        let expires_at = zeabur_identity_core::clock::UnixTime::from_secs(now + 3600);
+        let at = UnixTime::from_secs(now - age);
+        let expires_at = UnixTime::from_secs(now + 3600);
         h.service
             .sign_in
             .oauth
@@ -1394,7 +1654,12 @@ mod tests {
         }
     }
 
-    async fn account_post(h: &Harness, path: &str, body: &Value, cookies: &str) -> Reply {
+    async fn account_post(
+        h: &Harness,
+        path: &str,
+        body: &(impl Serialize + Sync),
+        cookies: &str,
+    ) -> Reply {
         let mut request = Request::builder()
             .method(Method::POST)
             .uri(path)
@@ -1403,7 +1668,13 @@ mod tests {
         if !cookies.is_empty() {
             request = request.header(header::COOKIE, cookies);
         }
-        call(&h.app, request.body(Body::from(body.to_string())).unwrap()).await
+        call(
+            &h.app,
+            request
+                .body(Body::from(serde_json::to_string(body).unwrap()))
+                .unwrap(),
+        )
+        .await
     }
 
     /// Starts linking `provider` from `session` and plays the provider. Returns the callback
@@ -1417,12 +1688,12 @@ mod tests {
         let started = account_post(
             h,
             "/account/links/start",
-            &json!({ "provider": provider }),
+            &Choose { provider },
             &session.cookie,
         )
         .await;
         assert_eq!(started.status, StatusCode::OK, "{}", started.body);
-        let url = started.json()["redirect_to"].as_str().unwrap().to_owned();
+        let url = started.parse::<Started>().redirect_to;
         let query = provider_issues_code(h, &url, code);
         (
             query,
@@ -1594,12 +1865,12 @@ mod tests {
                 let started = account_post(
                     &h,
                     "/account/links/start",
-                    &json!({ "provider": id }),
+                    &Choose { provider: id },
                     &session.cookie,
                 )
                 .await;
                 assert_eq!(started.status, StatusCode::OK, "{id}");
-                let url = started.json()["redirect_to"].as_str().unwrap().to_owned();
+                let url = started.parse::<Started>().redirect_to;
                 assert!(url.starts_with(authorize(id)), "{id}: {url}");
             }
             for id in ["github", "google"] {
@@ -1609,7 +1880,7 @@ mod tests {
                 let started = account_post(
                     &h,
                     "/account/links/start",
-                    &json!({ "provider": id }),
+                    &Choose { provider: id },
                     &session.cookie,
                 )
                 .await;
@@ -1635,12 +1906,12 @@ mod tests {
             let reply = account_post(
                 &h,
                 "/account/links/start",
-                &json!({ "provider": "github" }),
+                &Choose { provider: "github" },
                 cookie,
             )
             .await;
             assert_eq!(
-                reply.json()["type"],
+                reply.parse::<Problem>().kind,
                 format!("urn:zeabur-identity:problem:{kind}"),
                 "{}",
                 reply.body
@@ -1656,7 +1927,7 @@ mod tests {
         let reply = account_post(
             &h,
             "/account/links/start",
-            &json!({ "provider": "gitlab" }),
+            &Choose { provider: "gitlab" },
             &fresh.cookie,
         )
         .await;
@@ -1753,12 +2024,12 @@ mod tests {
         let reply = account_post(
             &h,
             "/account/links/start",
-            &json!({ "provider": "github" }),
+            &Choose { provider: "github" },
             &session.cookie,
         )
         .await;
         assert_eq!(
-            reply.json()["type"],
+            reply.parse::<Problem>().kind,
             "urn:zeabur-identity:problem:admin-needs-two-factor"
         );
         assert!(!account_page(&h, &session).await.contains("data-link="));
@@ -1789,20 +2060,23 @@ mod tests {
         let stale = account_session(&h, "alice", 600).await;
         let session = account_session(&h, "alice", 0).await;
         let unlink = |session: &Session, name: &str| {
-            let body = json!({ "name": name });
+            let name = name.to_owned();
             let cookie = session.cookie.clone();
             let h = &h;
-            async move { account_post(h, "/account/links/remove", &body, &cookie).await }
+            async move {
+                let body = Name { name: &name };
+                account_post(h, "/account/links/remove", &body, &cookie).await
+            }
         };
         let reply = unlink(&stale, &github).await;
         assert_eq!(
-            reply.json()["type"],
+            reply.parse::<Problem>().kind,
             "urn:zeabur-identity:problem:reauth-required"
         );
         // GitHub is alice's only credential here.
         let reply = unlink(&session, &github).await;
         assert_eq!(
-            reply.json()["type"],
+            reply.parse::<Problem>().kind,
             "urn:zeabur-identity:problem:last-credential"
         );
         assert!(
@@ -1834,12 +2108,12 @@ mod tests {
         let signed_in = sign_in(&h, "github", "code-1").await;
         assert_eq!(signed_in.status, StatusCode::SEE_OTHER);
         let location = signed_in.headers[header::LOCATION].to_str().unwrap();
-        let tokens = exchange(&h, location).await.json();
-        let refresh = tokens["refresh_token"].as_str().unwrap().to_owned();
+        let tokens = exchange(&h, location).await.parse::<Issued>();
+        let refresh = tokens.refresh.unwrap();
 
         let reply = unlink(&session, &github).await;
         assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
-        assert_eq!(reply.json()["signed_out"], false);
+        assert!(!reply.parse::<Changed>().signed_out);
         assert_eq!(
             linked_to(&h, Kind::GitHub, &GITHUB_ID.to_string()).await,
             None
@@ -1874,8 +2148,8 @@ mod tests {
         let h = harness().await;
         link(&h, Kind::Google, GOOGLE_SUB, "alice").await;
         let flow = authorize(&h, "openid").await;
-        let started = start(&h, "google", &json!({}), &format!("{FLOW_COOKIE}={flow}")).await;
-        let url = started.json()["redirect_to"].as_str().unwrap().to_owned();
+        let started = start(&h, "google", &Empty {}, &format!("{FLOW_COOKIE}={flow}")).await;
+        let url = started.parse::<Started>().redirect_to;
         assert!(url.starts_with("https://google.test/authorize?"), "{url}");
         let query = provider_issues_code(&h, &url, "code-1");
         let cookies = format!(
@@ -1927,18 +2201,18 @@ mod tests {
         // Google's second spelling of its issuer is Google's only, and another issuer's tokens
         // are refused like Google's.
         for (case, (claim, value)) in [
-            ("iss", json!("accounts.google.com")),
-            ("iss", json!(GOOGLE_ISSUER)),
-            ("iss", json!("https://idp.test/realms/dev/")),
-            ("aud", json!("someone-else")),
-            ("nonce", json!("replayed")),
+            ("iss", Claims::iss("accounts.google.com")),
+            ("iss", Claims::iss(GOOGLE_ISSUER)),
+            ("iss", Claims::iss("https://idp.test/realms/dev/")),
+            ("aud", Claims::aud(one("someone-else"))),
+            ("nonce", Claims::nonce("replayed")),
         ]
         .into_iter()
         .enumerate()
         {
-            *h.fake.id_token_overrides.lock().unwrap() = json!({ claim: value });
+            *h.fake.id_token_overrides.lock().unwrap() = value.clone();
             let reply = sign_in(&h, "google", &format!("code-{case}")).await;
-            assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{claim}={value}");
+            assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{claim}={value:?}");
             assert_audit(
                 &reply,
                 "auth.sign_in",
@@ -1952,28 +2226,40 @@ mod tests {
     #[tokio::test]
     async fn an_unusable_discovery_document_ends_the_sign_in_with_no_other_endpoint_tried() {
         for overrides in [
-            Value::Null,
-            json!({ "issuer": "https://evil.example" }),
-            json!({ "issuer": "https://accounts.google.com/" }),
-            json!({ "issuer": "accounts.google.com" }),
-            json!({ "jwks_uri": null }),
-            json!({ "token_endpoint": "http://google.test/token" }),
-            json!({ "authorization_endpoint": "/authorize" }),
+            None,
+            Some(Discovery {
+                issuer: Some("https://evil.example".to_owned()),
+                ..Discovery::new(GOOGLE_ISSUER)
+            }),
+            Some(Discovery::new("https://accounts.google.com/")),
+            Some(Discovery::new("accounts.google.com")),
+            Some(Discovery {
+                jwks_uri: None,
+                ..Discovery::new(GOOGLE_ISSUER)
+            }),
+            Some(Discovery {
+                token_endpoint: Some("http://google.test/token".to_owned()),
+                ..Discovery::new(GOOGLE_ISSUER)
+            }),
+            Some(Discovery {
+                authorization_endpoint: Some("/authorize".to_owned()),
+                ..Discovery::new(GOOGLE_ISSUER)
+            }),
         ] {
             let h = harness().await;
-            *h.fake.discovery_overrides.lock().unwrap() = overrides.clone();
+            *h.fake.discovery_document.lock().unwrap() = overrides.clone();
             let flow = authorize(&h, "openid").await;
-            let started = start(&h, "google", &json!({}), &format!("{FLOW_COOKIE}={flow}")).await;
-            assert_eq!(started.status, StatusCode::BAD_GATEWAY, "{overrides}");
+            let started = start(&h, "google", &Empty {}, &format!("{FLOW_COOKIE}={flow}")).await;
+            assert_eq!(started.status, StatusCode::BAD_GATEWAY, "{overrides:?}");
             assert_eq!(
-                started.json()["type"],
+                started.parse::<Problem>().kind,
                 "urn:zeabur-identity:problem:provider-unavailable"
             );
             assert!(started.headers.get(header::SET_COOKIE).is_none());
             assert_eq!(
                 requests(&h),
                 ["https://accounts.google.com/.well-known/openid-configuration"],
-                "{overrides}"
+                "{overrides:?}"
             );
 
             // At the callback, the code is not sent anywhere.
@@ -1996,7 +2282,7 @@ mod tests {
                 requests(&h)
                     .iter()
                     .all(|url| url.ends_with("/.well-known/openid-configuration")),
-                "{overrides}"
+                "{overrides:?}"
             );
         }
     }
@@ -2026,9 +2312,8 @@ mod tests {
             Flow::SignIn => {
                 link(h, kind, &subject_at(kind), "alice").await;
                 let flow = authorize(h, "openid").await;
-                let started =
-                    start(h, provider, &json!({}), &format!("{FLOW_COOKIE}={flow}")).await;
-                let url = started.json()["redirect_to"].as_str().unwrap().to_owned();
+                let started = start(h, provider, &Empty {}, &format!("{FLOW_COOKIE}={flow}")).await;
+                let url = started.parse::<Started>().redirect_to;
                 (
                     provider_issues_code(h, &url, "code-1"),
                     format!(
@@ -2038,8 +2323,8 @@ mod tests {
                 )
             }
             Flow::Invitation => {
-                let started = start(h, provider, &json!({ "token": INVITATION }), "").await;
-                let url = started.json()["redirect_to"].as_str().unwrap().to_owned();
+                let started = start(h, provider, &Token { token: INVITATION }, "").await;
+                let url = started.parse::<Started>().redirect_to;
                 (
                     provider_issues_code(h, &url, "code-1"),
                     format!("{UPSTREAM_COOKIE}={}", started.cookie(UPSTREAM_COOKIE)),
@@ -2083,9 +2368,9 @@ mod tests {
                     let reply = run_flow(&h, provider, flow, &extra).await;
                     let case = format!("{provider} {flow:?} {extra}");
                     assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{case}");
-                    let fields = &reply.audit.as_ref().unwrap()["fields"];
-                    assert_eq!(fields["reason"], "issuer_mismatch", "{case}");
-                    assert_eq!(fields["outcome"], "failure", "{case}");
+                    let audit = reply.audit.as_ref().unwrap();
+                    assert_eq!(audit.field("reason"), Some("issuer_mismatch"), "{case}");
+                    assert_eq!(audit.field("outcome"), Some("failure"), "{case}");
                     assert!(
                         reply
                             .body
@@ -2118,8 +2403,8 @@ mod tests {
                     };
                     assert_eq!(reply.status, expected, "{case}: {}", reply.body);
                     assert_eq!(
-                        reply.audit.as_ref().unwrap()["fields"]["outcome"],
-                        "success",
+                        reply.audit.as_ref().unwrap().field("outcome"),
+                        Some("success"),
                         "{case}"
                     );
                     let kind = Kind::from_id(provider).unwrap();
@@ -2138,17 +2423,17 @@ mod tests {
     #[tokio::test]
     async fn a_pending_request_without_its_issuer_or_with_another_is_refused() {
         for (change, reason) in [
-            (Value::Null, "invalid_pending"),
-            (json!("https://idp.example"), "provider_changed"),
+            (None, "invalid_pending"),
+            (Some("https://idp.example"), "provider_changed"),
         ] {
             let h = harness().await;
             link(&h, Kind::Google, GOOGLE_SUB, "alice").await;
             let flow = authorize(&h, "openid").await;
-            let started = start(&h, "google", &json!({}), &format!("{FLOW_COOKIE}={flow}")).await;
-            let url = started.json()["redirect_to"].as_str().unwrap().to_owned();
+            let started = start(&h, "google", &Empty {}, &format!("{FLOW_COOKIE}={flow}")).await;
+            let url = started.parse::<Started>().redirect_to;
             let query = provider_issues_code(&h, &url, "code-1");
             let sealer = &h.service.sign_in.oauth.sealer;
-            let mut pending: Value = serde_json::from_slice(
+            let mut pending: Pending = serde_json::from_slice(
                 &sealer
                     .open(
                         "zeabur-identity/upstream/v1",
@@ -2157,14 +2442,8 @@ mod tests {
                     .unwrap(),
             )
             .unwrap();
-            assert_eq!(pending["issuer"], GOOGLE_ISSUER);
-            if change.is_null() {
-                if let Value::Object(members) = &mut pending {
-                    members.remove("issuer");
-                }
-            } else {
-                pending["issuer"] = change;
-            }
+            assert_eq!(pending.issuer.as_deref(), Some(GOOGLE_ISSUER));
+            pending.issuer = change.map(str::to_owned);
             let resealed = sealer
                 .seal(
                     "zeabur-identity/upstream/v1",
@@ -2174,7 +2453,7 @@ mod tests {
             let cookies = format!("{FLOW_COOKIE}={flow}; {UPSTREAM_COOKIE}={resealed}");
             let reply = callback(&h, "google", &query, &cookies).await;
             assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{reason}");
-            assert_eq!(reply.audit.as_ref().unwrap()["fields"]["reason"], reason);
+            assert_eq!(reply.audit.as_ref().unwrap().field("reason"), Some(reason));
             assert!(!reply.headers.contains_key(header::LOCATION));
             assert_eq!(token_requests(&h), 0, "{reason}");
         }
@@ -2187,9 +2466,9 @@ mod tests {
     /// Starts a sign-in as alice with `provider` and returns the callback query and cookies.
     async fn started_sign_in(h: &Harness, provider: &str) -> (String, String) {
         let flow = authorize(h, "openid").await;
-        let started = start(h, provider, &json!({}), &format!("{FLOW_COOKIE}={flow}")).await;
+        let started = start(h, provider, &Empty {}, &format!("{FLOW_COOKIE}={flow}")).await;
         assert_eq!(started.status, StatusCode::OK, "{}", started.body);
-        let url = started.json()["redirect_to"].as_str().unwrap().to_owned();
+        let url = started.parse::<Started>().redirect_to;
         (
             provider_issues_code(h, &url, "code-1"),
             format!(
@@ -2204,7 +2483,7 @@ mod tests {
         let h = harness_with(GOOGLE_ISSUER, &["github"]).await;
         link(&h, Kind::Google, GOOGLE_SUB, "alice").await;
         let flow = authorize(&h, "openid").await;
-        let started = start(&h, "google", &json!({}), &format!("{FLOW_COOKIE}={flow}")).await;
+        let started = start(&h, "google", &Empty {}, &format!("{FLOW_COOKIE}={flow}")).await;
         assert_eq!(started.status, StatusCode::NOT_FOUND);
 
         let mut list = registry(&h).current().to_vec();
@@ -2237,7 +2516,7 @@ mod tests {
             registry(&h).replace(list);
             let reply = callback(&h, "google", &query, &cookies).await;
             assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{reason}");
-            assert_eq!(reply.audit.as_ref().unwrap()["fields"]["reason"], reason);
+            assert_eq!(reply.audit.as_ref().unwrap().field("reason"), Some(reason));
             assert!(!reply.headers.contains_key(header::LOCATION));
             assert_eq!(token_requests(&h), 0, "{reason}");
         }
@@ -2270,8 +2549,8 @@ mod tests {
         let reply = sign_in(&h, "github", "code-3").await;
         assert_eq!(reply.status, StatusCode::BAD_REQUEST);
         assert_eq!(
-            reply.audit.as_ref().unwrap()["fields"]["reason"],
-            "provider_unavailable"
+            reply.audit.as_ref().unwrap().field("reason"),
+            Some("provider_unavailable")
         );
         assert_eq!(token_requests(&h), before);
         assert!(!reply.body.contains("zeabur-identity-upstream"));

@@ -75,8 +75,21 @@ pub async fn set_account_type(
     account_type: AccountType,
 ) -> Result<User, kube::Error> {
     let users: Api<User> = Api::namespaced(client, namespace);
-    let patch = serde_json::json!({ "spec": { "accountType": account_type } });
+    let patch = Change {
+        spec: Spec { account_type },
+    };
     users
         .patch(name, &PatchParams::default(), &Patch::Merge(patch))
         .await
+}
+
+#[derive(Debug, serde::Serialize)]
+struct Change {
+    spec: Spec,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Spec {
+    account_type: AccountType,
 }

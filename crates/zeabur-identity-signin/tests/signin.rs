@@ -18,8 +18,12 @@ mod tests {
     use passkey::authenticator::{Authenticator, UiHint, UserCheck, UserValidationMethod};
     use passkey::client::{Client as PasskeyClient, DefaultClientData};
     use passkey::types::ctap2::{Aaguid, Ctap2Error};
-    use passkey::types::webauthn::{CredentialCreationOptions, CredentialRequestOptions};
-    use serde_json::{Value, json};
+    use passkey::types::webauthn::{
+        AuthenticatedPublicKeyCredential, CreatedPublicKeyCredential, CredentialCreationOptions,
+        CredentialRequestOptions, ResidentKeyRequirement, UserVerificationRequirement,
+    };
+    use serde::de::DeserializeOwned;
+    use serde::{Deserialize, Serialize};
     use tokio::sync::Barrier;
     use tower::ServiceExt as _;
     use tracing::instrument::WithSubscriber as _;
@@ -42,8 +46,8 @@ mod tests {
         Client, CredentialStore as _, MemoryCredentialStore, MemoryDirectory, MemoryGrantStore,
         MemorySetupStore, User,
     };
-    use zeabur_identity_test_support::logging::Capture;
-    use zeabur_identity_test_support::{Device, device, has_member};
+    use zeabur_identity_test_support::logging::{Capture, FieldValue, Record};
+    use zeabur_identity_test_support::{Device, device};
     use zeabur_identity_ui::i18n::Lang;
 
     const ISSUER: &str = "https://login.example.com";
@@ -199,12 +203,288 @@ mod tests {
         }
     }
 
+    /// An empty JSON object.
+    #[derive(Serialize)]
+    #[expect(
+        clippy::empty_structs_with_brackets,
+        reason = "a unit struct serializes as null, not as an empty object"
+    )]
+    struct Empty {}
+
+    #[derive(Serialize)]
+    struct Token<'a> {
+        token: &'a str,
+    }
+
+    #[derive(Serialize)]
+    struct Credential<'a, C> {
+        credential: &'a C,
+    }
+
+    /// `POST /setup`: a registration response, with the setup token or invitation.
+    #[derive(Serialize)]
+    struct Enrol<'a, C> {
+        token: &'a str,
+        credential: &'a C,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        label: Option<&'a str>,
+    }
+
+    #[derive(Serialize)]
+    struct Name<'a> {
+        name: &'a str,
+    }
+
+    #[derive(Serialize)]
+    struct Rename<'a> {
+        name: &'a str,
+        label: &'a str,
+    }
+
+    #[derive(Serialize)]
+    struct PasswordLogin<'a> {
+        username: &'a str,
+        password: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        code: Option<&'a str>,
+    }
+
+    #[derive(Serialize)]
+    struct PasswordSetup<'a> {
+        token: &'a str,
+        password: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        totp: Option<TotpSetup<'a>>,
+    }
+
+    #[derive(Serialize)]
+    struct TotpSetup<'a> {
+        sealed: &'a str,
+        code: &'a str,
+    }
+
+    #[derive(Serialize)]
+    struct PasswordChange<'a> {
+        current: &'a str,
+        new: &'a str,
+    }
+
+    #[derive(Serialize)]
+    struct Current<'a> {
+        current: &'a str,
+    }
+
+    /// A problem (RFC 9457) of the sign-in API; a member the server does not send fails the parse.
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields, rename_all = "camelCase")]
+    struct Problem {
+        #[serde(rename = "type")]
+        kind: String,
+        title: String,
+        status: u16,
+        detail: String,
+        #[serde(default)]
+        refresh: bool,
+        next: Option<String>,
+        weakness: Option<String>,
+        unknown_credential: Option<UnknownCredential>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct UnknownCredential {
+        rp_id: String,
+        credential_id: String,
+    }
+
+    /// `signalAllAcceptedCredentials` data.
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Accepted {
+        rp_id: String,
+        all_accepted_credential_ids: Vec<String>,
+    }
+
+    /// A successful sign-in or session reply; a problem carries none of these members.
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct SignedIn {
+        redirect_to: String,
+        accepted: Option<Accepted>,
+    }
+
+    /// The reply of `/account/session` and `/account/reauth`.
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct AccountSession {
+        accepted: Option<Accepted>,
+    }
+
+    /// `/.well-known/passkey-endpoints`.
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct PasskeyEndpoints {
+        enroll: String,
+        manage: String,
+    }
+
+    /// The reply of an account change.
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Changed {
+        #[serde(default)]
+        signed_out: bool,
+        accepted: Option<Accepted>,
+    }
+
+    #[derive(Deserialize)]
+    struct Enrolled {
+        username: String,
+        recovery_codes: Option<Vec<String>>,
+    }
+
+    /// `/setup/password/options`.
+    #[derive(Deserialize)]
+    struct PasswordOptions {
+        totp: Option<Enrolment>,
+    }
+
+    #[derive(Deserialize)]
+    struct Enrolment {
+        secret: String,
+        secret_display: String,
+        uri: String,
+        qr: Qr,
+        sealed: String,
+    }
+
+    #[derive(Deserialize)]
+    struct Qr {
+        path: String,
+    }
+
+    /// The members of the OAuth token response the tests read.
+    #[derive(Deserialize)]
+    struct Tokens {
+        #[serde(rename = "access_token")]
+        access: String,
+        #[serde(rename = "id_token")]
+        id: Option<String>,
+        #[serde(rename = "refresh_token")]
+        refresh: Option<String>,
+    }
+
+    /// The claims of an access token the tests read.
+    #[derive(Deserialize)]
+    struct Claims {
+        sub: String,
+        #[serde(default)]
+        groups: Vec<String>,
+        amr: Vec<String>,
+        auth_time: Option<u64>,
+    }
+
+    /// The members of a request or reply body that must not reach the logs.
+    #[derive(Default, Deserialize)]
+    #[serde(default, rename_all = "camelCase")]
+    struct Secrets {
+        token: Option<String>,
+        password: Option<String>,
+        current: Option<String>,
+        new: Option<String>,
+        id: Option<String>,
+        raw_id: Option<String>,
+        #[serde(rename = "clientDataJSON")]
+        client_data_json: Option<String>,
+        authenticator_data: Option<String>,
+        signature: Option<String>,
+        attestation_object: Option<String>,
+        user_handle: Option<String>,
+        challenge: Option<String>,
+        access_token: Option<String>,
+        id_token: Option<String>,
+        refresh_token: Option<String>,
+        redirect_to: Option<String>,
+        credential: Option<Box<Self>>,
+        response: Option<Box<Self>>,
+        public_key: Option<PublicKey>,
+        user: Option<Box<Self>>,
+        rp: Option<Box<Self>>,
+    }
+
+    /// `publicKey` is the options object of an options reply and the key text of a registration.
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum PublicKey {
+        Options(Box<Secrets>),
+        Key(String),
+    }
+
+    impl Secrets {
+        /// Reads `text` if it is a JSON object; other bodies have no members to check.
+        fn read(text: &str) -> Self {
+            if text.trim_start().starts_with('{') {
+                serde_json::from_str(text).unwrap()
+            } else {
+                Self::default()
+            }
+        }
+
+        fn assert_absent_from(&self, records: &str) {
+            let named = [
+                ("token", &self.token),
+                ("password", &self.password),
+                ("current", &self.current),
+                ("new", &self.new),
+                ("id", &self.id),
+                ("rawId", &self.raw_id),
+                ("clientDataJSON", &self.client_data_json),
+                ("authenticatorData", &self.authenticator_data),
+                ("signature", &self.signature),
+                ("attestationObject", &self.attestation_object),
+                ("userHandle", &self.user_handle),
+                ("challenge", &self.challenge),
+                ("access_token", &self.access_token),
+                ("id_token", &self.id_token),
+                ("refresh_token", &self.refresh_token),
+            ];
+            for (key, value) in named {
+                if let Some(secret) = value.as_deref().filter(|s| !s.is_empty()) {
+                    assert!(!records.contains(secret), "{key} leaked");
+                }
+            }
+            for nested in [&self.credential, &self.response, &self.user, &self.rp]
+                .into_iter()
+                .flatten()
+            {
+                nested.assert_absent_from(records);
+            }
+            match &self.public_key {
+                Some(PublicKey::Options(options)) => options.assert_absent_from(records),
+                Some(PublicKey::Key(key)) => assert!(!records.contains(key), "publicKey leaked"),
+                None => {}
+            }
+            if let Some(location) = &self.redirect_to
+                && let Some((_, query)) = location.split_once('?')
+            {
+                for (key, secret) in form_urlencoded::parse(query.as_bytes()) {
+                    if key == "code" {
+                        assert!(
+                            !records.contains(secret.as_ref()),
+                            "authorization code leaked"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     struct Reply {
         status: StatusCode,
         headers: HeaderMap,
-        body: Value,
-        audit: Option<Value>,
-        diagnostics: Vec<Value>,
+        body: String,
+        audit: Option<Record>,
+        diagnostics: Vec<Record>,
     }
 
     impl Reply {
@@ -218,8 +498,17 @@ mod tests {
                     (!value.is_empty()).then(|| value.to_owned())
                 })
         }
+        fn parse<T: DeserializeOwned>(&self) -> T {
+            serde_json::from_str(&self.body).unwrap_or_else(|e| panic!("{e}: {}", self.body))
+        }
+        fn problem(&self) -> Problem {
+            self.parse()
+        }
         fn kind(&self) -> String {
-            self.body["type"].as_str().unwrap_or_default().to_owned()
+            self.problem().kind
+        }
+        fn audit(&self) -> &Record {
+            self.audit.as_ref().unwrap()
         }
     }
 
@@ -236,11 +525,15 @@ mod tests {
         }
     }
 
+    fn json_text(body: &impl Serialize) -> String {
+        serde_json::to_string(body).unwrap()
+    }
+
     async fn call(
         app: &Router,
         method: Method,
         path: &str,
-        body: Option<Value>,
+        body: Option<String>,
         cookies: &[(&str, &str)],
         origin: Option<&str>,
     ) -> Reply {
@@ -261,7 +554,7 @@ mod tests {
                 .join("; ");
             request = request.header(header::COOKIE, cookie);
         }
-        let body = body.map_or_else(Body::empty, |b| Body::from(b.to_string()));
+        let body = body.map_or_else(Body::empty, Body::from);
         let response = app
             .clone()
             .oneshot(request.body(body).unwrap())
@@ -270,51 +563,58 @@ mod tests {
             .unwrap();
         let (parts, body) = response.into_parts();
         let bytes = body.collect().await.unwrap().to_bytes();
-        let response_body = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+        let response_body = String::from_utf8(bytes.to_vec()).unwrap();
         let records = capture.records();
-        let audit: Vec<_> = records
+        let audit: Vec<&Record> = records
             .iter()
-            .filter(|r| r["target"] == "zeabur_identity::audit")
+            .filter(|r| r.target == "zeabur_identity::audit")
             .collect();
         for record in &audit {
             super::common::assert_audit_shape(record);
         }
         if let Some((event, phase, method)) = audited(path) {
             assert_eq!(audit.len(), 1, "{records:?}");
-            let fields = &audit[0]["fields"];
-            assert_eq!(fields["event"], event);
-            assert_eq!(fields["method"], method);
+            let record = audit[0];
+            assert_eq!(record.field("event"), Some(event));
+            assert_eq!(record.field("method"), Some(method));
             assert_eq!(
-                fields["outcome"],
-                if parts.status.is_success() {
+                record.field("outcome"),
+                Some(if parts.status.is_success() {
                     "success"
                 } else {
                     "failure"
-                }
+                })
             );
             if let Some(phase) = phase {
-                assert_eq!(fields["phase"], phase);
+                assert_eq!(record.field("phase"), Some(phase));
             }
             if !parts.status.is_success() {
+                let problem: Problem = serde_json::from_str(&response_body).unwrap();
+                assert_eq!(problem.status, parts.status.as_u16());
                 assert_eq!(
-                    fields["reason"],
-                    response_body["type"]
-                        .as_str()
-                        .unwrap()
-                        .strip_prefix("urn:zeabur-identity:problem:")
-                        .unwrap()
+                    record.field("reason"),
+                    Some(
+                        problem
+                            .kind
+                            .strip_prefix("urn:zeabur-identity:problem:")
+                            .unwrap()
+                    )
                 );
             }
-            assert!(!has_member(fields, "client"));
+            assert!(!record.fields.contains_key("client"));
         }
-        let serialized = serde_json::to_string(&audit).unwrap();
+        let serialized = audit
+            .iter()
+            .map(|r| r.text())
+            .collect::<Vec<_>>()
+            .join("\n");
         for (_, secret) in cookies {
             assert!(!serialized.contains(secret), "cookie leaked");
         }
         if let Some(submitted) = &submitted {
-            assert_secret_values_absent(&serialized, submitted);
+            Secrets::read(submitted).assert_absent_from(&serialized);
         }
-        assert_secret_values_absent(&serialized, &response_body);
+        Secrets::read(&response_body).assert_absent_from(&serialized);
         for value in parts.headers.get_all(header::SET_COOKIE) {
             let cookie = value.to_str().unwrap().split(';').next().unwrap();
             let secret = cookie.split_once('=').unwrap().1;
@@ -329,58 +629,26 @@ mod tests {
             audit: audit.first().map(|r| (*r).clone()),
             diagnostics: records
                 .into_iter()
-                .filter(|record| {
-                    record["target"]
-                        .as_str()
-                        .is_some_and(|target| target.starts_with("zeabur_identity_signin"))
-                })
+                .filter(|record| record.target.starts_with("zeabur_identity_signin"))
                 .collect(),
         }
     }
 
-    fn assert_secret_values_absent(records: &str, value: &Value) {
-        if let Value::Object(fields) = value {
-            for (key, value) in fields {
-                if matches!(
-                    key.as_str(),
-                    "token"
-                        | "password"
-                        | "current"
-                        | "new"
-                        | "id"
-                        | "rawId"
-                        | "clientDataJSON"
-                        | "authenticatorData"
-                        | "signature"
-                        | "attestationObject"
-                        | "userHandle"
-                        | "challenge"
-                        | "access_token"
-                        | "id_token"
-                        | "refresh_token"
-                ) && let Some(secret) = value.as_str().filter(|s| !s.is_empty())
-                {
-                    assert!(!records.contains(secret), "{key} leaked");
-                }
-                assert_secret_values_absent(records, value);
-            }
-        }
-        if let Some(location) = value["redirect_to"].as_str()
-            && let Some((_, query)) = location.split_once('?')
-        {
-            for (key, secret) in form_urlencoded::parse(query.as_bytes()) {
-                if key == "code" {
-                    assert!(
-                        !records.contains(secret.as_ref()),
-                        "authorization code leaked"
-                    );
-                }
-            }
-        }
-    }
-
-    async fn post(app: &Router, path: &str, body: Value, cookies: &[(&str, &str)]) -> Reply {
-        call(app, Method::POST, path, Some(body), cookies, Some(ISSUER)).await
+    async fn post(
+        app: &Router,
+        path: &str,
+        body: &(impl Serialize + Sync),
+        cookies: &[(&str, &str)],
+    ) -> Reply {
+        call(
+            app,
+            Method::POST,
+            path,
+            Some(json_text(body)),
+            cookies,
+            Some(ISSUER),
+        )
+        .await
     }
 
     fn origin() -> Url {
@@ -389,26 +657,26 @@ mod tests {
 
     /// Starts a registration with the setup token; returns the authenticator's response and the
     /// ceremony cookie.
-    async fn start_enrolment(h: &Harness, device: &mut Device, token: &str) -> (Value, String) {
-        let reply = post(&h.app, "/setup/options", json!({ "token": token }), &[]).await;
+    async fn start_enrolment(
+        h: &Harness,
+        device: &mut Device,
+        token: &str,
+    ) -> (CreatedPublicKeyCredential, String) {
+        let reply = post(&h.app, "/setup/options", &Token { token }, &[]).await;
         assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
         let (user, subject) = if token == INVITATION {
             ("dana", DANA_UID)
         } else {
             ("admin", ADMIN_UID)
         };
-        assert_eq!(reply.audit.as_ref().unwrap()["fields"]["user"], user);
-        assert_eq!(reply.audit.as_ref().unwrap()["fields"]["subject"], subject);
-        let options: CredentialCreationOptions =
-            serde_json::from_value(reply.body.clone()).unwrap();
+        assert_eq!(reply.audit().fields["user"], user);
+        assert_eq!(reply.audit().fields["subject"], subject);
+        let options: CredentialCreationOptions = reply.parse();
         let credential = device
             .register(&origin(), options, DefaultClientData)
             .await
             .unwrap();
-        (
-            serde_json::to_value(credential).unwrap(),
-            reply.cookie(CEREMONY_COOKIE).unwrap(),
-        )
+        (credential, reply.cookie(CEREMONY_COOKIE).unwrap())
     }
 
     async fn enrol(h: &Harness, device: &mut Device) {
@@ -416,17 +684,18 @@ mod tests {
         let reply = post(
             &h.app,
             "/setup",
-            json!({ "token": SETUP_TOKEN, "credential": credential, "label": "Laptop" }),
+            &Enrol {
+                token: SETUP_TOKEN,
+                credential: &credential,
+                label: Some("Laptop"),
+            },
             &[(CEREMONY_COOKIE, &ceremony)],
         )
         .await;
         assert_eq!(reply.status, StatusCode::CREATED, "{}", reply.body);
-        assert_eq!(reply.audit.as_ref().unwrap()["fields"]["user"], "admin");
-        assert!(!has_member(
-            &reply.audit.as_ref().unwrap()["fields"],
-            "subject"
-        ));
-        assert_eq!(reply.body["username"], "admin");
+        assert_eq!(reply.audit().fields["user"], "admin");
+        assert!(!reply.audit().fields.contains_key("subject"));
+        assert_eq!(reply.parse::<Enrolled>().username, "admin");
     }
 
     /// Opens an authorization request and signs in with `device`; returns the reply to `/login`.
@@ -436,10 +705,10 @@ mod tests {
         );
         let reply = call(&h.app, Method::GET, &authorize, None, &[], None).await;
         let flow = reply.cookie(FLOW_COOKIE).unwrap();
-        let reply = post(&h.app, "/login/options", json!({}), &[]).await;
+        let reply = post(&h.app, "/login/options", &Empty {}, &[]).await;
         assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
         let ceremony = reply.cookie(CEREMONY_COOKIE).unwrap();
-        let options: CredentialRequestOptions = serde_json::from_value(reply.body.clone()).unwrap();
+        let options: CredentialRequestOptions = reply.parse();
         let assertion = device
             .authenticate(&origin(), options, DefaultClientData)
             .await
@@ -447,15 +716,17 @@ mod tests {
         post(
             &h.app,
             "/login",
-            json!({ "credential": assertion }),
+            &Credential {
+                credential: &assertion,
+            },
             &[(FLOW_COOKIE, &flow), (CEREMONY_COOKIE, &ceremony)],
         )
         .await
     }
 
     /// Redeems the authorization code in a successful `/login` reply; returns the token response.
-    async fn exchange(h: &Harness, reply: &Reply) -> Value {
-        let location = reply.body["redirect_to"].as_str().unwrap();
+    async fn exchange(h: &Harness, reply: &Reply) -> Tokens {
+        let location = reply.parse::<SignedIn>().redirect_to;
         assert!(location.starts_with("http://127.0.0.1:8000/?code="));
         let code = form_urlencoded::parse(location.split_once('?').unwrap().1.as_bytes())
             .find(|(k, _)| k == "code")
@@ -476,13 +747,24 @@ mod tests {
             .unwrap();
         let response = h.app.clone().oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+        read_json(response).await
+    }
+
+    async fn read_json<T: DeserializeOwned>(response: axum::http::Response<Body>) -> T {
         serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap()
     }
 
+    impl Tokens {
+        /// The claims in the payload of the access token.
+        fn claims(&self) -> Claims {
+            let payload = self.access.split('.').nth(1).unwrap();
+            serde_json::from_slice(&URL_SAFE_NO_PAD.decode(payload).unwrap()).unwrap()
+        }
+    }
+
     /// The flags byte of an assertion's authenticator data (after the 32-byte RP ID hash).
-    fn authenticator_flags(assertion: &Value) -> u8 {
-        let data = assertion["response"]["authenticatorData"].as_str().unwrap();
-        URL_SAFE_NO_PAD.decode(data).unwrap()[32]
+    fn authenticator_flags(assertion: &AuthenticatedPublicKeyCredential) -> u8 {
+        assertion.response.authenticator_data[32]
     }
 
     const FLAG_UP: u8 = 0x01;
@@ -494,40 +776,37 @@ mod tests {
     /// authenticator data with UV clear while the challenge, origin, RP ID and signature stay
     /// valid. The server must refuse that, issue nothing, and leave the ceremony and request
     /// usable; the same ceremony answered with UV then completes. Returns the issued tokens.
-    async fn refuse_unverified_then_sign_in(h: &Harness, authorize: &str) -> Value {
+    async fn refuse_unverified_then_sign_in(h: &Harness, authorize: &str) -> Tokens {
         let mut device = device();
         enrol(h, &mut device).await;
         let flow = call(&h.app, Method::GET, authorize, None, &[], None)
             .await
             .cookie(FLOW_COOKIE)
             .unwrap();
-        let options = post(&h.app, "/login/options", json!({}), &[]).await;
+        let options = post(&h.app, "/login/options", &Empty {}, &[]).await;
         let ceremony = options.cookie(CEREMONY_COOKIE).unwrap();
         let cookies = [
             (FLOW_COOKIE, flow.as_str()),
             (CEREMONY_COOKIE, ceremony.as_str()),
         ];
-        assert_eq!(options.body["publicKey"]["userVerification"], "required");
-
-        let mut discouraged = options.body.clone();
-        discouraged["publicKey"]["userVerification"] = json!("discouraged");
-        let unverified = serde_json::to_value(
-            device
-                .authenticate(
-                    &origin(),
-                    serde_json::from_value::<CredentialRequestOptions>(discouraged).unwrap(),
-                    DefaultClientData,
-                )
-                .await
-                .unwrap(),
-        )
-        .unwrap();
+        let mut discouraged: CredentialRequestOptions = options.parse();
+        assert_eq!(
+            discouraged.public_key.user_verification,
+            UserVerificationRequirement::Required
+        );
+        discouraged.public_key.user_verification = UserVerificationRequirement::Discouraged;
+        let unverified = device
+            .authenticate(&origin(), discouraged, DefaultClientData)
+            .await
+            .unwrap();
         let flags = authenticator_flags(&unverified);
         assert_eq!(flags & (FLAG_UP | FLAG_UV), FLAG_UP, "UP set, UV clear");
         let rejected = post(
             &h.app,
             "/login",
-            json!({ "credential": unverified }),
+            &Credential {
+                credential: &unverified,
+            },
             &cookies,
         )
         .await;
@@ -536,35 +815,29 @@ mod tests {
             rejected.kind(),
             "urn:zeabur-identity:problem:passkey-failed"
         );
-        assert!(!has_member(&rejected.body, "redirect_to"));
-        let fields = &rejected.audit.as_ref().unwrap()["fields"];
-        assert!(!has_member(fields, "user"));
-        assert!(!has_member(fields, "subject"));
+        let fields = &rejected.audit().fields;
+        assert!(!fields.contains_key("user"));
+        assert!(!fields.contains_key("subject"));
         // Refused by the UV check, not by the signature, challenge or origin checks.
         let diagnostic = rejected.diagnostics.first().unwrap();
-        assert_eq!(diagnostic["fields"]["reason"], "passkey-failed");
+        assert_eq!(diagnostic.fields["reason"], "passkey-failed");
         assert_eq!(
-            diagnostic["fields"]["error"],
-            PasskeyError::NotUserVerified.to_string(),
-            "{diagnostic}"
+            diagnostic.field("error"),
+            Some(PasskeyError::NotUserVerified.to_string().as_str()),
+            "{diagnostic:?}"
         );
 
-        let verified = serde_json::to_value(
-            device
-                .authenticate(
-                    &origin(),
-                    serde_json::from_value::<CredentialRequestOptions>(options.body).unwrap(),
-                    DefaultClientData,
-                )
-                .await
-                .unwrap(),
-        )
-        .unwrap();
+        let verified = device
+            .authenticate(&origin(), options.parse(), DefaultClientData)
+            .await
+            .unwrap();
         assert_eq!(authenticator_flags(&verified) & FLAG_UV, FLAG_UV);
         let reply = post(
             &h.app,
             "/login",
-            json!({ "credential": verified }),
+            &Credential {
+                credential: &verified,
+            },
             &cookies,
         )
         .await;
@@ -580,11 +853,8 @@ mod tests {
 
         let reply = sign_in(&h, &mut device).await;
         assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
-        assert_eq!(reply.audit.as_ref().unwrap()["fields"]["user"], "admin");
-        assert_eq!(
-            reply.audit.as_ref().unwrap()["fields"]["subject"],
-            ADMIN_UID
-        );
+        assert_eq!(reply.audit().fields["user"], "admin");
+        assert_eq!(reply.audit().fields["subject"], ADMIN_UID);
         assert!(
             reply
                 .headers
@@ -593,19 +863,13 @@ mod tests {
                 .any(|c| c.to_str().unwrap().starts_with(&format!("{FLOW_COOKIE}=;"))),
             "flow cookie cleared"
         );
-        let tokens = exchange(&h, &reply).await;
-        let payload = tokens["access_token"]
-            .as_str()
-            .unwrap()
-            .split('.')
-            .nth(1)
-            .unwrap();
-        let claims: Value =
-            serde_json::from_slice(&URL_SAFE_NO_PAD.decode(payload).unwrap()).unwrap();
-        assert_eq!(claims["sub"], ADMIN_UID);
-        assert_eq!(claims["groups"], json!(["admins"]));
-        assert_eq!(claims["amr"], json!(["swk", "mfa"]));
-        assert_eq!(claims["auth_time"], START);
+        let accepted = reply.parse::<SignedIn>().accepted.unwrap();
+        assert_eq!(accepted.rp_id, "login.example.com");
+        let claims = exchange(&h, &reply).await.claims();
+        assert_eq!(claims.sub, ADMIN_UID);
+        assert_eq!(claims.groups, ["admins"]);
+        assert_eq!(claims.amr, ["swk", "mfa"]);
+        assert_eq!(claims.auth_time, Some(START));
     }
 
     #[tokio::test]
@@ -616,29 +880,21 @@ mod tests {
         let reply = post(
             &h.app,
             "/setup",
-            json!({ "token": INVITATION, "credential": credential }),
+            &Enrol {
+                token: INVITATION,
+                credential: &credential,
+                label: None,
+            },
             &[(CEREMONY_COOKIE, &ceremony)],
         )
         .await;
         assert_eq!(reply.status, StatusCode::CREATED, "{}", reply.body);
-        assert_eq!(reply.body["username"], "dana");
+        assert_eq!(reply.parse::<Enrolled>().username, "dana");
 
         // Used up; and the admin's setup token is untouched by it.
-        let reply = post(
-            &h.app,
-            "/setup/options",
-            json!({ "token": INVITATION }),
-            &[],
-        )
-        .await;
+        let reply = post(&h.app, "/setup/options", &Token { token: INVITATION }, &[]).await;
         assert_eq!(reply.kind(), "urn:zeabur-identity:problem:setup-invalid");
-        let reply = post(
-            &h.app,
-            "/setup/options",
-            json!({ "token": SETUP_TOKEN }),
-            &[],
-        )
-        .await;
+        let reply = post(&h.app, "/setup/options", &Token { token: SETUP_TOKEN }, &[]).await;
         assert_eq!(reply.status, StatusCode::OK);
 
         // Signing in with the new passkey yields dana's identity.
@@ -649,7 +905,9 @@ mod tests {
         let reply = post(
             &h.app,
             "/setup/options",
-            json!({ "token": "inv-1.guess" }),
+            &Token {
+                token: "inv-1.guess",
+            },
             &[],
         )
         .await;
@@ -676,7 +934,11 @@ mod tests {
             let finish = post(
                 &h.app,
                 "/setup",
-                json!({ "token": token, "credential": credential }),
+                &Enrol {
+                    token,
+                    credential: &credential,
+                    label: None,
+                },
                 &[(CEREMONY_COOKIE, &ceremony)],
             )
             .await;
@@ -685,7 +947,7 @@ mod tests {
                 "urn:zeabur-identity:problem:setup-invalid",
                 "{name}"
             );
-            let options = post(&h.app, "/setup/options", json!({ "token": token }), &[]).await;
+            let options = post(&h.app, "/setup/options", &Token { token }, &[]).await;
             assert_eq!(
                 options.kind(),
                 "urn:zeabur-identity:problem:setup-invalid",
@@ -715,7 +977,11 @@ mod tests {
             let reply = post(
                 &h.app,
                 "/setup",
-                json!({ "token": token, "credential": credential }),
+                &Enrol {
+                    token,
+                    credential: &credential,
+                    label: None,
+                },
                 &[(CEREMONY_COOKIE, &ceremony)],
             )
             .await;
@@ -742,7 +1008,7 @@ mod tests {
             user.disabled = true;
             directory.put_user(user.clone());
 
-            let options = post(&h.app, "/setup/options", json!({ "token": token }), &[]).await;
+            let options = post(&h.app, "/setup/options", &Token { token }, &[]).await;
             assert_eq!(options.status, StatusCode::FORBIDDEN, "{name}");
             assert_eq!(
                 options.kind(),
@@ -752,7 +1018,11 @@ mod tests {
             let finish = post(
                 &h.app,
                 "/setup",
-                json!({ "token": token, "credential": credential }),
+                &Enrol {
+                    token,
+                    credential: &credential,
+                    label: None,
+                },
                 &[(CEREMONY_COOKIE, &ceremony)],
             )
             .await;
@@ -774,7 +1044,7 @@ mod tests {
             // The link still works once an admin enables the user again.
             user.disabled = false;
             directory.put_user(user);
-            let options = post(&h.app, "/setup/options", json!({ "token": token }), &[]).await;
+            let options = post(&h.app, "/setup/options", &Token { token }, &[]).await;
             assert_eq!(options.status, StatusCode::OK, "{name}");
         }
     }
@@ -783,13 +1053,7 @@ mod tests {
     async fn setup_token_is_single_use() {
         let h = harness().await;
         enrol(&h, &mut device()).await;
-        let reply = post(
-            &h.app,
-            "/setup/options",
-            json!({ "token": SETUP_TOKEN }),
-            &[],
-        )
-        .await;
+        let reply = post(&h.app, "/setup/options", &Token { token: SETUP_TOKEN }, &[]).await;
         assert_eq!(reply.status, StatusCode::UNAUTHORIZED);
         assert_eq!(reply.kind(), "urn:zeabur-identity:problem:setup-invalid");
     }
@@ -812,7 +1076,11 @@ mod tests {
                     post(
                         &h.app,
                         "/setup",
-                        json!({ "token": SETUP_TOKEN, "credential": credential }),
+                        &Enrol {
+                            token: SETUP_TOKEN,
+                            credential: &credential,
+                            label: None,
+                        },
                         &[(CEREMONY_COOKIE, &ceremony)],
                     )
                     .await
@@ -832,7 +1100,7 @@ mod tests {
     #[tokio::test]
     async fn setup_token_expires_and_must_match() {
         let h = harness().await;
-        let reply = post(&h.app, "/setup/options", json!({ "token": "wrong" }), &[]).await;
+        let reply = post(&h.app, "/setup/options", &Token { token: "wrong" }, &[]).await;
         assert_eq!(reply.status, StatusCode::UNAUTHORIZED);
 
         // Started in time, finished after expiry.
@@ -842,7 +1110,11 @@ mod tests {
         let reply = post(
             &h.app,
             "/setup",
-            json!({ "token": SETUP_TOKEN, "credential": credential }),
+            &Enrol {
+                token: SETUP_TOKEN,
+                credential: &credential,
+                label: None,
+            },
             &[(CEREMONY_COOKIE, &ceremony)],
         )
         .await;
@@ -852,13 +1124,7 @@ mod tests {
             "the ceremony expired first: {}",
             reply.body
         );
-        let reply = post(
-            &h.app,
-            "/setup/options",
-            json!({ "token": SETUP_TOKEN }),
-            &[],
-        )
-        .await;
+        let reply = post(&h.app, "/setup/options", &Token { token: SETUP_TOKEN }, &[]).await;
         assert_eq!(reply.status, StatusCode::UNAUTHORIZED, "the token expired");
     }
 
@@ -879,7 +1145,11 @@ mod tests {
         let reply = post(
             &h.app,
             "/setup",
-            json!({ "token": SETUP_TOKEN, "credential": credential }),
+            &Enrol {
+                token: SETUP_TOKEN,
+                credential: &credential,
+                label: None,
+            },
             &[(CEREMONY_COOKIE, &ceremony)],
         )
         .await;
@@ -893,7 +1163,7 @@ mod tests {
             &h.app,
             Method::POST,
             "/setup/options",
-            Some(json!({ "token": SETUP_TOKEN })),
+            Some(json_text(&Token { token: SETUP_TOKEN })),
             &[],
             None,
         )
@@ -903,7 +1173,7 @@ mod tests {
             &h.app,
             Method::POST,
             "/login/options",
-            Some(json!({})),
+            Some(json_text(&Empty {})),
             &[],
             Some("https://evil.example"),
         )
@@ -927,41 +1197,49 @@ mod tests {
             .await
             .cookie(FLOW_COOKIE)
             .unwrap();
-        let reply = post(&h.app, "/login/options", json!({}), &[]).await;
+        let reply = post(&h.app, "/login/options", &Empty {}, &[]).await;
         let ceremony = reply.cookie(CEREMONY_COOKIE).unwrap();
-        let options: CredentialRequestOptions = serde_json::from_value(reply.body).unwrap();
-        let assertion = serde_json::to_value(
-            device
-                .authenticate(&origin(), options, DefaultClientData)
-                .await
-                .unwrap(),
-        )
-        .unwrap();
+        let options: CredentialRequestOptions = reply.parse();
+        let assertion = device
+            .authenticate(&origin(), options, DefaultClientData)
+            .await
+            .unwrap();
         let cookies = [
             (FLOW_COOKIE, flow.as_str()),
             (CEREMONY_COOKIE, ceremony.as_str()),
         ];
         // Knowing an enrolled credential ID and handle is not proof of possession.
-        let mut forged = assertion.clone();
-        forged["response"]["signature"] = json!(URL_SAFE_NO_PAD.encode([0_u8; 64]));
-        let rejected = post(&h.app, "/login", json!({ "credential": forged }), &cookies).await;
+        let mut forged: AuthenticatedPublicKeyCredential =
+            serde_json::from_str(&json_text(&assertion)).unwrap();
+        forged.response.signature = vec![0_u8; 64].into();
+        let rejected = post(
+            &h.app,
+            "/login",
+            &Credential {
+                credential: &forged,
+            },
+            &cookies,
+        )
+        .await;
         assert_eq!(rejected.status, StatusCode::UNAUTHORIZED);
         assert_eq!(
             rejected.kind(),
             "urn:zeabur-identity:problem:passkey-failed"
         );
-        let fields = &rejected.audit.as_ref().unwrap()["fields"];
-        assert!(!has_member(fields, "user"));
-        assert!(!has_member(fields, "subject"));
-        assert!(!has_member(fields, "error"));
+        let fields = &rejected.audit().fields;
+        assert!(!fields.contains_key("user"));
+        assert!(!fields.contains_key("subject"));
+        assert!(!fields.contains_key("error"));
         let diagnostic = rejected.diagnostics.first().unwrap();
-        assert_eq!(diagnostic["fields"]["reason"], "passkey-failed");
+        assert_eq!(diagnostic.fields["reason"], "passkey-failed");
         // Failed signature verification does not consume the valid ceremony.
         assert_eq!(
             post(
                 &h.app,
                 "/login",
-                json!({ "credential": assertion }),
+                &Credential {
+                    credential: &assertion
+                },
                 &cookies
             )
             .await
@@ -971,7 +1249,9 @@ mod tests {
         let second = post(
             &h.app,
             "/login",
-            json!({ "credential": assertion }),
+            &Credential {
+                credential: &assertion,
+            },
             &cookies,
         )
         .await;
@@ -992,14 +1272,8 @@ mod tests {
         let reply = sign_in(&h, &mut stranger).await;
         assert_eq!(reply.status, StatusCode::UNAUTHORIZED);
         assert_eq!(reply.kind(), "urn:zeabur-identity:problem:passkey-failed");
-        assert!(!has_member(
-            &reply.audit.as_ref().unwrap()["fields"],
-            "user"
-        ));
-        assert!(!has_member(
-            &reply.audit.as_ref().unwrap()["fields"],
-            "subject"
-        ));
+        assert!(!reply.audit().fields.contains_key("user"));
+        assert!(!reply.audit().fields.contains_key("subject"));
 
         let mut device = device();
         enrol(&h, &mut device).await;
@@ -1016,9 +1290,9 @@ mod tests {
         let reply = sign_in(&h, &mut device).await;
         assert_eq!(reply.status, StatusCode::UNAUTHORIZED);
         // Disabled users are rejected before signature verification, so no identity is asserted.
-        let fields = &reply.audit.as_ref().unwrap()["fields"];
-        assert!(!has_member(fields, "user"));
-        assert!(!has_member(fields, "subject"));
+        let fields = &reply.audit().fields;
+        assert!(!fields.contains_key("user"));
+        assert!(!fields.contains_key("subject"));
     }
 
     #[tokio::test]
@@ -1026,9 +1300,9 @@ mod tests {
         let h = harness().await;
         let mut device = device();
         enrol(&h, &mut device).await;
-        let reply = post(&h.app, "/login/options", json!({}), &[]).await;
+        let reply = post(&h.app, "/login/options", &Empty {}, &[]).await;
         let ceremony = reply.cookie(CEREMONY_COOKIE).unwrap();
-        let options: CredentialRequestOptions = serde_json::from_value(reply.body).unwrap();
+        let options: CredentialRequestOptions = reply.parse();
         let assertion = device
             .authenticate(&origin(), options, DefaultClientData)
             .await
@@ -1036,7 +1310,9 @@ mod tests {
         let reply = post(
             &h.app,
             "/login",
-            json!({ "credential": assertion }),
+            &Credential {
+                credential: &assertion,
+            },
             &[(CEREMONY_COOKIE, &ceremony)],
         )
         .await;
@@ -1054,16 +1330,14 @@ mod tests {
                 .header(header::ORIGIN, ISSUER)
                 .header(header::CONTENT_TYPE, "application/json")
                 .header(header::ACCEPT_LANGUAGE, lang)
-                .body(Body::from(json!({ "token": "wrong" }).to_string()))
+                .body(Body::from(json_text(&Token { token: "wrong" })))
                 .unwrap();
             let response = h.app.clone().oneshot(request).await.unwrap();
             assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-            let body: Value =
-                serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
-                    .unwrap();
-            assert_eq!(body["detail"], messages.messages().setup_invalid, "{lang}");
-            assert_eq!(body["next"], "new-link");
-            assert!(!has_member(&body, "refresh"));
+            let body: Problem = read_json(response).await;
+            assert_eq!(body.detail, messages.messages().setup_invalid, "{lang}");
+            assert_eq!(body.next.as_deref(), Some("new-link"));
+            assert!(!body.refresh);
         }
     }
 
@@ -1084,15 +1358,9 @@ mod tests {
             PresenceOnly,
             passkey::crypto::aws_lc_rs::AwsLcRsBackend,
         ));
-        let reply = post(
-            &h.app,
-            "/setup/options",
-            json!({ "token": SETUP_TOKEN }),
-            &[],
-        )
-        .await;
+        let reply = post(&h.app, "/setup/options", &Token { token: SETUP_TOKEN }, &[]).await;
         let ceremony = reply.cookie(CEREMONY_COOKIE).unwrap();
-        let options: CredentialCreationOptions = serde_json::from_value(reply.body).unwrap();
+        let options: CredentialCreationOptions = reply.parse();
         // A client honouring `userVerification: required` refuses outright; if one sends a
         // response anyway, the server must reject it. This covers registration from the client
         // side only; `refuse_unverified_then_sign_in` covers signed sign-in assertions.
@@ -1100,20 +1368,18 @@ mod tests {
             let reply = post(
                 &h.app,
                 "/setup",
-                json!({ "token": SETUP_TOKEN, "credential": credential }),
+                &Enrol {
+                    token: SETUP_TOKEN,
+                    credential: &credential,
+                    label: None,
+                },
                 &[(CEREMONY_COOKIE, &ceremony)],
             )
             .await;
             assert_eq!(reply.status, StatusCode::UNAUTHORIZED);
         }
         // The token was not consumed by the failed attempt.
-        let reply = post(
-            &h.app,
-            "/setup/options",
-            json!({ "token": SETUP_TOKEN }),
-            &[],
-        )
-        .await;
+        let reply = post(&h.app, "/setup/options", &Token { token: SETUP_TOKEN }, &[]).await;
         assert_eq!(reply.status, StatusCode::OK);
     }
 
@@ -1124,23 +1390,21 @@ mod tests {
             "/authorize?client_id=kubectl&redirect_uri=http%3A%2F%2F127.0.0.1%3A8000%2F&response_type=code&scope=openid&code_challenge={CHALLENGE}&code_challenge_method=S256"
         );
         let tokens = refuse_unverified_then_sign_in(&h, &authorize).await;
-        assert!(tokens["refresh_token"].is_string());
-        assert!(tokens["id_token"].is_string());
+        assert!(tokens.refresh.is_some());
+        assert!(tokens.id.is_some());
     }
 
     /// `credential` (a registration response) with the backup flags (BE, BS) clear, as a
     /// device-bound passkey reports them. The test authenticator sets both, like a synced
     /// passkey. Attestation is `none`, so nothing signs these flags.
-    fn as_device_bound(mut credential: Value) -> Value {
-        let field = &mut credential["response"]["attestationObject"];
-        let mut object = URL_SAFE_NO_PAD.decode(field.as_str().unwrap()).unwrap();
+    fn as_device_bound(mut credential: CreatedPublicKeyCredential) -> CreatedPublicKeyCredential {
+        let object = &mut credential.response.attestation_object;
         let key = b"hauthData";
         let at = object.windows(key.len()).position(|w| w == key).unwrap() + key.len();
         // A CBOR byte string head: 0x58 with a one-byte length, or 0x59 with two.
         let data = at + if object[at] == 0x58 { 2 } else { 3 };
         assert_eq!(object[data + 32] & 0x18, 0x18, "BE and BS set");
         object[data + 32] &= !0x18;
-        *field = json!(URL_SAFE_NO_PAD.encode(object));
         credential
     }
 
@@ -1163,7 +1427,6 @@ mod tests {
             reply.kind(),
             "urn:zeabur-identity:problem:device-passkey-needed"
         );
-        assert!(!has_member(&reply.body, "redirect_to"));
     }
 
     #[tokio::test]
@@ -1175,7 +1438,11 @@ mod tests {
         let refused = post(
             &h.app,
             "/setup",
-            json!({ "token": SETUP_TOKEN, "credential": credential.clone() }),
+            &Enrol {
+                token: SETUP_TOKEN,
+                credential: &credential,
+                label: None,
+            },
             &[(CEREMONY_COOKIE, &ceremony)],
         )
         .await;
@@ -1188,7 +1455,11 @@ mod tests {
         let reply = post(
             &h.app,
             "/setup",
-            json!({ "token": SETUP_TOKEN, "credential": as_device_bound(credential) }),
+            &Enrol {
+                token: SETUP_TOKEN,
+                credential: &as_device_bound(credential),
+                label: None,
+            },
             &[(CEREMONY_COOKIE, &ceremony)],
         )
         .await;
@@ -1217,39 +1488,39 @@ mod tests {
                 "secret-forged-authorization-flow".to_owned()
             };
             // Start a fresh ceremony after the flow expires, so the assertion itself verifies.
-            let options = post(&h.app, "/login/options", json!({}), &[]).await;
+            let options = post(&h.app, "/login/options", &Empty {}, &[]).await;
             let ceremony = options.cookie(CEREMONY_COOKIE).unwrap();
             let assertion = device
-                .authenticate(
-                    &origin(),
-                    serde_json::from_value(options.body).unwrap(),
-                    DefaultClientData,
-                )
+                .authenticate(&origin(), options.parse(), DefaultClientData)
                 .await
                 .unwrap();
             let reply = post(
                 &h.app,
                 "/login",
-                json!({ "credential": assertion }),
+                &Credential {
+                    credential: &assertion,
+                },
                 &[(FLOW_COOKIE, &rejected_flow), (CEREMONY_COOKIE, &ceremony)],
             )
             .await;
             assert_eq!(reply.status, StatusCode::BAD_REQUEST);
             assert_eq!(reply.kind(), "urn:zeabur-identity:problem:no-request");
-            let fields = &reply.audit.as_ref().unwrap()["fields"];
+            let fields = &reply.audit().fields;
             assert_eq!(fields["outcome"], "failure");
             assert_eq!(fields["user"], "admin");
             assert_eq!(fields["subject"], ADMIN_UID);
-            assert!(!has_member(fields, "error"));
+            assert!(!fields.contains_key("error"));
             let diagnostic = reply.diagnostics.first().unwrap();
-            assert_eq!(diagnostic["fields"]["reason"], "authorization_failed");
-            let error = diagnostic["fields"]["error"].as_str().unwrap();
+            assert_eq!(diagnostic.fields["reason"], "authorization_failed");
+            let error = diagnostic.field("error").unwrap();
             assert!(!serde_json::to_string(fields).unwrap().contains(error));
             // A rejected authorization still consumed the verified passkey ceremony.
             let second_attempt = post(
                 &h.app,
                 "/login",
-                json!({ "credential": assertion }),
+                &Credential {
+                    credential: &assertion,
+                },
                 &[(FLOW_COOKIE, &rejected_flow), (CEREMONY_COOKIE, &ceremony)],
             )
             .await;
@@ -1273,11 +1544,11 @@ mod tests {
             &token_hash(token.as_bytes()),
             UnixTime::from_secs(START + 3600),
         );
-        let reply = post(&h.app, "/setup/options", json!({ "token": token }), &[]).await;
+        let reply = post(&h.app, "/setup/options", &Token { token }, &[]).await;
         assert_eq!(reply.status, StatusCode::UNAUTHORIZED);
-        let fields = &reply.audit.as_ref().unwrap()["fields"];
-        assert!(!has_member(fields, "user"));
-        assert!(!has_member(fields, "subject"));
+        let fields = &reply.audit().fields;
+        assert!(!fields.contains_key("user"));
+        assert!(!fields.contains_key("subject"));
     }
 
     mod account {
@@ -1345,38 +1616,35 @@ mod tests {
             html
         }
 
-        async fn assertion(device: &mut Device, reply: &Reply) -> (Value, String) {
+        async fn assertion(
+            device: &mut Device,
+            reply: &Reply,
+        ) -> (AuthenticatedPublicKeyCredential, String) {
             assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
-            let options: CredentialRequestOptions =
-                serde_json::from_value(reply.body.clone()).unwrap();
+            let options: CredentialRequestOptions = reply.parse();
             let assertion = device
                 .authenticate(&origin(), options, DefaultClientData)
                 .await
                 .unwrap();
-            (
-                serde_json::to_value(assertion).unwrap(),
-                reply.cookie(CEREMONY_COOKIE).unwrap(),
-            )
+            (assertion, reply.cookie(CEREMONY_COOKIE).unwrap())
         }
 
         pub(super) async fn sign_in_to_account(h: &Harness, device: &mut Device) -> Session {
-            let reply = post(&h.app, "/account/session/options", json!({}), &[]).await;
+            let reply = post(&h.app, "/account/session/options", &Empty {}, &[]).await;
             let (credential, ceremony) = assertion(device, &reply).await;
             let reply = post(
                 &h.app,
                 "/account/session",
-                json!({ "credential": credential }),
+                &Credential {
+                    credential: &credential,
+                },
                 &[(CEREMONY_COOKIE, &ceremony)],
             )
             .await;
             assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
-            let accepted = &reply.body["accepted"];
-            assert_eq!(accepted["rpId"], "login.example.com");
-            assert!(
-                accepted["allAcceptedCredentialIds"]
-                    .as_array()
-                    .is_some_and(|ids| !ids.is_empty())
-            );
+            let accepted = reply.parse::<AccountSession>().accepted.unwrap();
+            assert_eq!(accepted.rp_id, "login.example.com");
+            assert_ne!(accepted.all_accepted_credential_ids, Vec::<String>::new());
             let set_cookie = reply
                 .headers
                 .get_all(header::SET_COOKIE)
@@ -1393,7 +1661,7 @@ mod tests {
             let reply = post(
                 &h.app,
                 "/account/reauth/options",
-                json!({}),
+                &Empty {},
                 &session.cookies(),
             )
             .await;
@@ -1401,7 +1669,9 @@ mod tests {
             post(
                 &h.app,
                 "/account/reauth",
-                json!({ "credential": credential }),
+                &Credential {
+                    credential: &credential,
+                },
                 &[
                     (SESSION_COOKIE, &session.cookie),
                     (CEREMONY_COOKIE, &ceremony),
@@ -1414,23 +1684,22 @@ mod tests {
             let reply = post(
                 &h.app,
                 "/account/passkeys/options",
-                json!({}),
+                &Empty {},
                 &session.cookies(),
             )
             .await;
             if reply.status != StatusCode::OK {
                 return reply;
             }
-            let options: CredentialCreationOptions =
-                serde_json::from_value(reply.body.clone()).unwrap();
-            let public_key = &reply.body["publicKey"];
+            let options: CredentialCreationOptions = reply.parse();
+            let selection = options.public_key.authenticator_selection.as_ref().unwrap();
             assert_eq!(
-                public_key["authenticatorSelection"]["residentKey"],
-                "required"
+                selection.resident_key,
+                Some(ResidentKeyRequirement::Required)
             );
             assert_eq!(
-                public_key["authenticatorSelection"]["userVerification"],
-                "required"
+                selection.user_verification,
+                UserVerificationRequirement::Required
             );
             let ceremony = reply.cookie(CEREMONY_COOKIE).unwrap();
             let credential = device
@@ -1440,7 +1709,9 @@ mod tests {
             post(
                 &h.app,
                 "/account/passkeys",
-                json!({ "credential": credential }),
+                &Credential {
+                    credential: &credential,
+                },
                 &[
                     (SESSION_COOKIE, &session.cookie),
                     (CEREMONY_COOKIE, &ceremony),
@@ -1453,7 +1724,7 @@ mod tests {
             post(
                 &h.app,
                 "/account/passkeys/remove",
-                json!({ "name": name }),
+                &Name { name },
                 &session.cookies(),
             )
             .await
@@ -1550,7 +1821,11 @@ mod tests {
             let reply = post(
                 &h.app,
                 "/setup",
-                json!({ "token": INVITATION, "credential": credential }),
+                &Enrol {
+                    token: INVITATION,
+                    credential: &credential,
+                    label: None,
+                },
                 &[(CEREMONY_COOKIE, &ceremony)],
             )
             .await;
@@ -1602,7 +1877,10 @@ mod tests {
             let reply = post(
                 &h.app,
                 "/account/passkeys/rename",
-                json!({ "name": admin_passkey, "label": "Mine" }),
+                &Rename {
+                    name: &admin_passkey,
+                    label: "Mine",
+                },
                 &dana.cookies(),
             )
             .await;
@@ -1612,7 +1890,9 @@ mod tests {
             let reply = post(
                 &h.app,
                 "/account/sessions/revoke",
-                json!({ "name": admin_session }),
+                &Name {
+                    name: &admin_session,
+                },
                 &dana.cookies(),
             )
             .await;
@@ -1675,18 +1955,13 @@ mod tests {
             let reply = post(
                 &h.app,
                 "/account/passkeys/options",
-                json!({}),
+                &Empty {},
                 &session.cookies(),
             )
             .await;
             assert_eq!(reply.status, StatusCode::OK);
-            assert_eq!(
-                reply.body["publicKey"]["excludeCredentials"]
-                    .as_array()
-                    .unwrap()
-                    .len(),
-                2
-            );
+            let options: CredentialCreationOptions = reply.parse();
+            assert_eq!(options.public_key.exclude_credentials.unwrap().len(), 2);
             advance(&h, std::time::Duration::from_secs(1));
             let reply = add(&h, &session, &mut device()).await;
             assert_eq!(reply.kind(), "urn:zeabur-identity:problem:reauth-required");
@@ -1712,7 +1987,10 @@ mod tests {
             for (key, value) in headers {
                 request = request.header(*key, *value);
             }
-            let body = json!({ "name": name, "label": "Phone" }).to_string();
+            let body = json_text(&Rename {
+                name,
+                label: "Phone",
+            });
             let response = h
                 .app
                 .clone()
@@ -1774,13 +2052,16 @@ mod tests {
             let reply = post(
                 &h.app,
                 "/account/passkeys/rename",
-                json!({ "name": name, "label": "  Phone  " }),
+                &Rename {
+                    name: &name,
+                    label: "  Phone  ",
+                },
                 &session.cookies(),
             )
             .await;
             assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
             assert!(page(&h, Some(&session.cookie)).await.contains("Phone"));
-            let fields = &reply.audit.unwrap()["fields"];
+            let fields = &reply.audit.unwrap().fields;
             assert_eq!(fields["event"], "account.passkey_renamed");
             assert_eq!(fields["credential"], name.as_str());
             assert_eq!(
@@ -1840,7 +2121,7 @@ mod tests {
             let by_second = sign_in_to_account(&h, &mut second).await;
             // An OAuth grant from the first passkey.
             let tokens = exchange(&h, &sign_in(&h, &mut first).await).await;
-            let refresh = tokens["refresh_token"].as_str().unwrap().to_owned();
+            let refresh = tokens.refresh.unwrap();
             let admin = user(&h, "admin").await;
             assert_eq!(h.service.oauth.grants.list(&admin).await.unwrap().len(), 3);
 
@@ -1856,17 +2137,15 @@ mod tests {
                 .name;
             let reply = remove(&h, &by_second, &first_name).await;
             assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
-            assert_eq!(reply.body["signed_out"], false);
+            let changed: Changed = reply.parse();
+            assert!(!changed.signed_out);
             assert_eq!(
-                reply.body["accepted"]["allAcceptedCredentialIds"]
-                    .as_array()
-                    .unwrap()
-                    .len(),
+                changed.accepted.unwrap().all_accepted_credential_ids.len(),
                 1
             );
-            let fields = &reply.audit.unwrap()["fields"];
+            let fields = &reply.audit.unwrap().fields;
             assert_eq!(fields["event"], "account.passkey_removed");
-            assert_eq!(fields["revoked"], 2);
+            assert_eq!(fields["revoked"], FieldValue::Count(2));
 
             let left: Vec<String> = h
                 .service
@@ -1897,21 +2176,21 @@ mod tests {
             assert!(event.note.contains(&first_name));
 
             // The removed passkey is now unknown, and the browser is told so.
-            let reply = post(&h.app, "/account/session/options", json!({}), &[]).await;
+            let reply = post(&h.app, "/account/session/options", &Empty {}, &[]).await;
             let (credential, ceremony) = assertion(&mut first, &reply).await;
             let reply = post(
                 &h.app,
                 "/account/session",
-                json!({ "credential": credential }),
+                &Credential {
+                    credential: &credential,
+                },
                 &[(CEREMONY_COOKIE, &ceremony)],
             )
             .await;
             assert_eq!(reply.status, StatusCode::UNAUTHORIZED);
-            assert_eq!(reply.body["unknownCredential"]["rpId"], "login.example.com");
-            assert_eq!(
-                reply.body["unknownCredential"]["credentialId"],
-                credential["id"]
-            );
+            let unknown = reply.problem().unknown_credential.unwrap();
+            assert_eq!(unknown.rp_id, "login.example.com");
+            assert_eq!(unknown.credential_id, credential.id);
         }
 
         #[tokio::test]
@@ -1925,7 +2204,9 @@ mod tests {
             let reply = post(
                 &h.app,
                 "/account/sessions/revoke",
-                json!({ "name": other.cookie.split_once('.').unwrap().0 }),
+                &Name {
+                    name: other.cookie.split_once('.').unwrap().0,
+                },
                 &this.cookies(),
             )
             .await;
@@ -1943,7 +2224,7 @@ mod tests {
             let reply = post(
                 &h.app,
                 "/account/sessions/revoke-others",
-                json!({}),
+                &Empty {},
                 &this.cookies(),
             )
             .await;
@@ -1961,7 +2242,7 @@ mod tests {
             assert_eq!(left, [this.cookie.split_once('.').unwrap().0]);
             assert!(!page(&h, Some(&this.cookie)).await.contains(SIGNED_OUT_MARK));
 
-            let reply = post(&h.app, "/account/sign-out", json!({}), &this.cookies()).await;
+            let reply = post(&h.app, "/account/sign-out", &Empty {}, &this.cookies()).await;
             assert_eq!(reply.status, StatusCode::OK);
             let left = h.service.oauth.grants.list(&admin).await.unwrap();
             assert_eq!(left.len(), 0);
@@ -1979,7 +2260,7 @@ mod tests {
             let reply = post(
                 &h.app,
                 "/account/sessions/revoke-others",
-                json!({}),
+                &Empty {},
                 &session.cookies(),
             )
             .await;
@@ -2012,16 +2293,9 @@ mod tests {
                 .unwrap();
             assert_eq!(response.status(), StatusCode::OK);
             assert_eq!(response.headers()[header::CONTENT_TYPE], "application/json");
-            let body: Value =
-                serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
-                    .unwrap();
-            assert_eq!(
-                body,
-                json!({
-                    "enroll": "https://login.example.com/account#add",
-                    "manage": "https://login.example.com/account",
-                })
-            );
+            let endpoints: PasskeyEndpoints = read_json(response).await;
+            assert_eq!(endpoints.enroll, "https://login.example.com/account#add");
+            assert_eq!(endpoints.manage, "https://login.example.com/account");
         }
     }
 
@@ -2050,7 +2324,11 @@ mod tests {
             post(
                 &h.app,
                 "/setup/password",
-                json!({ "token": token, "password": password }),
+                &PasswordSetup {
+                    token,
+                    password,
+                    totp: None,
+                },
                 &[],
             )
             .await
@@ -2068,7 +2346,11 @@ mod tests {
             post(
                 &h.app,
                 "/login/password",
-                json!({ "username": username, "password": password }),
+                &PasswordLogin {
+                    username,
+                    password,
+                    code: None,
+                },
                 &cookies,
             )
             .await
@@ -2078,7 +2360,7 @@ mod tests {
         async fn dana_with_password(h: &Harness) -> String {
             let reply = set_password(h, INVITATION, GOOD).await;
             assert_eq!(reply.status, StatusCode::CREATED, "{}", reply.body);
-            assert_eq!(reply.body["username"], "dana");
+            assert_eq!(reply.parse::<Enrolled>().username, "dana");
             reply.cookie(DEVICE_COOKIE).unwrap()
         }
 
@@ -2089,17 +2371,9 @@ mod tests {
             let reply = sign_in(&h, "dana", GOOD, Some(&device)).await;
             assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
             assert!(reply.cookie(DEVICE_COOKIE).is_some());
-            let tokens = exchange(&h, &reply).await;
-            let payload = tokens["access_token"]
-                .as_str()
-                .unwrap()
-                .split('.')
-                .nth(1)
-                .unwrap();
-            let claims: Value =
-                serde_json::from_slice(&URL_SAFE_NO_PAD.decode(payload).unwrap()).unwrap();
-            assert_eq!(claims["sub"], DANA_UID);
-            assert_eq!(claims["amr"], json!(["pwd"]));
+            let claims = exchange(&h, &reply).await.claims();
+            assert_eq!(claims.sub, DANA_UID);
+            assert_eq!(claims.amr, ["pwd"]);
             // The invitation is used up.
             assert_eq!(
                 set_password(&h, INVITATION, GOOD).await.status,
@@ -2118,7 +2392,11 @@ mod tests {
             ] {
                 let reply = set_password(&h, INVITATION, password).await;
                 assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY, "{password}");
-                assert_eq!(reply.body["weakness"], weakness, "{password}");
+                assert_eq!(
+                    reply.problem().weakness.as_deref(),
+                    Some(weakness),
+                    "{password}"
+                );
             }
             dana_with_password(&h).await;
         }
@@ -2145,17 +2423,11 @@ mod tests {
             let h = harness().await;
             let reply = options(&h, INVITATION).await;
             assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
-            assert_eq!(reply.body, json!({ "totp": null }));
+            assert!(reply.parse::<PasswordOptions>().totp.is_none());
         }
 
         async fn options(h: &Harness, token: &str) -> Reply {
-            post(
-                &h.app,
-                "/setup/password/options",
-                json!({ "token": token }),
-                &[],
-            )
-            .await
+            post(&h.app, "/setup/password/options", &Token { token }, &[]).await
         }
 
         /// RFC 4648 base32 without padding.
@@ -2187,22 +2459,32 @@ mod tests {
         async fn admin_with_authenticator(h: &Harness) -> (Secret, Vec<String>, String) {
             let offered = options(h, SETUP_TOKEN).await;
             assert_eq!(offered.status, StatusCode::OK, "{}", offered.body);
-            let totp = &offered.body["totp"];
-            assert!(totp["uri"].as_str().unwrap().starts_with("otpauth://totp/"));
-            assert!(totp["qr"]["path"].as_str().unwrap().starts_with('M'));
-            let secret = Secret::from_bytes(&base32(totp["secret"].as_str().unwrap())).unwrap();
-            assert_eq!(
-                totp["secret_display"].as_str().unwrap().replace(' ', ""),
-                totp["secret"].as_str().unwrap()
-            );
-            let sealed = totp["sealed"].clone();
+            let totp = offered.parse::<PasswordOptions>().totp.unwrap();
+            assert!(totp.uri.starts_with("otpauth://totp/"));
+            assert!(totp.qr.path.starts_with('M'));
+            let secret = Secret::from_bytes(&base32(&totp.secret)).unwrap();
+            assert_eq!(totp.secret_display.replace(' ', ""), totp.secret);
+            let sealed = totp.sealed;
             let setup = |code: String| {
-                let body = json!({
-                    "token": SETUP_TOKEN,
-                    "password": GOOD,
-                    "totp": { "sealed": sealed, "code": code },
+                let body = json_text(&PasswordSetup {
+                    token: SETUP_TOKEN,
+                    password: GOOD,
+                    totp: Some(TotpSetup {
+                        sealed: &sealed,
+                        code: &code,
+                    }),
                 });
-                async move { post(&h.app, "/setup/password", body, &[]).await }
+                async move {
+                    call(
+                        &h.app,
+                        Method::POST,
+                        "/setup/password",
+                        Some(body),
+                        &[],
+                        Some(ISSUER),
+                    )
+                    .await
+                }
             };
             // A wrong code leaves the link usable.
             let wrong = setup("000000".to_owned()).await;
@@ -2215,8 +2497,7 @@ mod tests {
             assert!(wrong.kind().ends_with(":code-failed"));
             let reply = setup(secret.code_at(now(h))).await;
             assert_eq!(reply.status, StatusCode::CREATED, "{}", reply.body);
-            let codes: Vec<String> =
-                serde_json::from_value(reply.body["recovery_codes"].clone()).unwrap();
+            let codes = reply.parse::<Enrolled>().recovery_codes.unwrap();
             assert_eq!(codes.len(), RECOVERY_CODES);
             (secret, codes, reply.cookie(DEVICE_COOKIE).unwrap())
         }
@@ -2234,21 +2515,16 @@ mod tests {
             let flow = flow(h).await;
             let mut cookies = vec![(FLOW_COOKIE, flow.as_str())];
             cookies.extend(device.map(|d| (DEVICE_COOKIE, d)));
-            let body = json!({ "username": "admin", "password": password, "code": code });
+            let body = &PasswordLogin {
+                username: "admin",
+                password,
+                code,
+            };
             post(&h.app, "/login/password", body, &cookies).await
         }
 
-        async fn amr(h: &Harness, reply: &Reply) -> Value {
-            let tokens = exchange(h, reply).await;
-            let payload = tokens["access_token"]
-                .as_str()
-                .unwrap()
-                .split('.')
-                .nth(1)
-                .unwrap();
-            let claims: Value =
-                serde_json::from_slice(&URL_SAFE_NO_PAD.decode(payload).unwrap()).unwrap();
-            claims["amr"].clone()
+        async fn amr(h: &Harness, reply: &Reply) -> Vec<String> {
+            exchange(h, reply).await.claims().amr
         }
 
         #[tokio::test]
@@ -2267,7 +2543,7 @@ mod tests {
             let code = secret.code_at(now(&h));
             let reply = sign_in_with_code(&h, Some(&code), device).await;
             assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
-            assert_eq!(amr(&h, &reply).await, json!(["pwd", "otp", "mfa"]));
+            assert_eq!(amr(&h, &reply).await, ["pwd", "otp", "mfa"]);
             let reply = sign_in_with_code(&h, Some(&code), device).await;
             assert!(reply.kind().ends_with(":code-failed"), "replayed");
         }
@@ -2280,7 +2556,7 @@ mod tests {
             let typed = codes[3].to_ascii_uppercase();
             let reply = sign_in_with_code(&h, Some(&typed), device).await;
             assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
-            assert_eq!(amr(&h, &reply).await, json!(["pwd", "mfa"]));
+            assert_eq!(amr(&h, &reply).await, ["pwd", "mfa"]);
             let reply = sign_in_with_code(&h, Some(&codes[3]), device).await;
             assert!(reply.kind().ends_with(":code-failed"));
             let reply = sign_in_with_code(&h, Some(&codes[4]), device).await;
@@ -2316,7 +2592,7 @@ mod tests {
                 let reply = sign_in(&h, username, password, None).await;
                 assert_eq!(reply.status, StatusCode::UNAUTHORIZED, "{username}");
                 assert_eq!(
-                    reply.body["title"],
+                    reply.problem().title,
                     "Unable to sign in with this username and password."
                 );
                 assert!(reply.cookie(DEVICE_COOKIE).is_none());
@@ -2330,7 +2606,11 @@ mod tests {
             let reply = post(
                 &h.app,
                 "/login/password",
-                json!({ "username": "dana", "password": GOOD }),
+                &PasswordLogin {
+                    username: "dana",
+                    password: GOOD,
+                    code: None,
+                },
                 &[],
             )
             .await;
@@ -2390,17 +2670,17 @@ mod tests {
                     header::COOKIE,
                     format!("{FLOW_COOKIE}={flow}; {DEVICE_COOKIE}={device}"),
                 )
-                .body(Body::from(
-                    json!({ "username": "dana", "password": GOOD }).to_string(),
-                ))
+                .body(Body::from(json_text(&PasswordLogin {
+                    username: "dana",
+                    password: GOOD,
+                    code: None,
+                })))
                 .unwrap();
             let response = h.app.clone().oneshot(request).await.unwrap();
             assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
             assert!(response.headers().contains_key(header::RETRY_AFTER));
-            let body: Value =
-                serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
-                    .unwrap();
-            assert_eq!(body["detail"], Lang::ZhTw.messages().password_held);
+            let body: Problem = read_json(response).await;
+            assert_eq!(body.detail, Lang::ZhTw.messages().password_held);
         }
 
         #[tokio::test]
@@ -2449,7 +2729,7 @@ mod tests {
             post(
                 &h.app,
                 "/account/password",
-                json!({ "current": current, "new": new }),
+                &PasswordChange { current, new },
                 &[(SESSION_COOKIE, &session.cookie), (DEVICE_COOKIE, device)],
             )
             .await
@@ -2459,7 +2739,7 @@ mod tests {
             post(
                 &h.app,
                 "/account/password/remove",
-                json!({ "current": current }),
+                &Current { current },
                 &[(SESSION_COOKIE, &session.cookie), (DEVICE_COOKIE, device)],
             )
             .await
@@ -2475,7 +2755,7 @@ mod tests {
             );
             let reply = change(&h, &session, &device, GOOD, NEW).await;
             assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
-            let audit = &reply.audit.as_ref().unwrap()["fields"];
+            let audit = &reply.audit().fields;
             assert_eq!(audit["event"], "account.password_changed");
             assert_eq!(audit["outcome"], "success");
             let event = h.service.credentials.events().pop().unwrap();
@@ -2496,7 +2776,7 @@ mod tests {
             let reply = change(&h, &session, &device, "not my password at all", NEW).await;
             assert_eq!(reply.status, StatusCode::FORBIDDEN);
             assert!(reply.kind().ends_with(":current-password-wrong"));
-            let audit = &reply.audit.as_ref().unwrap()["fields"];
+            let audit = &reply.audit().fields;
             assert_eq!(audit["reason"], "current-password-wrong");
             for _ in 0..LIMIT {
                 remove(&h, &session, &device, "not my password at all").await;
@@ -2527,7 +2807,11 @@ mod tests {
             ] {
                 let reply = change(&h, &session, &device, GOOD, password).await;
                 assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY, "{password}");
-                assert_eq!(reply.body["weakness"], weakness, "{password}");
+                assert_eq!(
+                    reply.problem().weakness.as_deref(),
+                    Some(weakness),
+                    "{password}"
+                );
             }
             next_step(&h);
             let code = secret.code_at(now(&h));
@@ -2585,7 +2869,7 @@ mod tests {
             let (h, _passkey, session, secret, codes, device) = account_with_password().await;
             let reply = remove(&h, &session, &device, GOOD).await;
             assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
-            let audit = &reply.audit.as_ref().unwrap()["fields"];
+            let audit = &reply.audit().fields;
             assert_eq!(audit["event"], "account.password_removed");
             assert_eq!(
                 h.service.credentials.events().pop().unwrap().reason,
@@ -2622,7 +2906,7 @@ mod tests {
             let other = sign_in_to_account(&h, &mut passkey).await;
             let reply = change(&h, &session, &device, GOOD, NEW).await;
             assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
-            assert_eq!(reply.audit.as_ref().unwrap()["fields"]["revoked"], 1);
+            assert_eq!(reply.audit().fields["revoked"], FieldValue::Count(1));
             assert!(
                 page(&h, Some(&other.cookie))
                     .await
@@ -2691,7 +2975,11 @@ mod tests {
             post(
                 &h.app,
                 "/account/session/password",
-                json!({ "username": username, "password": password, "code": code }),
+                &PasswordLogin {
+                    username,
+                    password,
+                    code,
+                },
                 &cookies,
             )
             .await
@@ -2722,7 +3010,7 @@ mod tests {
             let device = dana_with_password(&h).await;
             let reply = account_sign_in(&h, "dana", GOOD, None, Some(&device)).await;
             assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
-            let audit = &reply.audit.as_ref().unwrap()["fields"];
+            let audit = &reply.audit().fields;
             assert_eq!(audit["event"], "account.sign_in");
             assert_eq!(audit["outcome"], "success");
             let session = Session {
@@ -2736,7 +3024,7 @@ mod tests {
             let reply = post(
                 &h.app,
                 "/account/passkeys/options",
-                json!({}),
+                &Empty {},
                 &session.cookies(),
             )
             .await;

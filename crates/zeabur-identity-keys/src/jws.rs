@@ -71,7 +71,7 @@ mod tests {
             assert_eq!(header.typ.as_deref(), Some("JWT"));
 
             let published: ExternalJwk =
-                serde_json::from_value(serde_json::to_value(key.jwk()).unwrap()).unwrap();
+                serde_json::from_slice(&serde_json::to_vec(&key.jwk()).unwrap()).unwrap();
             let decoding = DecodingKey::from_jwk(&published).unwrap();
             let expected = match alg {
                 Algorithm::Es256 => jsonwebtoken::Algorithm::ES256,

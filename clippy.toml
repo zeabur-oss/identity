@@ -20,3 +20,8 @@ disallowed-methods = [
   { path = "serde_json::Value::as_object_mut", reason = "build a known shape as a typed struct and serialise it" },
   { path = "serde_json::Value::as_array_mut", reason = "build a known shape as a typed struct and serialise it" },
 ]
+
+disallowed-types = [
+  { path = "serde_json::Value", reason = "model a known shape as a `k8s_openapi` type or a local `#[derive(Deserialize, Serialize)]` struct" },
+  { path = "kube::api::DynamicObject", reason = "use `Api<T>` with a typed resource, or `kube::core::Object<Spec, Status>` for a CRD" },
+]

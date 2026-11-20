@@ -41,9 +41,9 @@ pub struct Header {
     /// Media type of the token (RFC 8725 §3.11).
     #[serde(default)]
     pub typ: Option<String>,
-    /// Critical extensions; verification fails if present.
+    /// Critical extension names (RFC 7515 §4.1.11); verification fails if present.
     #[serde(default)]
-    pub crit: Option<serde_json::Value>,
+    pub crit: Option<Vec<String>>,
 }
 
 /// Why a token did not verify.
@@ -200,11 +200,47 @@ pub fn parse_jwk_set(json: &[u8]) -> Result<Vec<VerificationKey>, VerifyError> {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
+    use serde::{Deserialize, Serialize};
 
     use super::*;
     use crate::jws::sign_compact;
     use crate::signing::SigningKey;
+
+    /// The payload the tests sign.
+    #[derive(Serialize, Deserialize)]
+    struct Subject<'a> {
+        sub: &'a str,
+    }
+
+    /// A JWK set entry: one of ours, or a key a verifier must skip.
+    #[derive(Serialize)]
+    #[serde(untagged)]
+    enum Entry<'a> {
+        Ours(&'a crate::jwk::Jwk),
+        Foreign(ForeignJwk),
+    }
+
+    #[derive(Serialize)]
+    struct ForeignJwk {
+        kty: &'static str,
+        #[serde(rename = "use", skip_serializing_if = "Option::is_none")]
+        usage: Option<&'static str>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        crv: Option<&'static str>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        x: Option<&'static str>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        y: Option<&'static str>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        n: Option<&'static str>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        e: Option<&'static str>,
+    }
+
+    #[derive(Serialize)]
+    struct Set<'a> {
+        keys: Vec<Entry<'a>>,
+    }
 
     fn key(alg: Algorithm) -> (SigningKey, VerificationKey) {
         let signing = SigningKey::generate(alg).unwrap();
@@ -220,14 +256,12 @@ mod tests {
     fn verifies_both_algorithms_and_returns_the_payload() {
         for alg in Algorithm::ALL {
             let (signing, verification) = key(alg);
-            let token = sign_compact(&signing, "at+jwt", &json!({ "sub": "a" })).unwrap();
+            let token = sign_compact(&signing, "at+jwt", &Subject { sub: "a" }).unwrap();
             let (header, payload) =
                 verify_compact(&token, &[verification], &Algorithm::ALL).unwrap();
             assert_eq!(header.typ.as_deref(), Some("at+jwt"));
-            assert_eq!(
-                serde_json::from_slice::<serde_json::Value>(&payload).unwrap()["sub"],
-                "a"
-            );
+            let claims: Subject<'_> = serde_json::from_slice(&payload).unwrap();
+            assert_eq!(claims.sub, "a");
         }
     }
 
@@ -235,7 +269,7 @@ mod tests {
     fn rejects_tampering_wrong_keys_and_algorithms() {
         let (signing, verification) = key(Algorithm::Es256);
         let (_, other) = key(Algorithm::Es256);
-        let token = sign_compact(&signing, "JWT", &json!({ "sub": "a" })).unwrap();
+        let token = sign_compact(&signing, "JWT", &Subject { sub: "a" }).unwrap();
 
         let mut parts: Vec<&str> = token.split('.').collect();
         let forged = URL_SAFE_NO_PAD.encode(br#"{"sub":"b"}"#);
@@ -285,7 +319,12 @@ mod tests {
     #[test]
     fn an_rsa_key_never_verifies_an_es256_header() {
         let (rsa, rsa_verification) = key(Algorithm::Rs256);
-        let token = sign_compact(&rsa, "JWT", &json!({})).unwrap();
+        let token = sign_compact(
+            &rsa,
+            "JWT",
+            &std::collections::BTreeMap::<String, String>::new(),
+        )
+        .unwrap();
         // Same key material advertised for ES256: the algorithm binding rejects it.
         let mismatched = VerificationKey {
             alg: Algorithm::Es256,
@@ -298,14 +337,41 @@ mod tests {
     fn parses_a_jwk_set_and_skips_what_it_cannot_use() {
         let (es, es_v) = key(Algorithm::Es256);
         let (rs, rs_v) = key(Algorithm::Rs256);
-        let set = json!({ "keys": [
-            serde_json::to_value(es.jwk()).unwrap(),
-            serde_json::to_value(rs.jwk()).unwrap(),
-            { "kty": "OKP", "crv": "Ed25519", "x": "AA" },
-            { "kty": "RSA", "use": "enc", "n": "AQAB", "e": "AQAB" },
-            { "kty": "EC", "crv": "P-384", "x": "AA", "y": "AA" },
-        ]});
-        let keys = parse_jwk_set(set.to_string().as_bytes()).unwrap();
+        let (es_jwk, rs_jwk) = (es.jwk(), rs.jwk());
+        let set = Set {
+            keys: vec![
+                Entry::Ours(&es_jwk),
+                Entry::Ours(&rs_jwk),
+                Entry::Foreign(ForeignJwk {
+                    kty: "OKP",
+                    usage: None,
+                    crv: Some("Ed25519"),
+                    x: Some("AA"),
+                    y: None,
+                    n: None,
+                    e: None,
+                }),
+                Entry::Foreign(ForeignJwk {
+                    kty: "RSA",
+                    usage: Some("enc"),
+                    crv: None,
+                    x: None,
+                    y: None,
+                    n: Some("AQAB"),
+                    e: Some("AQAB"),
+                }),
+                Entry::Foreign(ForeignJwk {
+                    kty: "EC",
+                    usage: None,
+                    crv: Some("P-384"),
+                    x: Some("AA"),
+                    y: Some("AA"),
+                    n: None,
+                    e: None,
+                }),
+            ],
+        };
+        let keys = parse_jwk_set(&serde_json::to_vec(&set).unwrap()).unwrap();
         assert_eq!(keys, vec![es_v, rs_v]);
         assert!(parse_jwk_set(b"[]").is_err());
     }

@@ -118,12 +118,20 @@ pub fn definitions() -> Vec<CustomResourceDefinition> {
 ///
 /// Returns an error if serialization fails.
 pub fn definitions_json() -> serde_json::Result<String> {
-    let list = serde_json::json!({
-        "apiVersion": "v1",
-        "kind": "List",
-        "items": definitions(),
-    });
-    serde_json::to_string_pretty(&list)
+    serde_json::to_string_pretty(&DefinitionList {
+        api_version: "v1".to_owned(),
+        kind: "List".to_owned(),
+        items: definitions(),
+    })
+}
+
+/// A Kubernetes `List` of the definitions.
+#[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+struct DefinitionList {
+    #[serde(rename = "apiVersion")]
+    api_version: String,
+    kind: String,
+    items: Vec<CustomResourceDefinition>,
 }
 
 #[cfg(test)]
@@ -147,7 +155,7 @@ mod tests {
         // Compare parsed JSON: test builds may enable serde_json features (such as
         // `preserve_order`, through dev-dependencies) that change key order but not
         // content.
-        let parse = |s: &str| serde_json::from_str::<serde_json::Value>(s).unwrap();
+        let parse = |s: &str| serde_json::from_str::<DefinitionList>(s).unwrap();
         assert!(
             committed.ends_with('\n') && parse(committed) == parse(&definitions_json().unwrap()),
             "deploy/crds.json is stale: run `cargo run -q -- crds > deploy/crds.json`"

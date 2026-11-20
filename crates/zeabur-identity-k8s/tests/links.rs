@@ -2,16 +2,27 @@
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
     use axum::body::Body;
     use axum::extract::State;
     use axum::http::{Method, Request, StatusCode};
+    use axum::response::{IntoResponse as _, Response};
     use axum::{Json, Router};
     use http_body_util::BodyExt as _;
-    use serde_json::{Value, json};
-    use zeabur_identity_api::user::AccountType;
+    use k8s_openapi::api::core::v1::{Event, Secret};
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ListMeta, OwnerReference};
+    use kube::Resource;
+    use kube::api::ObjectMeta;
+    use kube::core::{ObjectList, Status, TypeMeta};
+    use serde::Serialize;
+    use serde::de::DeserializeOwned;
+    use zeabur_identity_api::USER_LABEL;
+    use zeabur_identity_api::credential::{Credential, CredentialKind, CredentialSpec, Passkey};
+    use zeabur_identity_api::invitation::Invitation;
+    use zeabur_identity_api::user::{AccountType, User as UserObject, UserSpec};
     use zeabur_identity_core::clock::UnixTime;
     use zeabur_identity_core::config::BaseUrl;
     use zeabur_identity_k8s::invitations::{Invitee, invite};
@@ -22,83 +33,151 @@ mod tests {
     #[derive(Default)]
     struct Backend {
         /// Credentials of alice, as listed.
-        credentials: Vec<Value>,
+        credentials: Vec<Credential>,
         /// Writes, as `(method, last path segment)`, in order.
         writes: Vec<(Method, String)>,
         /// Events created.
-        events: Vec<Value>,
+        events: Vec<Event>,
         /// Refuse to create events.
         refuse_events: bool,
+    }
+
+    /// A `Status` with the `kind` that clients look for.
+    #[derive(Serialize)]
+    struct StatusBody {
+        #[serde(flatten)]
+        types: TypeMeta,
+        #[serde(flatten)]
+        status: Status,
+    }
+
+    fn status(code: StatusCode, status: Status) -> Response {
+        (code, Json(status_body(status.with_code(code.as_u16())))).into_response()
+    }
+
+    fn status_body(status: Status) -> StatusBody {
+        StatusBody {
+            types: TypeMeta {
+                api_version: "v1".into(),
+                kind: "Status".into(),
+            },
+            status,
+        }
+    }
+
+    fn ok<T: Serialize>(value: &T) -> Response {
+        (StatusCode::OK, Json(value)).into_response()
+    }
+
+    /// The object as the API server stores a new one.
+    fn store_new<T: Resource + DeserializeOwned + Serialize>(bytes: &[u8]) -> Response {
+        let mut object: T = serde_json::from_slice(bytes).unwrap();
+        object.meta_mut().uid = Some("uid-object".into());
+        object.meta_mut().resource_version = Some("1".into());
+        (StatusCode::CREATED, Json(object)).into_response()
     }
 
     async fn kubernetes(
         State(state): State<Arc<Mutex<Backend>>>,
         request: Request<Body>,
-    ) -> (StatusCode, Json<Value>) {
+    ) -> Response {
         let method = request.method().clone();
         let path = request.uri().path().to_owned();
         let bytes = request.into_body().collect().await.unwrap().to_bytes();
-        let body: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
         let segment = path.rsplit('/').next().unwrap().to_owned();
         if method != Method::GET {
             let write = (method.clone(), segment.clone());
             state.lock().unwrap().writes.push(write);
         }
-        let ok = |value| (StatusCode::OK, Json(value));
         let not_found = || {
-            (
+            status(
                 StatusCode::NOT_FOUND,
-                Json(json!({"apiVersion":"v1","kind":"Status","status":"Failure",
-                    "code":404,"reason":"NotFound","message":"not found"})),
+                Status::failure("not found", "NotFound"),
             )
         };
         match (method, segment.as_str()) {
-            (Method::GET, "alice") => ok(json!({"apiVersion":"identity.zeabur.com/v1alpha1",
-                "kind":"User", "metadata":{"name":"alice","uid":"uid-alice"},
-                "spec":{"username":"alice","accountType":"Regular","disabled":false}})),
-            (Method::GET, "credentials") => ok(json!({"apiVersion":"identity.zeabur.com/v1alpha1",
-                "kind":"CredentialList","metadata":{},"items":state.lock().unwrap().credentials})),
-            (Method::DELETE, "invitations" | "grants") => {
-                ok(json!({"apiVersion":"v1","kind":"Status","status":"Success"}))
+            (Method::GET, "alice") => {
+                let mut user = UserObject::new(
+                    "alice",
+                    UserSpec {
+                        username: "alice".into(),
+                        ..UserSpec::default()
+                    },
+                );
+                user.metadata.uid = Some("uid-alice".into());
+                ok(&user)
             }
+            (Method::GET, "credentials") => ok(&ObjectList {
+                types: TypeMeta {
+                    api_version: "identity.zeabur.com/v1alpha1".into(),
+                    kind: "CredentialList".into(),
+                },
+                metadata: ListMeta::default(),
+                items: state.lock().unwrap().credentials.clone(),
+            }),
+            (Method::DELETE, "invitations" | "grants") => ok(&status_body(Status::success())),
             (Method::DELETE, "credentials") => {
                 state.lock().unwrap().credentials.clear();
-                ok(json!({"apiVersion":"v1","kind":"Status","status":"Success"}))
+                ok(&status_body(Status::success()))
             }
             (Method::GET, "zeabur-identity-setup") => not_found(),
-            (Method::POST, "secrets" | "invitations") => {
-                let mut object = body;
-                object["metadata"]["uid"] = json!("uid-object");
-                object["metadata"]["resourceVersion"] = json!("1");
-                (StatusCode::CREATED, Json(object))
-            }
+            (Method::POST, "secrets") => store_new::<Secret>(&bytes),
+            (Method::POST, "invitations") => store_new::<Invitation>(&bytes),
             (Method::POST, "events") => {
                 let mut state = state.lock().unwrap();
                 if state.refuse_events {
-                    return (
+                    return status(
                         StatusCode::FORBIDDEN,
-                        Json(json!({"apiVersion":"v1","kind":"Status","status":"Failure",
-                            "code":403,"reason":"Forbidden","message":"forbidden"})),
+                        Status::failure("forbidden", "Forbidden"),
                     );
                 }
-                state.events.push(body.clone());
+                state.events.push(serde_json::from_slice(&bytes).unwrap());
                 drop(state);
-                (StatusCode::CREATED, Json(body))
+                (
+                    StatusCode::CREATED,
+                    [(axum::http::header::CONTENT_TYPE, "application/json")],
+                    bytes,
+                )
+                    .into_response()
             }
             unexpected => panic!("unexpected Kubernetes request: {unexpected:?} {path}"),
         }
     }
 
-    fn credential(owner: &str) -> Value {
-        json!({"metadata":{"name":format!("cred-{owner}"),
-            "labels":{"identity.zeabur.com/user":"alice"},
-            "ownerReferences":[{"apiVersion":"identity.zeabur.com/v1alpha1","kind":"User",
-                "name":"alice","uid":owner}]},
-            "spec":{"user":"alice",
-                "passkey":{"credentialId":"YWJj","record":"{}","backupEligible":false}}})
+    fn credential(owner: &str) -> Credential {
+        let mut object = Credential::new(
+            &format!("cred-{owner}"),
+            CredentialSpec {
+                user: "alice".into(),
+                kind: CredentialKind::Passkey(Passkey {
+                    credential_id: "YWJj".into(),
+                    record: "{}".into(),
+                    backup_eligible: false,
+                    aaguid: None,
+                    label: None,
+                }),
+            },
+        );
+        object.metadata = ObjectMeta {
+            name: object.metadata.name,
+            labels: Some(BTreeMap::from([(
+                USER_LABEL.to_owned(),
+                "alice".to_owned(),
+            )])),
+            owner_references: Some(vec![OwnerReference {
+                api_version: "identity.zeabur.com/v1alpha1".into(),
+                kind: "User".into(),
+                name: "alice".into(),
+                uid: owner.into(),
+                controller: None,
+                block_owner_deletion: None,
+            }]),
+            ..ObjectMeta::default()
+        };
+        object
     }
 
-    async fn fake(credentials: Vec<Value>) -> (kube::Client, Arc<Mutex<Backend>>) {
+    async fn fake(credentials: Vec<Credential>) -> (kube::Client, Arc<Mutex<Backend>>) {
         let state = Arc::new(Mutex::new(Backend {
             credentials,
             ..Backend::default()
@@ -251,17 +330,21 @@ mod tests {
             let events = state.lock().unwrap().events.clone();
             let event = events
                 .iter()
-                .find(|event| event["reason"] == reason)
+                .find(|event| event.reason.as_deref() == Some(reason))
                 .unwrap_or_else(|| panic!("{link:?}: no {reason} event in {events:?}"));
-            let user = &event["involvedObject"];
+            let user = &event.involved_object;
             assert_eq!(
-                (&user["kind"], &user["name"], &user["uid"]),
-                (&json!("User"), &json!("alice"), &json!("uid-alice")),
+                (
+                    user.kind.as_deref(),
+                    user.name.as_deref(),
+                    user.uid.as_deref()
+                ),
+                (Some("User"), Some("alice"), Some("uid-alice")),
                 "{link:?}"
             );
             assert!(
-                event["message"].as_str().unwrap().contains("reset=true"),
-                "{link:?}: {event}"
+                event.message.as_deref().unwrap().contains("reset=true"),
+                "{link:?}: {event:?}"
             );
         }
     }

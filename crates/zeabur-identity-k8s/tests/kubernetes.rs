@@ -16,17 +16,24 @@ mod tests {
     use std::time::Duration;
 
     use k8s_openapi::api::core::v1::{Namespace, Secret, ServiceAccount};
-    use k8s_openapi::api::rbac::v1::{Role, RoleBinding};
+    use k8s_openapi::api::rbac::v1::{ClusterRoleBinding, Role, RoleBinding, RoleRef, Subject};
     use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
-    use kube::api::{Api, DeleteParams, ListParams, ObjectMeta, PostParams};
+    use kube::api::{Api, ApiResource, DeleteParams, ListParams, ObjectMeta, PostParams};
+    use kube::core::Object;
+    use kube::core::object::NotUsed;
     use kube::{Client, Config, ResourceExt as _};
+    use serde::{Deserialize, Serialize};
     use tokio::sync::{Barrier, watch};
     use zeabur_identity_api::client::{ClientType, OAuthClient, OAuthClientSpec};
+    use zeabur_identity_api::credential::Passkey;
     use zeabur_identity_api::grant::{Grant, GrantSpec, GrantStatus};
+    use zeabur_identity_api::upstream::ExternalId;
+    use zeabur_identity_api::upstream_provider::GitHub;
     use zeabur_identity_api::user::{AccountType, User, UserSpec};
     use zeabur_identity_api::{EXPIRES_AT_ANNOTATION, EXPIRY_BUCKET_LABEL, definitions};
     use zeabur_identity_core::clock::SystemClock;
     use zeabur_identity_k8s::keys::SecretKeyStore;
+    use zeabur_identity_k8s::manifest::Manifest;
     use zeabur_identity_k8s::objects::{
         CreateOutcome, DeleteOutcome, ReplaceOutcome, create_once, delete_if_unchanged,
         replace_status_if_unchanged, status_code,
@@ -36,6 +43,82 @@ mod tests {
     use zeabur_identity_keys::rotation::RotationPolicy;
 
     const RACERS: usize = 64;
+
+    /// The members of the published JWK set that the tests read.
+    #[derive(Deserialize)]
+    struct Published {
+        keys: Vec<PublishedKey>,
+    }
+
+    #[derive(Deserialize)]
+    struct PublishedKey {
+        kid: String,
+    }
+
+    /// The members of the token endpoint's reply that the tests read.
+    #[derive(Deserialize)]
+    struct TokenReply {
+        refresh_token: Option<String>,
+        error: Option<String>,
+    }
+
+    /// A provider spec that the typed `UpstreamProviderSpec` cannot build, to put invalid
+    /// combinations of fields in front of admission.
+    #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct LooseProvider {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        client_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        github: Option<GitHub>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        openid: Option<LooseOpenId>,
+    }
+
+    /// `LooseProvider.openid`, with every member optional and `mfa` any string.
+    #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct LooseOpenId {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        issuer: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        display_name: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        scopes: Option<Vec<String>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        mfa: Option<String>,
+    }
+
+    /// A credential spec with `user`, `external` and `passkey` all optional.
+    #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+    struct LooseCredential {
+        user: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        external: Option<ExternalId>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        passkey: Option<Passkey>,
+    }
+
+    /// A merge patch of `spec`.
+    #[derive(Debug, Serialize)]
+    struct SpecPatch<S> {
+        spec: S,
+    }
+
+    #[derive(Debug, Serialize)]
+    struct UserPatch {
+        user: String,
+    }
+
+    #[derive(Debug, Serialize)]
+    struct OpenIdPatch {
+        openid: IssuerPatch,
+    }
+
+    #[derive(Debug, Serialize)]
+    struct IssuerPatch {
+        issuer: String,
+    }
 
     struct Env {
         admin: Client,
@@ -142,52 +225,51 @@ mod tests {
     }
 
     async fn install_rbac(admin: &Client, namespace: &str) {
-        for value in rbac::manifests(namespace).unwrap() {
-            let pp = PostParams::default();
-            match value["kind"].as_str().unwrap() {
-                "Namespace" => {
+        let pp = PostParams::default();
+        for manifest in rbac::manifests(namespace) {
+            match manifest {
+                Manifest::Namespace(object) => {
                     Api::<Namespace>::all(admin.clone())
-                        .create(&pp, &serde_json::from_value(value).unwrap())
+                        .create(&pp, &object)
                         .await
                         .unwrap();
                 }
-                "ServiceAccount" => {
+                Manifest::ServiceAccount(object) => {
                     Api::<ServiceAccount>::namespaced(admin.clone(), namespace)
-                        .create(&pp, &serde_json::from_value(value).unwrap())
+                        .create(&pp, &object)
                         .await
                         .unwrap();
                 }
-                "Role" => {
+                Manifest::Role(object) => {
                     Api::<Role>::namespaced(admin.clone(), namespace)
-                        .create(&pp, &serde_json::from_value(value).unwrap())
+                        .create(&pp, &object)
                         .await
                         .unwrap();
                 }
-                "RoleBinding" => {
+                Manifest::RoleBinding(object) => {
                     Api::<RoleBinding>::namespaced(admin.clone(), namespace)
-                        .create(&pp, &serde_json::from_value(value).unwrap())
+                        .create(&pp, &object)
                         .await
                         .unwrap();
                 }
-                "Secret" => {
+                Manifest::Secret(object) => {
                     Api::<Secret>::namespaced(admin.clone(), namespace)
-                        .create(&pp, &serde_json::from_value(value).unwrap())
+                        .create(&pp, &object)
                         .await
                         .unwrap();
                 }
-                "ClusterRoleBinding" => {
+                Manifest::ClusterRoleBinding(object) => {
                     // Cluster-scoped and identical for every test namespace: create once.
-                    let binding: k8s_openapi::api::rbac::v1::ClusterRoleBinding =
-                        serde_json::from_value(value).unwrap();
-                    if let Err(error) =
-                        Api::<k8s_openapi::api::rbac::v1::ClusterRoleBinding>::all(admin.clone())
-                            .create(&pp, &binding)
-                            .await
+                    if let Err(error) = Api::<ClusterRoleBinding>::all(admin.clone())
+                        .create(&pp, &object)
+                        .await
                     {
                         assert_eq!(status_code(&error), Some(409), "{error}");
                     }
                 }
-                other => panic!("unexpected kind {other}"),
+                Manifest::Service(_) | Manifest::Deployment(_) => {
+                    panic!("rbac::manifests has no Service or Deployment")
+                }
             }
         }
     }
@@ -596,12 +678,22 @@ mod tests {
         );
         // Denied: changing RBAC, which could grant anyone anything.
         let bindings: Api<RoleBinding> = env.zeabur_identity_api();
-        let binding: RoleBinding = serde_json::from_value(serde_json::json!({
-            "metadata": {"name": "escalate"},
-            "roleRef": {"apiGroup": "rbac.authorization.k8s.io", "kind": "ClusterRole", "name": "cluster-admin"},
-            "subjects": [{"kind": "Group", "name": "system:authenticated"}]
-        }))
-        .unwrap();
+        let binding = RoleBinding {
+            metadata: ObjectMeta {
+                name: Some("escalate".into()),
+                ..ObjectMeta::default()
+            },
+            role_ref: RoleRef {
+                api_group: "rbac.authorization.k8s.io".into(),
+                kind: "ClusterRole".into(),
+                name: "cluster-admin".into(),
+            },
+            subjects: Some(vec![Subject {
+                kind: "Group".into(),
+                name: "system:authenticated".into(),
+                ..Subject::default()
+            }]),
+        };
         assert_eq!(
             status_code(
                 &bindings
@@ -648,13 +740,8 @@ mod tests {
         let store = || SecretKeyStore::new(env.zeabur_identity_api(), KEY_SECRET);
         let kids = |manager: &KeyManager<SecretKeyStore, SystemClock>| {
             let published = manager.subscribe().borrow().clone().unwrap();
-            let set: serde_json::Value = serde_json::from_slice(&published.jwks()).unwrap();
-            let mut kids: Vec<String> = set["keys"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|k| k["kid"].as_str().unwrap().to_owned())
-                .collect();
+            let set: Published = serde_json::from_slice(&published.jwks()).unwrap();
+            let mut kids: Vec<String> = set.keys.into_iter().map(|key| key.kid).collect();
             kids.sort();
             kids
         };
@@ -1162,8 +1249,8 @@ mod tests {
         ]))
         .await;
         assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
-        let tokens: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        let first = tokens["refresh_token"].as_str().unwrap().to_owned();
+        let tokens: TokenReply = serde_json::from_slice(&body).unwrap();
+        let first = tokens.refresh_token.unwrap();
         let grant_name = first.split('.').next().unwrap().to_owned();
         let stored = env.admin_api::<Grant>().get(&grant_name).await.unwrap();
         assert!(
@@ -1184,10 +1271,10 @@ mod tests {
         ]))
         .await;
         assert_eq!(status, 200);
-        let second = serde_json::from_slice::<serde_json::Value>(&body).unwrap()["refresh_token"]
-            .as_str()
+        let second = serde_json::from_slice::<TokenReply>(&body)
             .unwrap()
-            .to_owned();
+            .refresh_token
+            .unwrap();
 
         // Replay of the first token deletes the Grant object.
         let (status, ..) = call(form(&[
@@ -1227,8 +1314,8 @@ mod tests {
                 ("client_secret", presented),
             ]))
             .await;
-            let error: serde_json::Value = serde_json::from_slice(&body).unwrap();
-            assert_eq!(error["error"], expected);
+            let error: TokenReply = serde_json::from_slice(&body).unwrap();
+            assert_eq!(error.error.as_deref(), Some(expected));
         }
         drop(app);
         drop(server);
@@ -1700,23 +1787,22 @@ mod tests {
         env.cleanup().await;
     }
 
-    /// Runs `kubectl` with `stdin`; returns whether it succeeded and its stderr.
-    /// Creates `value` with `api` and expects the API server to refuse it with 422.
-    async fn refused(api: &Api<kube::api::DynamicObject>, value: serde_json::Value, case: &str) {
-        let object: kube::api::DynamicObject = serde_json::from_value(value).unwrap();
+    /// Creates `spec` as `name` with `api` and expects the API server to refuse it with 422.
+    async fn refused<S>(
+        api: &Api<Object<S, NotUsed>>,
+        resource: &ApiResource,
+        name: &str,
+        spec: S,
+        case: &str,
+    ) where
+        S: Clone + std::fmt::Debug + Serialize + serde::de::DeserializeOwned,
+    {
+        let object = Object::<S, NotUsed>::new(name, resource, spec);
         let error = api
             .create(&PostParams::default(), &object)
             .await
             .unwrap_err();
         assert_eq!(status_code(&error), Some(422), "{case}: {error}");
-    }
-
-    fn dynamic_api(
-        client: &Client,
-        namespace: &str,
-        resource: &kube::api::ApiResource,
-    ) -> Api<kube::api::DynamicObject> {
-        Api::namespaced_with(client.clone(), namespace, resource)
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1726,118 +1812,199 @@ mod tests {
         reason = "one admission and access table per kind"
     )]
     async fn upstream_providers_admit_only_fitting_fields_and_are_read_only() {
-        use kube::api::{ApiResource, Patch, PatchParams};
-        use serde_json::json;
-        use zeabur_identity_api::credential::Credential;
-        use zeabur_identity_api::upstream_provider::{SECRET, UpstreamProvider};
+        use kube::api::{Patch, PatchParams};
+        use zeabur_identity_api::credential::{Credential, CredentialKind, CredentialSpec};
+        use zeabur_identity_api::upstream::{ExternalId, Issuer, Subject};
+        use zeabur_identity_api::upstream_provider::{
+            Mfa, OpenID, SECRET, UpstreamKind, UpstreamProvider, UpstreamProviderSpec,
+        };
 
         let env = Env::new().await;
-        let providers = dynamic_api(
-            &env.admin,
-            &env.namespace,
-            &ApiResource::erase::<UpstreamProvider>(&()),
-        );
-        let provider = |name: &str, spec: serde_json::Value| {
-            json!({"apiVersion": "identity.zeabur.com/v1alpha1", "kind": "UpstreamProvider",
-                "metadata": {"name": name}, "spec": spec})
+        let provider_resource = ApiResource::erase::<UpstreamProvider>(&());
+        let providers: Api<Object<LooseProvider, NotUsed>> =
+            Api::namespaced_with(env.admin.clone(), &env.namespace, &provider_resource);
+        let github = UpstreamProviderSpec {
+            client_id: "Iv1.abc".into(),
+            kind: UpstreamKind::GitHub(GitHub {}),
         };
-        let github = json!({"clientId": "Iv1.abc", "github": {}});
-        let keycloak = json!({"clientId": "identity", "openid": {
-            "issuer": "https://sso.example/realms/dev", "displayName": "Keycloak",
-            "scopes": ["profile"], "mfa": "Enforced"}});
-        let unnamed = json!({"clientId": "identity", "openid": {"issuer": "https://sso.example"}});
+        let keycloak = UpstreamProviderSpec {
+            client_id: "identity".into(),
+            kind: UpstreamKind::OpenID(OpenID {
+                issuer: "https://sso.example/realms/dev".into(),
+                display_name: Some("Keycloak".into()),
+                scopes: Some(vec!["profile".into()]),
+                mfa: Mfa::Enforced,
+            }),
+        };
+        let unnamed = UpstreamProviderSpec {
+            client_id: "identity".into(),
+            kind: UpstreamKind::OpenID(OpenID {
+                issuer: "https://sso.example".into(),
+                display_name: None,
+                scopes: None,
+                mfa: Mfa::default(),
+            }),
+        };
+        let admin_providers: Api<UpstreamProvider> = env.admin_api();
         for (name, spec) in [
             ("github", &github),
             ("keycloak", &keycloak),
             ("unnamed", &unnamed),
         ] {
-            let object: kube::api::DynamicObject =
-                serde_json::from_value(provider(name, spec.clone())).unwrap();
-            providers
-                .create(&PostParams::default(), &object)
+            admin_providers
+                .create(
+                    &PostParams::default(),
+                    &UpstreamProvider::new(name, spec.clone()),
+                )
                 .await
                 .unwrap();
         }
-        let openid = |field: &str, value: serde_json::Value| {
-            let mut spec = keycloak.clone();
-            spec["openid"][field] = value;
+        let loose_github = LooseProvider {
+            client_id: Some("Iv1.abc".into()),
+            github: Some(GitHub {}),
+            openid: None,
+        };
+        let loose_keycloak = LooseProvider {
+            client_id: Some("identity".into()),
+            github: None,
+            openid: Some(LooseOpenId {
+                issuer: Some("https://sso.example/realms/dev".into()),
+                display_name: Some("Keycloak".into()),
+                scopes: Some(vec!["profile".into()]),
+                mfa: Some("Enforced".into()),
+            }),
+        };
+        let openid = |change: fn(&mut LooseOpenId)| {
+            let mut spec = loose_keycloak.clone();
+            change(spec.openid.as_mut().unwrap());
             spec
         };
+        let client = |client_id: Option<&str>| LooseProvider {
+            client_id: client_id.map(Into::into),
+            ..LooseProvider::default()
+        };
         for (case, name, spec) in [
-            ("neither kind", "a", json!({"clientId": "c"})),
+            ("neither kind", "a", client(Some("c"))),
             (
                 "both kinds",
                 "b",
-                json!({"clientId": "c", "github": {}, "openid": {"issuer": "https://sso.example"}}),
+                LooseProvider {
+                    github: Some(GitHub {}),
+                    openid: Some(LooseOpenId {
+                        issuer: Some("https://sso.example".into()),
+                        ..LooseOpenId::default()
+                    }),
+                    ..client(Some("c"))
+                },
             ),
             (
                 "openid without issuer",
                 "c",
-                json!({"clientId": "c", "openid": {}}),
+                LooseProvider {
+                    openid: Some(LooseOpenId::default()),
+                    ..client(Some("c"))
+                },
             ),
-            ("no client ID", "d", json!({"github": {}})),
+            (
+                "no client ID",
+                "d",
+                LooseProvider {
+                    github: Some(GitHub {}),
+                    ..client(None)
+                },
+            ),
             (
                 "http issuer",
                 "f",
-                openid("issuer", json!("http://sso.example")),
+                openid(|o| o.issuer = Some("http://sso.example".into())),
             ),
             (
                 "issuer with a query",
                 "g",
-                openid("issuer", json!("https://sso.example?x=1")),
+                openid(|o| o.issuer = Some("https://sso.example?x=1".into())),
             ),
             (
                 "issuer with a fragment",
                 "h",
-                openid("issuer", json!("https://sso.example#x")),
+                openid(|o| o.issuer = Some("https://sso.example#x".into())),
             ),
             (
                 "issuer with user information",
                 "i",
-                openid("issuer", json!("https://u@sso.example")),
+                openid(|o| o.issuer = Some("https://u@sso.example".into())),
             ),
-            ("scope with a space", "j", openid("scopes", json!(["a b"]))),
-            ("empty display name", "k", openid("displayName", json!(""))),
-            ("mfa in lowercase", "m", openid("mfa", json!("enforced"))),
+            (
+                "scope with a space",
+                "j",
+                openid(|o| o.scopes = Some(vec!["a b".into()])),
+            ),
+            (
+                "empty display name",
+                "k",
+                openid(|o| o.display_name = Some(String::new())),
+            ),
+            (
+                "mfa in lowercase",
+                "m",
+                openid(|o| o.mfa = Some("enforced".into())),
+            ),
             (
                 "empty client ID",
                 "l",
-                json!({"clientId": "", "github": {}}),
+                LooseProvider {
+                    github: Some(GitHub {}),
+                    ..client(Some(""))
+                },
             ),
-            ("name with a capital", "GitHub", github.clone()),
-            ("name with a dot", "git.hub", github.clone()),
-            ("name ending in a dash", "github-", github.clone()),
+            ("name with a capital", "GitHub", loose_github.clone()),
+            ("name with a dot", "git.hub", loose_github.clone()),
+            ("name ending in a dash", "github-", loose_github.clone()),
         ] {
-            refused(&providers, provider(name, spec), case).await;
+            refused(&providers, &provider_resource, name, spec, case).await;
         }
 
         // Credentials: exactly one of passkey and external.
-        let credentials = dynamic_api(
-            &env.admin,
-            &env.namespace,
-            &ApiResource::erase::<Credential>(&()),
-        );
-        let credential = |name: &str, spec: serde_json::Value| {
-            json!({"apiVersion": "identity.zeabur.com/v1alpha1", "kind": "Credential",
-                "metadata": {"name": name}, "spec": spec})
+        let credential_resource = ApiResource::erase::<Credential>(&());
+        let credentials: Api<Object<LooseCredential, NotUsed>> =
+            Api::namespaced_with(env.admin.clone(), &env.namespace, &credential_resource);
+        let external = ExternalId {
+            issuer: Issuer::new("https://github.com").unwrap(),
+            subject: Subject::new("1").unwrap(),
         };
-        let external = json!({"issuer": "https://github.com", "subject": "1"});
-        let passkey = json!({"credentialId": "AAEC", "record": "{}"});
+        let passkey = Passkey {
+            credential_id: "AAEC".into(),
+            record: "{}".into(),
+            backup_eligible: false,
+            aaguid: None,
+            label: None,
+        };
         for (case, spec) in [
-            ("neither", json!({"user": "alice"})),
+            (
+                "neither",
+                LooseCredential {
+                    user: "alice".into(),
+                    ..LooseCredential::default()
+                },
+            ),
             (
                 "both",
-                json!({"user": "alice", "external": external, "passkey": passkey}),
+                LooseCredential {
+                    user: "alice".into(),
+                    external: Some(external.clone()),
+                    passkey: Some(passkey),
+                },
             ),
         ] {
-            refused(&credentials, credential("c-refused", spec), case).await;
+            refused(&credentials, &credential_resource, "c-refused", spec, case).await;
         }
-        let linked: kube::api::DynamicObject = serde_json::from_value(credential(
+        let linked = Credential::new(
             "c-linked",
-            json!({"user": "alice", "external": external}),
-        ))
-        .unwrap();
-        credentials
+            CredentialSpec {
+                user: "alice".into(),
+                kind: CredentialKind::External(external),
+            },
+        );
+        env.admin_api::<Credential>()
             .create(&PostParams::default(), &linked)
             .await
             .unwrap();
@@ -1846,8 +2013,7 @@ mod tests {
         let as_identity: Api<UpstreamProvider> = env.zeabur_identity_api();
         assert!(as_identity.get("keycloak").await.is_ok());
         assert!(as_identity.list(&ListParams::default()).await.is_ok());
-        let new: UpstreamProvider =
-            serde_json::from_value(provider("other", github.clone())).unwrap();
+        let new = UpstreamProvider::new("other", github.clone());
         assert_eq!(
             status_code(
                 &as_identity
@@ -1871,17 +2037,18 @@ mod tests {
             status_code(&secrets.get(SECRET).await.unwrap_err()),
             Some(404)
         );
-        let identity_credentials = dynamic_api(
-            &env.identity,
-            &env.namespace,
-            &ApiResource::erase::<Credential>(&()),
-        );
+        let identity_credentials: Api<Credential> =
+            Api::namespaced(env.identity.clone(), &env.namespace);
         // Zeabur Identity cannot change a credential; the account owner deletes it instead.
         let error = identity_credentials
             .patch(
                 "c-linked",
                 &PatchParams::default(),
-                &Patch::Merge(&json!({"spec": {"user": "mallory"}})),
+                &Patch::Merge(&SpecPatch {
+                    spec: UserPatch {
+                        user: "mallory".into(),
+                    },
+                }),
             )
             .await
             .unwrap_err();
@@ -1897,8 +2064,9 @@ mod tests {
     async fn provider_changes_and_secret_rotation_are_seen_without_a_restart() {
         use k8s_openapi::ByteString;
         use kube::api::{Patch, PatchParams};
-        use serde_json::json;
-        use zeabur_identity_api::upstream_provider::{SECRET, UpstreamKind, UpstreamProvider};
+        use zeabur_identity_api::upstream_provider::{
+            Mfa, OpenID, SECRET, UpstreamKind, UpstreamProvider, UpstreamProviderSpec,
+        };
         use zeabur_identity_k8s::upstream;
 
         let env = Env::new().await;
@@ -1933,11 +2101,18 @@ mod tests {
 
         let providers: Api<UpstreamProvider> = env.admin_api();
         let keycloak = |issuer: &str| -> UpstreamProvider {
-            serde_json::from_value(json!({"apiVersion": "identity.zeabur.com/v1alpha1",
-                "kind": "UpstreamProvider", "metadata": {"name": "keycloak"},
-                "spec": {"clientId": "identity",
-                    "openid": {"issuer": issuer, "displayName": "Keycloak"}}}))
-            .unwrap()
+            UpstreamProvider::new(
+                "keycloak",
+                UpstreamProviderSpec {
+                    client_id: "identity".into(),
+                    kind: UpstreamKind::OpenID(OpenID {
+                        issuer: issuer.into(),
+                        display_name: Some("Keycloak".into()),
+                        scopes: None,
+                        mfa: Mfa::default(),
+                    }),
+                },
+            )
         };
         providers
             .create(
@@ -1951,9 +2126,13 @@ mod tests {
             .patch(
                 "keycloak",
                 &PatchParams::default(),
-                &Patch::Merge(
-                    json!({"spec": {"openid": {"issuer": "https://sso.example/realms/b"}}}),
-                ),
+                &Patch::Merge(&SpecPatch {
+                    spec: OpenIdPatch {
+                        openid: IssuerPatch {
+                            issuer: "https://sso.example/realms/b".into(),
+                        },
+                    },
+                }),
             )
             .await
             .unwrap();

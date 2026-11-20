@@ -144,6 +144,7 @@ fn client_secret(secrets: Api<Secret>, key: String) -> ClientSecret {
 #[cfg(test)]
 mod tests {
     use kube::api::ObjectMeta;
+    use zeabur_identity_api::upstream_provider::{GitHub, OpenID};
 
     use super::*;
 
@@ -153,30 +154,43 @@ mod tests {
         Api::namespaced(kube::Client::try_from(config).unwrap(), "default")
     }
 
-    fn object(name: &str, spec: serde_json::Value) -> UpstreamProvider {
+    fn object(name: &str, spec: UpstreamProviderSpec) -> UpstreamProvider {
         UpstreamProvider {
             metadata: ObjectMeta {
                 name: Some(name.to_owned()),
                 ..ObjectMeta::default()
             },
-            spec: serde_json::from_value(spec).unwrap(),
+            spec,
+        }
+    }
+
+    fn openid(client_id: &str, issuer: &str) -> UpstreamProviderSpec {
+        UpstreamProviderSpec {
+            client_id: client_id.to_owned(),
+            kind: UpstreamKind::OpenID(OpenID {
+                issuer: issuer.to_owned(),
+                display_name: None,
+                scopes: None,
+                mfa: Mfa::Unknown,
+            }),
         }
     }
 
     fn keycloak(issuer: &str) -> UpstreamProvider {
-        object(
-            "keycloak",
-            serde_json::json!({
-                "clientId": "identity",
-                "openid": {"issuer": issuer, "displayName": "Keycloak"},
-            }),
-        )
+        let mut spec = openid("identity", issuer);
+        if let UpstreamKind::OpenID(openid) = &mut spec.kind {
+            openid.display_name = Some("Keycloak".to_owned());
+        }
+        object("keycloak", spec)
     }
 
     fn github() -> UpstreamProvider {
         object(
             "github",
-            serde_json::json!({"clientId": "Iv1.abc", "github": {}}),
+            UpstreamProviderSpec {
+                client_id: "Iv1.abc".to_owned(),
+                kind: UpstreamKind::GitHub(GitHub {}),
+            },
         )
     }
 
@@ -184,21 +198,13 @@ mod tests {
     async fn usable_objects_are_published_and_unusable_ones_left_out() {
         let registry = Arc::new(Providers::default());
         let mut builder = Builder::new(secrets(), Arc::clone(&registry));
-        let bad_issuer = object(
-            "bad",
-            serde_json::json!({"clientId": "c", "openid": {"issuer": "http://idp.example"}}),
-        );
-        let bad_scope = object(
-            "scopes",
-            serde_json::json!({
-                "clientId": "c",
-                "openid": {"issuer": "https://idp.example", "scopes": ["a b"]},
-            }),
-        );
-        let unnamed = object(
-            "corp",
-            serde_json::json!({"clientId": "c", "openid": {"issuer": "https://corp.example"}}),
-        );
+        let bad_issuer = object("bad", openid("c", "http://idp.example"));
+        let mut scoped = openid("c", "https://idp.example");
+        if let UpstreamKind::OpenID(openid) = &mut scoped.kind {
+            openid.scopes = Some(vec!["a b".to_owned()]);
+        }
+        let bad_scope = object("scopes", scoped);
+        let unnamed = object("corp", openid("c", "https://corp.example"));
         builder.publish(&[
             bad_issuer,
             unnamed,

@@ -28,6 +28,7 @@ k8s-openapi.workspace = true
 kube.workspace = true
 passkey.workspace = true
 rustls.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 tokio-rustls.workspace = true

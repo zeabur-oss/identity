@@ -80,6 +80,8 @@ use k8s_openapi::api::core::v1::{Secret, Service};
 use kube::Client;
 use kube::api::{Api, Patch, PatchParams};
 use kube::runtime::wait::{self, await_condition};
+#[cfg(test)]
+use serde::Deserialize;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use thiserror::Error;
@@ -201,21 +203,36 @@ const HEADER: &str = "# kube-apiserver AuthenticationConfiguration for Zeabur Id
 /// ([reference](https://kubernetes.io/docs/reference/config-api/apiserver-config.v1/#apiserver-config-k8s-io-v1-AuthenticationConfiguration)).
 /// `k8s-openapi` has no type for it, as it is a file, not an API object.
 #[derive(Serialize)]
+#[cfg_attr(
+    test,
+    derive(Deserialize, Debug, PartialEq),
+    serde(deny_unknown_fields)
+)]
 #[serde(rename_all = "camelCase")]
 struct AuthenticationConfiguration {
-    api_version: &'static str,
-    kind: &'static str,
+    api_version: String,
+    kind: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     anonymous: Option<Anonymous>,
     jwt: Vec<JwtAuthenticator>,
 }
 
 #[derive(Serialize)]
+#[cfg_attr(
+    test,
+    derive(Deserialize, Debug, PartialEq),
+    serde(deny_unknown_fields)
+)]
 struct Anonymous {
     enabled: bool,
 }
 
 #[derive(Serialize)]
+#[cfg_attr(
+    test,
+    derive(Deserialize, Debug, PartialEq),
+    serde(deny_unknown_fields)
+)]
 #[serde(rename_all = "camelCase")]
 struct JwtAuthenticator {
     issuer: JwtIssuer,
@@ -225,6 +242,11 @@ struct JwtAuthenticator {
 }
 
 #[derive(Serialize)]
+#[cfg_attr(
+    test,
+    derive(Deserialize, Debug, PartialEq),
+    serde(deny_unknown_fields)
+)]
 #[serde(rename_all = "camelCase")]
 struct JwtIssuer {
     url: String,
@@ -233,17 +255,27 @@ struct JwtIssuer {
     #[serde(skip_serializing_if = "Option::is_none")]
     certificate_authority: Option<String>,
     audiences: Vec<String>,
-    audience_match_policy: &'static str,
+    audience_match_policy: String,
 }
 
 /// A claim or user validation rule: a CEL expression and the message when it is false.
 #[derive(Serialize)]
+#[cfg_attr(
+    test,
+    derive(Deserialize, Debug, PartialEq),
+    serde(deny_unknown_fields)
+)]
 struct Rule {
     expression: String,
     message: String,
 }
 
 #[derive(Serialize)]
+#[cfg_attr(
+    test,
+    derive(Deserialize, Debug, PartialEq),
+    serde(deny_unknown_fields)
+)]
 struct ClaimMappings {
     username: PrefixedClaim,
     groups: PrefixedClaim,
@@ -252,21 +284,36 @@ struct ClaimMappings {
 }
 
 #[derive(Serialize)]
+#[cfg_attr(
+    test,
+    derive(Deserialize, Debug, PartialEq),
+    serde(deny_unknown_fields)
+)]
 struct PrefixedClaim {
-    claim: &'static str,
-    prefix: &'static str,
+    claim: String,
+    prefix: String,
 }
 
 #[derive(Serialize)]
+#[cfg_attr(
+    test,
+    derive(Deserialize, Debug, PartialEq),
+    serde(deny_unknown_fields)
+)]
 struct Claim {
-    claim: &'static str,
+    claim: String,
 }
 
 #[derive(Serialize)]
+#[cfg_attr(
+    test,
+    derive(Deserialize, Debug, PartialEq),
+    serde(deny_unknown_fields)
+)]
 #[serde(rename_all = "camelCase")]
 struct ExtraMapping {
     key: String,
-    value_expression: &'static str,
+    value_expression: String,
 }
 
 /// Renders the `AuthenticationConfiguration`: a comment line, then JSON, which kube-apiserver
@@ -284,17 +331,17 @@ pub fn authentication_configuration(options: &ApiserverOptions) -> Result<String
         return Err(KubeConfigError::BadAudience(bad.clone()));
     }
     let lifetime = options.max_token_lifetime.as_secs();
-    let extra = |key: &str, value_expression| ExtraMapping {
+    let extra = |key: &str, value_expression: &str| ExtraMapping {
         key: format!("{EXTRA_PREFIX}{key}"),
-        value_expression,
+        value_expression: value_expression.to_owned(),
     };
     let reserved = |expression: &str| Rule {
         expression: expression.to_owned(),
         message: "the system: prefix is reserved".to_owned(),
     };
     let configuration = AuthenticationConfiguration {
-        api_version: "apiserver.config.k8s.io/v1",
-        kind: "AuthenticationConfiguration",
+        api_version: "apiserver.config.k8s.io/v1".to_owned(),
+        kind: "AuthenticationConfiguration".to_owned(),
         anonymous: match options.distro {
             // K3s/RKE2 drop their own --anonymous-auth=false when they see this file; restore it.
             Distro::K3s => Some(Anonymous { enabled: false }),
@@ -312,7 +359,7 @@ pub fn authentication_configuration(options: &ApiserverOptions) -> Result<String
                     .as_ref()
                     .map(|internal| internal.ca_pem.clone()),
                 audiences: options.audiences.clone(),
-                audience_match_policy: "MatchAny",
+                audience_match_policy: "MatchAny".to_owned(),
             },
             claim_validation_rules: vec![
                 Rule {
@@ -326,14 +373,16 @@ pub fn authentication_configuration(options: &ApiserverOptions) -> Result<String
             ],
             claim_mappings: ClaimMappings {
                 username: PrefixedClaim {
-                    claim: "preferred_username",
-                    prefix: IDENTITY_PREFIX,
+                    claim: "preferred_username".to_owned(),
+                    prefix: IDENTITY_PREFIX.to_owned(),
                 },
                 groups: PrefixedClaim {
-                    claim: "groups",
-                    prefix: IDENTITY_PREFIX,
+                    claim: "groups".to_owned(),
+                    prefix: IDENTITY_PREFIX.to_owned(),
                 },
-                uid: Claim { claim: "sub" },
+                uid: Claim {
+                    claim: "sub".to_owned(),
+                },
                 extra: vec![
                     extra("client-id", "claims.client_id"),
                     extra("amr", "has(claims.amr) ? claims.amr : []"),
@@ -527,7 +576,7 @@ mod tests {
     }
 
     /// The JSON after the comment line.
-    fn body(file: &str) -> serde_json::Value {
+    fn body(file: &str) -> AuthenticationConfiguration {
         let (header, json) = file.split_once('\n').unwrap();
         assert_eq!(header, HEADER);
         serde_json::from_str(json).unwrap()
@@ -536,7 +585,7 @@ mod tests {
     #[test]
     fn k3s_internal_configuration() {
         let file = authentication_configuration(&options(Distro::K3s, true)).unwrap();
-        let expected = serde_json::json!({
+        let expected: AuthenticationConfiguration = serde_json::from_str(r#"{
             "apiVersion": "apiserver.config.k8s.io/v1",
             "kind": "AuthenticationConfiguration",
             "anonymous": {"enabled": false},
@@ -546,17 +595,17 @@ mod tests {
                     "discoveryURL": "https://10.43.0.53/.well-known/openid-configuration",
                     "certificateAuthority": "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n",
                     "audiences": ["kubernetes"],
-                    "audienceMatchPolicy": "MatchAny",
+                    "audienceMatchPolicy": "MatchAny"
                 },
                 "claimValidationRules": [
                     {
                         "expression": "has(claims.client_id)",
-                        "message": "only Zeabur Identity access tokens are accepted (ID tokens carry no client_id)",
+                        "message": "only Zeabur Identity access tokens are accepted (ID tokens carry no client_id)"
                     },
                     {
                         "expression": "claims.exp - claims.iat <= 3600",
-                        "message": "token lifetime must not exceed 3600 seconds",
-                    },
+                        "message": "token lifetime must not exceed 3600 seconds"
+                    }
                 ],
                 "claimMappings": {
                     "username": {"claim": "preferred_username", "prefix": "zeabur:"},
@@ -565,35 +614,30 @@ mod tests {
                     "extra": [
                         {"key": "identity.zeabur.com/client-id", "valueExpression": "claims.client_id"},
                         {"key": "identity.zeabur.com/amr", "valueExpression": "has(claims.amr) ? claims.amr : []"},
-                        {"key": "identity.zeabur.com/jti", "valueExpression": "claims.jti"},
-                    ],
+                        {"key": "identity.zeabur.com/jti", "valueExpression": "claims.jti"}
+                    ]
                 },
                 "userValidationRules": [
                     {"expression": "!user.username.startsWith('system:')", "message": "the system: prefix is reserved"},
-                    {"expression": "user.groups.all(g, !g.startsWith('system:'))", "message": "the system: prefix is reserved"},
-                ],
-            }],
-        });
+                    {"expression": "user.groups.all(g, !g.startsWith('system:'))", "message": "the system: prefix is reserved"}
+                ]
+            }]
+        }"#)
+        .unwrap();
         assert_eq!(body(&file), expected);
     }
 
     #[test]
     fn generic_configuration_has_no_anonymous_section() {
         let file = authentication_configuration(&options(Distro::Generic, true)).unwrap();
-        assert!(!zeabur_identity_test_support::has_member(
-            &body(&file),
-            "anonymous"
-        ));
+        assert!(body(&file).anonymous.is_none());
     }
 
     #[test]
     fn public_discovery_has_no_discovery_url_or_ca() {
         let file = authentication_configuration(&options(Distro::K3s, false)).unwrap();
-        let issuer = &body(&file)["jwt"][0]["issuer"];
-        assert!(
-            !zeabur_identity_test_support::has_member(issuer, "discoveryURL")
-                && !zeabur_identity_test_support::has_member(issuer, "certificateAuthority")
-        );
+        let issuer = &body(&file).jwt[0].issuer;
+        assert!(issuer.discovery_url.is_none() && issuer.certificate_authority.is_none());
     }
 
     #[test]

@@ -1,11 +1,80 @@
 //! Per-scenario native JSON tracing capture for tests, without a global subscriber.
 
+use std::collections::BTreeMap;
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
 
-use serde_json::Value;
+use serde::{Deserialize, Serialize};
 use tracing::Dispatch;
 use tracing_subscriber::fmt::MakeWriter;
+
+/// A value of an event field in the native JSON log format.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum FieldValue {
+    /// A string field.
+    Text(String),
+    /// A boolean field.
+    Flag(bool),
+    /// An integer field.
+    Count(i64),
+}
+
+impl FieldValue {
+    /// The string value, if this is a string field.
+    #[must_use]
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            Self::Text(text) => Some(text),
+            Self::Flag(_) | Self::Count(_) => None,
+        }
+    }
+}
+
+impl PartialEq<&str> for FieldValue {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == Some(*other)
+    }
+}
+
+/// One record of the native JSON log format.
+///
+/// `extra` holds any other top-level member, so a test can assert that `span` and `spans` are
+/// absent.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Record {
+    /// The event target.
+    pub target: String,
+    /// The event fields.
+    #[serde(default)]
+    pub fields: BTreeMap<String, FieldValue>,
+    /// The other top-level members.
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, FieldValue>,
+}
+
+impl Record {
+    /// A string field, if it is present and a string.
+    #[must_use]
+    pub fn field(&self, name: &str) -> Option<&str> {
+        self.fields.get(name).and_then(FieldValue::as_str)
+    }
+
+    /// The target and every field value as text, for searching a log for a leaked secret.
+    #[must_use]
+    pub fn text(&self) -> String {
+        let mut text = self.target.clone();
+        for value in self.fields.values().chain(self.extra.values()) {
+            text.push('\n');
+            match value {
+                FieldValue::Text(value) => text.push_str(value),
+                FieldValue::Flag(value) => text.push_str(&value.to_string()),
+                FieldValue::Count(value) => text.push_str(&value.to_string()),
+            }
+        }
+        text
+    }
+}
 
 /// An in-memory writer shared by a scenario's subscriber and assertions.
 #[derive(Clone, Debug, Default)]
@@ -45,7 +114,7 @@ impl Capture {
         clippy::expect_used,
         reason = "the test helper must reject malformed formatter output"
     )]
-    pub fn records(&self) -> Vec<Value> {
+    pub fn records(&self) -> Vec<Record> {
         self.0
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -92,13 +161,9 @@ mod tests {
         });
         let records = capture.records();
         assert_eq!(records.len(), 1);
-        assert_eq!(records[0]["target"], "zeabur_identity::audit");
-        assert!(!crate::has_member(&records[0], "span"));
-        assert!(!crate::has_member(&records[0], "spans"));
-        assert!(
-            !serde_json::to_string(&records)
-                .unwrap()
-                .contains("secret-span-token-sentinel")
-        );
+        assert_eq!(records[0].target, "zeabur_identity::audit");
+        assert!(!records[0].extra.contains_key("span"));
+        assert!(!records[0].extra.contains_key("spans"));
+        assert!(!format!("{records:?}").contains("secret-span-token-sentinel"));
     }
 }

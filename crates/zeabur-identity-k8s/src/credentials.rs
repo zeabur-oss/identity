@@ -546,7 +546,11 @@ impl CredentialStore for KubeCredentialStore {
         let name = name.to_owned();
         // A merge patch without a resourceVersion: it never conflicts with, or undoes, a rename,
         // and losing one to a race costs only a slightly older time.
-        let patch = serde_json::json!({ "status": { "lastUsedAt": secs(now) } });
+        let patch = Touch {
+            status: LastUsed {
+                last_used_at: secs(now),
+            },
+        };
         async move {
             match api
                 .patch_status(&name, &PatchParams::default(), &Patch::Merge(patch))
@@ -715,14 +719,14 @@ impl CredentialStore for KubeCredentialStore {
             .map_or_default(|(_, v)| v.to_owned());
         // A merge patch with a resourceVersion is a compare-and-swap: the API server refuses it
         // with 409 if the object changed.
-        let patch = serde_json::json!({
-            "metadata": { "resourceVersion": resource_version },
-            "status": {
-                "guesses": counts_to(&state.guesses),
-                "totpLastStep": state.totp_last_step,
-                "recoveryUsed": state.recovery_used,
+        let patch = Save {
+            metadata: Version { resource_version },
+            status: Progress {
+                guesses: counts_to(&state.guesses),
+                totp_last_step: &state.totp_last_step,
+                recovery_used: &state.recovery_used,
             },
-        });
+        };
         async move {
             match api
                 .patch_status(&name, &PatchParams::default(), &Patch::Merge(patch))
@@ -765,4 +769,35 @@ impl CredentialStore for KubeCredentialStore {
             }
         }
     }
+}
+
+#[derive(Debug, serde::Serialize)]
+struct Touch {
+    status: LastUsed,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LastUsed {
+    last_used_at: i64,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct Save<'a> {
+    metadata: Version,
+    status: Progress<'a>,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Version {
+    resource_version: String,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Progress<'a> {
+    guesses: Guesses,
+    totp_last_step: &'a Option<u64>,
+    recovery_used: &'a Vec<usize>,
 }

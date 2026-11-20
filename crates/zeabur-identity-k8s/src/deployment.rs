@@ -30,10 +30,10 @@ use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector;
 use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
 use kube::api::ObjectMeta;
-use serde_json::Value;
 use zeabur_identity_core::config::BaseUrl;
 
 use super::MANAGED_BY;
+use super::manifest::{Manifest, ManifestList};
 use super::rbac::NAME;
 
 /// Port of the public HTTP listener (TLS is terminated in front of it).
@@ -280,21 +280,14 @@ pub fn default_request_memory_mib() -> Option<u64> {
 
 /// Everything to install, in apply order: the RBAC objects ([`super::rbac::manifests`]), the
 /// Service and the Deployment.
-///
-/// # Errors
-///
-/// Returns an error if serialization fails.
-pub fn manifests(
-    namespace: &str,
-    issuer: &BaseUrl,
-    options: &Options,
-) -> serde_json::Result<Vec<Value>> {
-    let mut items = super::rbac::manifests(namespace)?;
-    items.push(serde_json::to_value(service(namespace))?);
-    items.push(serde_json::to_value(deployment(
+#[must_use]
+pub fn manifests(namespace: &str, issuer: &BaseUrl, options: &Options) -> Vec<Manifest> {
+    let mut items = super::rbac::manifests(namespace);
+    items.push(Manifest::Service(Box::new(service(namespace))));
+    items.push(Manifest::Deployment(Box::new(deployment(
         namespace, issuer, options,
-    ))?);
-    Ok(items)
+    ))));
+    items
 }
 
 /// Renders [`manifests`] as a Kubernetes `List`.
@@ -307,11 +300,7 @@ pub fn manifests_json(
     issuer: &BaseUrl,
     options: &Options,
 ) -> serde_json::Result<String> {
-    serde_json::to_string_pretty(&serde_json::json!({
-        "apiVersion": "v1",
-        "kind": "List",
-        "items": manifests(namespace, issuer, options)?,
-    }))
+    serde_json::to_string_pretty(&ManifestList::new(manifests(namespace, issuer, options)))
 }
 
 #[cfg(test)]
@@ -326,40 +315,49 @@ mod tests {
             serve_args: vec!["--invitations".into()],
             config_secret: Some("zeabur-identity-config".into()),
         };
-        let deployment = serde_json::to_value(deployment("ns", &issuer, &options)).unwrap();
-        let spec = &deployment["spec"];
-        assert_eq!(spec["replicas"], 1);
-        assert_eq!(spec["strategy"]["type"], "Recreate");
-        let pod = &spec["template"]["spec"];
-        assert_eq!(pod["serviceAccountName"], NAME);
-        assert_eq!(pod["securityContext"]["runAsNonRoot"], true);
+        let deployment = deployment("ns", &issuer, &options);
+        let spec = deployment.spec.unwrap();
+        assert_eq!(spec.replicas, Some(1));
+        assert_eq!(spec.strategy.unwrap().type_.as_deref(), Some("Recreate"));
+        let pod = spec.template.spec.unwrap();
+        assert_eq!(pod.service_account_name.as_deref(), Some(NAME));
+        let pod_security = pod.security_context.unwrap();
+        assert_eq!(pod_security.run_as_non_root, Some(true));
         assert_eq!(
-            pod["securityContext"]["seccompProfile"]["type"],
+            pod_security.seccomp_profile.unwrap().type_,
             "RuntimeDefault"
         );
-        let container = &pod["containers"][0];
-        assert_eq!(container["securityContext"]["readOnlyRootFilesystem"], true);
-        assert_eq!(
-            container["securityContext"]["allowPrivilegeEscalation"],
-            false
-        );
-        assert_eq!(
-            container["securityContext"]["capabilities"]["drop"][0],
-            "ALL"
-        );
-        assert_eq!(container["env"][0]["value"], "https://login.example.com");
-        assert_eq!(container["args"], serde_json::json!(["--invitations"]));
-        assert_eq!(container["volumeMounts"][0]["mountPath"], CONFIG_DIR);
-        assert_eq!(container["volumeMounts"][0]["readOnly"], true);
-        assert_eq!(
-            pod["volumes"][0]["secret"]["secretName"],
-            "zeabur-identity-config"
-        );
         // The 0440 config files must be readable by the container's group.
-        assert_eq!(pod["volumes"][0]["secret"]["defaultMode"], 0o440);
-        assert_eq!(pod["securityContext"]["fsGroup"], RUN_AS);
+        assert_eq!(pod_security.fs_group, Some(RUN_AS));
+        let container = &pod.containers[0];
+        let security = container.security_context.as_ref().unwrap();
+        assert_eq!(security.read_only_root_filesystem, Some(true));
+        assert_eq!(security.allow_privilege_escalation, Some(false));
         assert_eq!(
-            container["env"][1]["valueFrom"]["fieldRef"]["fieldPath"],
+            security.capabilities.as_ref().unwrap().drop,
+            Some(vec!["ALL".to_owned()])
+        );
+        let env = container.env.as_ref().unwrap();
+        assert_eq!(env[0].value.as_deref(), Some("https://login.example.com"));
+        assert_eq!(container.args, Some(vec!["--invitations".to_owned()]));
+        let mount = &container.volume_mounts.as_ref().unwrap()[0];
+        assert_eq!(mount.mount_path, CONFIG_DIR);
+        assert_eq!(mount.read_only, Some(true));
+        let secret = pod.volumes.as_ref().unwrap()[0].secret.as_ref().unwrap();
+        assert_eq!(
+            secret.secret_name.as_deref(),
+            Some("zeabur-identity-config")
+        );
+        assert_eq!(secret.default_mode, Some(0o440));
+        assert_eq!(
+            env[1]
+                .value_from
+                .as_ref()
+                .unwrap()
+                .field_ref
+                .as_ref()
+                .unwrap()
+                .field_path,
             "metadata.namespace"
         );
     }
@@ -414,24 +412,28 @@ mod tests {
 
     #[test]
     fn service_exposes_both_listeners() {
-        let service = serde_json::to_value(service("ns")).unwrap();
-        let ports: Vec<_> = service["spec"]["ports"]
-            .as_array()
+        let service = service("ns");
+        let ports: Vec<_> = service
+            .spec
             .unwrap()
-            .iter()
-            .map(|p| {
-                (
-                    p["name"].as_str(),
-                    p["port"].as_u64(),
-                    p["targetPort"].as_str(),
-                )
-            })
+            .ports
+            .unwrap()
+            .into_iter()
+            .map(|p| (p.name, p.port, p.target_port))
             .collect();
         assert_eq!(
             ports,
             [
-                (Some("http"), Some(80), Some("http")),
-                (Some("internal"), Some(443), Some("internal")),
+                (
+                    Some("http".to_owned()),
+                    80,
+                    Some(IntOrString::String("http".to_owned()))
+                ),
+                (
+                    Some("internal".to_owned()),
+                    443,
+                    Some(IntOrString::String("internal".to_owned()))
+                ),
             ]
         );
     }
