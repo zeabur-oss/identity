@@ -3,7 +3,7 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use clap::{Parser, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use zeabur_identity_core::config::{BaseUrl, ConfigError, parse_duration};
 use zeabur_identity_keys::rotation::RotationPolicy;
 
@@ -27,7 +27,50 @@ pub enum LogFormat {
 /// Passkey-first OpenID Connect issuer for Kubernetes. Every flag can also be set through its
 /// environment variable.
 #[derive(Debug, Parser)]
-#[command(name = "zeabur-identity", version, about)]
+#[command(
+    name = "zeabur-identity",
+    version,
+    about,
+    args_conflicts_with_subcommands = true,
+    subcommand_negates_reqs = true
+)]
+pub struct Cli {
+    /// Without a command, the server runs.
+    #[command(subcommand)]
+    pub command: Option<Command>,
+    /// The server's flags; `None` with a command.
+    #[command(flatten)]
+    pub serve: Option<ServeArgs>,
+}
+
+/// One-off commands, run with the pod's service account.
+#[derive(Debug, Subcommand)]
+pub enum Command {
+    /// Store the setup token whose hash is given, for a token the caller made, such as a Helm
+    /// chart that prints the link in its notes. Creates the `User` as an admin account if it does
+    /// not exist. Changes nothing when the user can already sign in.
+    SetupLink(SetupLinkArgs),
+}
+
+/// `zeabur-identity setup-link`.
+#[derive(Debug, Args)]
+pub struct SetupLinkArgs {
+    /// The `User` the token enrols.
+    #[arg(long, default_value = "admin")]
+    pub user: String,
+    /// `sha256:` and the lowercase hex SHA-256 of the token.
+    #[arg(long, value_parser = parse_token_hash)]
+    pub token_hash: String,
+    /// How long the token stays valid, at most 7 days.
+    #[arg(long, default_value = "24h", value_parser = parse_duration)]
+    pub valid_for: Duration,
+    /// Namespace Zeabur Identity runs in.
+    #[arg(long, env = "ZEABUR_IDENTITY_NAMESPACE")]
+    pub namespace: String,
+}
+
+/// The server's flags.
+#[derive(Debug, Args)]
 pub struct ServeArgs {
     /// Issuer identifier: an https URL with no path and no trailing slash. It must match
     /// kube-apiserver's `issuer.url` byte for byte.
@@ -97,6 +140,14 @@ fn parse_internal_url(input: &str) -> Result<BaseUrl, ConfigError> {
     BaseUrl::parse("internal URL", input)
 }
 
+fn parse_token_hash(input: &str) -> Result<String, String> {
+    let hex = input.strip_prefix("sha256:").filter(|hex| {
+        hex.len() == 64 && hex.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+    });
+    hex.map(|_| input.to_owned())
+        .ok_or_else(|| "expected sha256: and 64 lowercase hex digits".to_owned())
+}
+
 impl ServeArgs {
     /// Builds and validates the server configuration.
     ///
@@ -136,13 +187,42 @@ mod tests {
 
     use super::*;
 
+    fn cli(args: &[&str]) -> Result<Cli, clap::Error> {
+        Cli::try_parse_from(std::iter::once("zeabur-identity").chain(args.iter().copied()))
+    }
+
     fn parse(args: &[&str]) -> Result<ServeArgs, clap::Error> {
-        ServeArgs::try_parse_from(std::iter::once("zeabur-identity").chain(args.iter().copied()))
+        cli(args).map(|cli| cli.serve.expect("server flags"))
     }
 
     #[test]
     fn cli_definition_is_valid() {
-        ServeArgs::command().debug_assert();
+        Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn setup_link_needs_no_issuer_and_a_well_formed_hash() {
+        let hash = format!("sha256:{}", "0a".repeat(32));
+        let parsed = cli(&["setup-link", "--token-hash", &hash, "--namespace", "id"]).unwrap();
+        let Some(Command::SetupLink(args)) = parsed.command else {
+            panic!("expected setup-link");
+        };
+        assert_eq!((args.user.as_str(), args.token_hash), ("admin", hash));
+        for bad in [
+            "0a".repeat(32),
+            format!("sha256:{}", "0A".repeat(32)),
+            format!("sha256:{}", "0a".repeat(31)),
+        ] {
+            assert!(cli(&["setup-link", "--token-hash", &bad, "--namespace", "id"]).is_err());
+        }
+    }
+
+    #[test]
+    fn server_flags_do_not_mix_with_a_command() {
+        let hash = format!("sha256:{}", "0a".repeat(32));
+        let mixed = ["--issuer", "https://login.example.com", "setup-link"];
+        assert!(cli(&mixed).is_err());
+        assert!(cli(&["--token-hash", &hash]).is_err());
     }
 
     #[test]
