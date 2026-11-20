@@ -266,10 +266,10 @@ mod tests {
         data.extend_from_slice(&[0; 4]);
         data.extend_from_slice(aaguid.as_bytes());
         data.extend_from_slice(&[0, 1, 7, 0xA0]);
-        let mut response: RegisterPublicKeyCredential = serde_json::from_value(serde_json::json!({
-            "id": "AA", "rawId": "AA", "type": "public-key", "extensions": {},
-            "response": {"attestationObject": "", "clientDataJSON": ""}
-        }))
+        let mut response: RegisterPublicKeyCredential = serde_json::from_str(
+            r#"{"id":"AA","rawId":"AA","type":"public-key","extensions":{},
+            "response":{"attestationObject":"","clientDataJSON":""}}"#,
+        )
         .unwrap();
         response.response.attestation_object = attestation_object(&data);
         assert_eq!(super::aaguid(&response), Some(aaguid.to_string()));

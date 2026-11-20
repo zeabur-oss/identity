@@ -1,6 +1,6 @@
 //! Checks shared by the sign-in and upstream tests.
 
-use serde_json::Value;
+use zeabur_identity_test_support::logging::Record;
 
 /// The optional fields of an account page event that succeeded, and of one that failed.
 const ACCOUNT_SUCCESS: &[&str] = &[
@@ -26,21 +26,21 @@ const ACCOUNT_FAILURE: &[&str] = &[
 /// Checks the fields and message of one `zeabur_identity::audit` record against the documented
 /// shape of its event (`crates/zeabur-identity/README.md`, "Audit events"). Operators filter on
 /// these names, so a refactor must not rename, add or drop one.
-pub(crate) fn assert_audit_shape(record: &Value) {
-    let fields = record["fields"].as_object().unwrap();
-    let event = fields["event"].as_str().unwrap();
+pub(crate) fn assert_audit_shape(record: &Record) {
+    let fields = &record.fields;
+    let event = record.field("event").unwrap();
     // The OAuth endpoints' events are checked by their own tests.
     if event.starts_with("oauth.") {
         return;
     }
-    let outcome = fields["outcome"].as_str().unwrap();
+    let outcome = record.field("outcome").unwrap();
     let success = match outcome {
         "success" => true,
         "failure" => false,
         other => panic!("outcome {other}"),
     };
-    let method = fields.get("method").and_then(Value::as_str);
-    let phase = fields.get("phase").and_then(Value::as_str);
+    let method = record.field("method");
+    let phase = record.field("phase");
     let (optional, required, messages): (&[&str], &[&str], [&str; 2]) = match (event, method) {
         ("auth.passkey_enrollment", Some("passkey")) => (
             &["user", "subject"],
@@ -96,19 +96,19 @@ pub(crate) fn assert_audit_shape(record: &Value) {
             if success { &["revoked"] } else { &[] },
             ["account changed", "account change failed"],
         ),
-        other => panic!("unknown audit event {other:?}: {record}"),
+        other => panic!("unknown audit event {other:?}: {record:?}"),
     };
     let message = if success { messages[0] } else { messages[1] };
-    assert_eq!(fields["message"], message, "{record}");
+    assert_eq!(record.field("message"), Some(message), "{record:?}");
     let reason: &[&str] = if success { &[] } else { &["reason"] };
     for key in required.iter().chain(reason) {
-        assert!(fields.contains_key(*key), "{key} missing: {record}");
+        assert!(fields.contains_key(*key), "{key} missing: {record:?}");
     }
     for key in fields.keys() {
         let known = ["event", "outcome", "message"].contains(&key.as_str())
             || optional.contains(&key.as_str())
             || required.contains(&key.as_str())
             || reason.contains(&key.as_str());
-        assert!(known, "unexpected field {key}: {record}");
+        assert!(known, "unexpected field {key}: {record:?}");
     }
 }

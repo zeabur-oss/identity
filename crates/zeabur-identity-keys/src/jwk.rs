@@ -151,6 +151,20 @@ mod tests {
 
     use super::*;
 
+    /// The members an EC public JWK may carry.
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct PublicJwk {
+        kty: String,
+        #[serde(rename = "use")]
+        usage: String,
+        alg: String,
+        kid: String,
+        crv: String,
+        x: String,
+        y: String,
+    }
+
     /// RFC 7638 §3.1.
     #[test]
     fn rfc7638_example_thumbprint() {
@@ -173,7 +187,7 @@ mod tests {
             y: [2; 32],
         };
         let jwk: jsonwebtoken::jwk::Jwk =
-            serde_json::from_value(serde_json::to_value(key.to_jwk(Algorithm::Es256)).unwrap())
+            serde_json::from_slice(&serde_json::to_vec(&key.to_jwk(Algorithm::Es256)).unwrap())
                 .unwrap();
         assert_eq!(
             key.thumbprint(),
@@ -189,16 +203,14 @@ mod tests {
             y: [2; 32],
         }
         .to_jwk(Algorithm::Es256);
-        let value = serde_json::to_value(&jwk).unwrap();
-        assert_eq!(value["kty"], "EC");
-        assert_eq!(value["use"], "sig");
-        assert_eq!(value["alg"], "ES256");
-        assert_eq!(value["crv"], "P-256");
-        assert_eq!(value["kid"], jwk.kid);
-        assert!(value.get("key_ops").is_none());
-        assert!(
-            value.get("d").is_none(),
-            "private members must never be published"
-        );
+        // A private member (`d`) or `key_ops` in the output fails the parse.
+        let value: PublicJwk = serde_json::from_slice(&serde_json::to_vec(&jwk).unwrap()).unwrap();
+        assert_eq!(value.kty, "EC");
+        assert_eq!(value.usage, "sig");
+        assert_eq!(value.alg, "ES256");
+        assert_eq!(value.crv, "P-256");
+        assert_eq!(value.kid, jwk.kid);
+        assert_eq!(value.x, base64url(&[1; 32]));
+        assert_eq!(value.y, base64url(&[2; 32]));
     }
 }

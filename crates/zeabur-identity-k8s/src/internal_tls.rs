@@ -313,33 +313,18 @@ mod tests {
     #[test]
     fn objects_serialise_as_cert_manager_reads_them() {
         let objects = objects("ns", IpAddr::V4(Ipv4Addr::LOCALHOST), &[]);
-        let root = serde_json::to_value(&objects.root_issuer).unwrap();
         assert_eq!(
-            root,
-            serde_json::json!({
-                "apiVersion": "cert-manager.io/v1",
-                "kind": "Issuer",
-                "metadata": {
-                    "name": ROOT_ISSUER,
-                    "namespace": "ns",
-                    "labels": {"app.kubernetes.io/managed-by": "zeabur-identity"},
-                },
-                "spec": {"selfSigned": {}},
-            })
+            serde_json::to_string(&objects.root_issuer).unwrap(),
+            format!(
+                r#"{{"apiVersion":"cert-manager.io/v1","kind":"Issuer","metadata":{{"labels":{{"app.kubernetes.io/managed-by":"zeabur-identity"}},"name":"{ROOT_ISSUER}","namespace":"ns"}},"spec":{{"selfSigned":{{}}}}}}"#
+            )
         );
-        let ca = serde_json::to_value(&objects.ca).unwrap();
-        assert_eq!(
-            ca["spec"],
-            serde_json::json!({
-                "isCA": true,
-                "commonName": "Zeabur Identity internal CA",
-                "secretName": CA_SECRET,
-                "duration": CA_DURATION,
-                "privateKey": {"algorithm": "ECDSA", "size": 256, "rotationPolicy": "Never"},
-                "issuerRef": {"name": ROOT_ISSUER, "kind": "Issuer", "group": "cert-manager.io"},
-            })
+        let ca = serde_json::to_string(&objects.ca).unwrap();
+        let expected = format!(
+            r#""spec":{{"secretName":"{CA_SECRET}","isCA":true,"commonName":"Zeabur Identity internal CA","duration":"{CA_DURATION}","privateKey":{{"algorithm":"ECDSA","size":256,"rotationPolicy":"Never"}},"issuerRef":{{"name":"{ROOT_ISSUER}","kind":"Issuer","group":"cert-manager.io"}}}}"#
         );
-        assert!(ca.get("status").is_none());
+        assert!(ca.ends_with(&format!("{expected}}}")), "{ca}");
+        assert!(!ca.contains(r#""status""#));
     }
 
     #[test]

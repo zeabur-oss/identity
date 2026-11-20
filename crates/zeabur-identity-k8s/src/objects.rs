@@ -202,7 +202,8 @@ mod tests {
     use axum::http::Request;
     use axum::response::{IntoResponse as _, Response};
     use k8s_openapi::api::core::v1::ConfigMap;
-    use serde_json::json;
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::ListMeta;
+    use kube::api::ObjectMeta;
 
     use super::*;
 
@@ -223,9 +224,21 @@ mod tests {
             Some("page-2") => ("b", "page-3"),
             Some(_) => ("c", ""),
         };
-        axum::Json(json!({"apiVersion":"v1", "kind":"ConfigMapList",
-            "metadata":{"resourceVersion":"1", "continue":next},
-            "items":[{"metadata":{"name":name, "namespace":"test"}}]}))
+        axum::Json(k8s_openapi::List {
+            metadata: ListMeta {
+                resource_version: Some("1".to_owned()),
+                continue_: Some(next.to_owned()),
+                ..ListMeta::default()
+            },
+            items: vec![ConfigMap {
+                metadata: ObjectMeta {
+                    name: Some(name.to_owned()),
+                    namespace: Some("test".to_owned()),
+                    ..ObjectMeta::default()
+                },
+                ..ConfigMap::default()
+            }],
+        })
         .into_response()
     }
 

@@ -10,12 +10,26 @@ mod tests {
     use axum::body::Body;
     use axum::extract::State;
     use axum::http::{Method, Request, StatusCode};
+    use axum::response::{IntoResponse as _, Response};
     use axum::{Json, Router};
     use http_body_util::BodyExt as _;
+    use k8s_openapi::api::core::v1::Event;
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ListMeta, OwnerReference, Time};
     use kube::api::Api;
-    use serde_json::{Value, json};
+    use kube::core::{ObjectList, Status, TypeMeta};
+    use kube::{Resource, ResourceExt as _};
+    use serde::de::DeserializeOwned;
+    use serde::{Deserialize, Serialize};
     use tokio::sync::{Barrier, Mutex};
+    use zeabur_identity_api::USER_LABEL;
+    use zeabur_identity_api::credential::{
+        Credential, CredentialKind, CredentialSpec, CredentialStatus, Guesses, Passkey, Password,
+        RecoveryHash, Totp,
+    };
+    use zeabur_identity_api::grant::{Grant, GrantSpec};
+    use zeabur_identity_api::invitation::{Invitation, InvitationSpec};
     use zeabur_identity_api::upstream::{ExternalId, Issuer, Subject};
+    use zeabur_identity_api::user::{User as UserObject, UserSpec};
     use zeabur_identity_core::clock::UnixTime;
     use zeabur_identity_k8s::credentials::KubeCredentialStore;
     use zeabur_identity_k8s::grants::KubeGrantStore;
@@ -30,12 +44,88 @@ mod tests {
 
     #[derive(Default)]
     struct Backend {
-        objects: BTreeMap<(String, String), Value>,
+        credentials: BTreeMap<String, Credential>,
+        grants: BTreeMap<String, Grant>,
+        users: BTreeMap<String, UserObject>,
+        invitations: BTreeMap<String, Invitation>,
         version: u64,
-        events: Vec<Value>,
+        events: Vec<Event>,
         /// Credential status writes that wait at the barrier before being applied.
         held: usize,
         barrier: Option<Arc<Barrier>>,
+    }
+
+    /// A kind that the fake API server stores.
+    trait Stored: Resource<DynamicType = ()> + Clone + Serialize + DeserializeOwned {
+        fn objects(backend: &mut Backend) -> &mut BTreeMap<String, Self>;
+
+        /// What a `PUT` of the status subresource keeps of `sent`.
+        fn replace_status(&mut self, _sent: &Self) {
+            panic!("{} has no status", Self::kind(&()));
+        }
+
+        /// What a merge `PATCH` of the status subresource does with `body`.
+        fn patch_status(&mut self, _body: &[u8]) {
+            panic!("{} takes no status patch", Self::kind(&()));
+        }
+    }
+
+    impl Stored for Credential {
+        fn objects(backend: &mut Backend) -> &mut BTreeMap<String, Self> {
+            &mut backend.credentials
+        }
+
+        fn replace_status(&mut self, sent: &Self) {
+            self.status.clone_from(&sent.status);
+        }
+
+        fn patch_status(&mut self, body: &[u8]) {
+            /// The two merge patches that Zeabur Identity sends: `touch`, and `save_state`, which
+            /// always sends all three of its members.
+            #[derive(Deserialize)]
+            struct Patch {
+                status: Fields,
+            }
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            struct Fields {
+                last_used_at: Option<i64>,
+                guesses: Option<Guesses>,
+                totp_last_step: Option<i64>,
+                recovery_used: Option<Vec<i64>>,
+            }
+            let Patch { status: fields } = serde_json::from_slice(body).unwrap();
+            let status = self.status.get_or_insert_with(CredentialStatus::default);
+            if fields.last_used_at.is_some() {
+                status.last_used_at = fields.last_used_at;
+            } else {
+                status.guesses = fields.guesses;
+                status.totp_last_step = fields.totp_last_step;
+                status.recovery_used = fields.recovery_used.unwrap();
+            }
+        }
+    }
+
+    impl Stored for Grant {
+        fn objects(backend: &mut Backend) -> &mut BTreeMap<String, Self> {
+            &mut backend.grants
+        }
+
+        fn replace_status(&mut self, sent: &Self) {
+            self.status.clone_from(&sent.status);
+        }
+    }
+
+    impl Stored for UserObject {
+        fn objects(backend: &mut Backend) -> &mut BTreeMap<String, Self> {
+            &mut backend.users
+        }
+    }
+
+    impl Stored for Invitation {
+        fn objects(backend: &mut Backend) -> &mut BTreeMap<String, Self> {
+            &mut backend.invitations
+        }
     }
 
     impl Backend {
@@ -44,45 +134,60 @@ mod tests {
             self.version.to_string()
         }
 
-        fn insert(&mut self, collection: &str, mut object: Value) {
-            let name = object["metadata"]["name"].as_str().unwrap().to_owned();
-            object["metadata"]["resourceVersion"] = json!(self.next_version());
-            object["metadata"]["uid"] = json!(format!("uid-{name}"));
-            self.objects.insert((collection.to_owned(), name), object);
+        fn insert<T: Stored>(&mut self, mut object: T) {
+            let name = object.name_any();
+            object.meta_mut().resource_version = Some(self.next_version());
+            object.meta_mut().uid = Some(format!("uid-{name}"));
+            T::objects(self).insert(name, object);
         }
 
-        fn names(&self, collection: &str) -> Vec<String> {
-            self.objects
-                .keys()
-                .filter(|(c, _)| c == collection)
-                .map(|(_, name)| name.clone())
-                .collect()
+        fn names(&self) -> Vec<String> {
+            self.credentials.keys().cloned().collect()
         }
     }
 
-    fn status(code: StatusCode, reason: &str) -> (StatusCode, Json<Value>) {
-        (
-            code,
-            Json(
-                json!({"apiVersion":"v1", "kind":"Status", "status":"Failure",
-                "code":code.as_u16(), "reason":reason, "message":reason}),
-            ),
-        )
+    /// A `Status` with the `kind` that clients look for.
+    #[derive(Serialize)]
+    struct StatusBody {
+        #[serde(flatten)]
+        types: TypeMeta,
+        #[serde(flatten)]
+        status: Status,
+    }
+
+    fn status(code: StatusCode, reason: &str) -> Response {
+        let status = Status::failure(reason, reason).with_code(code.as_u16());
+        let body = StatusBody {
+            types: TypeMeta {
+                api_version: "v1".into(),
+                kind: "Status".into(),
+            },
+            status,
+        };
+        (code, Json(body)).into_response()
     }
 
     async fn kubernetes(
         State(state): State<Arc<Mutex<Backend>>>,
         request: Request<Body>,
-    ) -> (StatusCode, Json<Value>) {
+    ) -> Response {
         let method = request.method().clone();
         let path = request.uri().path().to_owned();
         let query = request.uri().query().unwrap_or_default().to_owned();
         let bytes = request.into_body().collect().await.unwrap().to_bytes();
-        let body: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
         let segments: Vec<&str> = path.trim_start_matches('/').split('/').collect();
         if method == Method::POST && path == "/api/v1/namespaces/test/events" {
-            state.lock().await.events.push(body.clone());
-            return (StatusCode::CREATED, Json(body));
+            state
+                .lock()
+                .await
+                .events
+                .push(serde_json::from_slice(&bytes).unwrap());
+            return (
+                StatusCode::CREATED,
+                [(axum::http::header::CONTENT_TYPE, "application/json")],
+                bytes,
+            )
+                .into_response();
         }
         let [
             "apis",
@@ -96,11 +201,10 @@ mod tests {
         else {
             panic!("unexpected Kubernetes request: {method} {path}");
         };
-        let collection = (*collection).to_owned();
         let barrier = {
             let mut backend = state.lock().await;
             let is_status_put = method == Method::PUT && rest.get(1) == Some(&"status");
-            (is_status_put && collection == "credentials" && backend.held > 0)
+            (is_status_put && *collection == "credentials" && backend.held > 0)
                 .then(|| {
                     backend.held -= 1;
                     backend.barrier.clone()
@@ -110,112 +214,120 @@ mod tests {
         if let Some(barrier) = barrier {
             barrier.wait().await;
         }
-        apply(
-            &mut *state.lock().await,
-            &method,
-            &collection,
+        let backend = &mut *state.lock().await;
+        let request = Call {
+            method: &method,
             rest,
-            &query,
-            &body,
-        )
+            query: &query,
+            body: &bytes,
+        };
+        match *collection {
+            "credentials" => apply::<Credential>(backend, &request),
+            "grants" => apply::<Grant>(backend, &request),
+            "users" => apply::<UserObject>(backend, &request),
+            "invitations" => apply::<Invitation>(backend, &request),
+            other => panic!("unexpected collection: {other}"),
+        }
     }
 
-    fn apply(
-        backend: &mut Backend,
-        method: &Method,
-        collection: &str,
-        rest: &[&str],
-        query: &str,
-        body: &Value,
-    ) -> (StatusCode, Json<Value>) {
-        let collection = collection.to_owned();
-        match (method.clone(), rest) {
+    struct Call<'a> {
+        method: &'a Method,
+        rest: &'a [&'a str],
+        query: &'a str,
+        body: &'a [u8],
+    }
+
+    /// The `DELETE` options that the stores send.
+    #[derive(Deserialize)]
+    struct DeleteBody {
+        preconditions: Option<Preconditions>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Preconditions {
+        uid: Option<String>,
+        resource_version: Option<String>,
+    }
+
+    fn apply<T: Stored>(backend: &mut Backend, call: &Call<'_>) -> Response {
+        match (call.method.clone(), call.rest) {
             (Method::GET, []) => {
-                let selector = form_urlencoded::parse(query.as_bytes())
+                let selector = form_urlencoded::parse(call.query.as_bytes())
                     .find(|(k, _)| k == "labelSelector")
                     .map(|(_, v)| v.into_owned())
                     .unwrap();
                 let (key, value) = selector.split_once('=').unwrap();
-                let items: Vec<Value> = backend
-                    .objects
-                    .iter()
-                    .filter(|((c, _), o)| *c == collection && o["metadata"]["labels"][key] == value)
-                    .map(|(_, o)| o.clone())
+                let items: Vec<T> = T::objects(backend)
+                    .values()
+                    .filter(|o| o.labels().get(key).is_some_and(|v| v == value))
+                    .cloned()
                     .collect();
-                (
-                    StatusCode::OK,
-                    Json(json!({"apiVersion":"identity.zeabur.com/v1alpha1",
-                        "kind":"List", "metadata":{"resourceVersion":backend.version.to_string()},
-                        "items":items})),
-                )
+                let list = ObjectList {
+                    types: TypeMeta {
+                        api_version: "identity.zeabur.com/v1alpha1".into(),
+                        kind: "List".into(),
+                    },
+                    metadata: ListMeta {
+                        resource_version: Some(backend.version.to_string()),
+                        ..ListMeta::default()
+                    },
+                    items,
+                };
+                (StatusCode::OK, Json(list)).into_response()
             }
-            (Method::GET, [name]) => backend
-                .objects
-                .get(&(collection, (*name).to_owned()))
-                .map_or_else(
-                    || status(StatusCode::NOT_FOUND, "NotFound"),
-                    |o| (StatusCode::OK, Json(o.clone())),
-                ),
+            (Method::GET, [name]) => T::objects(backend).get(*name).map_or_else(
+                || status(StatusCode::NOT_FOUND, "NotFound"),
+                |o| (StatusCode::OK, Json(o)).into_response(),
+            ),
             (Method::PUT, [name, "status"]) => {
-                let key = (collection, (*name).to_owned());
-                let Some(current) = backend.objects.get(&key).cloned() else {
+                let sent: T = serde_json::from_slice(call.body).unwrap();
+                let version = backend.next_version();
+                let Some(current) = T::objects(backend).get_mut(*name) else {
                     return status(StatusCode::NOT_FOUND, "NotFound");
                 };
-                if body["metadata"]["resourceVersion"] != current["metadata"]["resourceVersion"] {
+                if sent.meta().resource_version != current.meta().resource_version {
+                    backend.version -= 1;
                     return status(StatusCode::CONFLICT, "Conflict");
                 }
-                let mut updated = current;
-                updated["status"] = body["status"].clone();
-                updated["metadata"]["resourceVersion"] = json!(backend.next_version());
-                backend.objects.insert(key, updated.clone());
-                (StatusCode::OK, Json(updated))
+                current.replace_status(&sent);
+                current.meta_mut().resource_version = Some(version);
+                (StatusCode::OK, Json(&*current)).into_response()
             }
             (Method::PATCH, [name, "status"]) => {
-                let key = (collection, (*name).to_owned());
-                let Some(mut updated) = backend.objects.get(&key).cloned() else {
+                let version = backend.next_version();
+                let Some(current) = T::objects(backend).get_mut(*name) else {
                     return status(StatusCode::NOT_FOUND, "NotFound");
                 };
-                if !updated["status"].is_object() {
-                    updated["status"] = json!({});
-                }
-                for (field, value) in body["status"].as_object().unwrap() {
-                    updated["status"][field] = value.clone();
-                }
-                updated["metadata"]["resourceVersion"] = json!(backend.next_version());
-                backend.objects.insert(key, updated.clone());
-                (StatusCode::OK, Json(updated))
+                current.patch_status(call.body);
+                current.meta_mut().resource_version = Some(version);
+                (StatusCode::OK, Json(&*current)).into_response()
             }
             (Method::POST, []) => {
-                let name = body["metadata"]["name"].as_str().unwrap().to_owned();
-                if backend
-                    .objects
-                    .contains_key(&(collection.clone(), name.clone()))
-                {
+                let object: T = serde_json::from_slice(call.body).unwrap();
+                let name = object.name_any();
+                if T::objects(backend).contains_key(&name) {
                     return status(StatusCode::CONFLICT, "AlreadyExists");
                 }
-                backend.insert(&collection, body.clone());
-                (
-                    StatusCode::CREATED,
-                    Json(backend.objects[&(collection, name)].clone()),
-                )
+                backend.insert(object);
+                (StatusCode::CREATED, Json(&T::objects(backend)[&name])).into_response()
             }
             (Method::DELETE, [name]) => {
-                let key = (collection, (*name).to_owned());
-                let Some(current) = backend.objects.get(&key) else {
+                let Some(current) = T::objects(backend).get(*name) else {
                     return status(StatusCode::NOT_FOUND, "NotFound");
                 };
-                let preconditions = &body["preconditions"];
-                assert!(preconditions.is_object(), "delete without preconditions");
-                if preconditions["uid"] != current["metadata"]["uid"]
-                    || preconditions["resourceVersion"] != current["metadata"]["resourceVersion"]
+                let options: DeleteBody = serde_json::from_slice(call.body).unwrap();
+                let preconditions = options.preconditions.expect("delete without preconditions");
+                if preconditions.uid != current.meta().uid
+                    || preconditions.resource_version != current.meta().resource_version
                 {
                     return status(StatusCode::CONFLICT, "Conflict");
                 }
-                let removed = backend.objects.remove(&key).unwrap();
-                (StatusCode::OK, Json(removed))
+                let removed = T::objects(backend).remove(*name).unwrap();
+                (StatusCode::OK, Json(removed)).into_response()
             }
             (method, rest) => {
-                panic!("unexpected Kubernetes request: {method} {collection} {rest:?}")
+                panic!("unexpected Kubernetes request: {method} {rest:?}")
             }
         }
     }
@@ -229,53 +341,127 @@ mod tests {
         }
     }
 
-    fn passkey(name: &str, user: &str, owner: Option<&str>) -> Value {
-        let mut object = json!({"apiVersion":"identity.zeabur.com/v1alpha1","kind":"Credential",
-            "metadata":{"name":name,"labels":{"identity.zeabur.com/user":"alice"},
-                "creationTimestamp":"2026-10-01T00:00:00Z"},
-            "spec":{"user":user,
-                "passkey":{"credentialId":name,"record":"{}","backupEligible":true,
-                    "label":"Laptop","aaguid":"fbfc3007-154e-4ecc-8c0b-6e020557d7bd"}}});
-        if let Some(uid) = owner {
-            object["metadata"]["ownerReferences"] = json!([{"apiVersion":"identity.zeabur.com/v1alpha1",
-                "kind":"User","name":"alice","uid":uid}]);
+    fn alice_object() -> UserObject {
+        UserObject::new(
+            "alice",
+            UserSpec {
+                username: "alice".into(),
+                ..UserSpec::default()
+            },
+        )
+    }
+
+    fn owner(uid: &str) -> OwnerReference {
+        OwnerReference {
+            api_version: "identity.zeabur.com/v1alpha1".into(),
+            kind: "User".into(),
+            name: "alice".into(),
+            uid: uid.into(),
+            controller: None,
+            block_owner_deletion: None,
+        }
+    }
+
+    fn credential(name: &str, owners: &[&str], kind: CredentialKind) -> Credential {
+        let mut object = Credential::new(
+            name,
+            CredentialSpec {
+                user: "alice".into(),
+                kind,
+            },
+        );
+        object.metadata.labels = Some(BTreeMap::from([(
+            USER_LABEL.to_owned(),
+            "alice".to_owned(),
+        )]));
+        object.metadata.owner_references = Some(owners.iter().map(|uid| owner(uid)).collect());
+        object
+    }
+
+    fn passkey(name: &str, user: &str, owner: Option<&str>) -> Credential {
+        let mut object = credential(
+            name,
+            owner.as_slice(),
+            CredentialKind::Passkey(Passkey {
+                credential_id: name.into(),
+                record: "{}".into(),
+                backup_eligible: true,
+                aaguid: Some("fbfc3007-154e-4ecc-8c0b-6e020557d7bd".into()),
+                label: Some("Laptop".into()),
+            }),
+        );
+        object.spec.user = user.into();
+        object.metadata.creation_timestamp =
+            Some(serde_json::from_str::<Time>("\"2026-10-01T00:00:00Z\"").unwrap());
+        if owner.is_none() {
+            object.metadata.owner_references = None;
         }
         object
     }
 
-    fn github(name: &str, owners: &[&str]) -> Value {
-        let owners: Vec<Value> = owners
-            .iter()
-            .map(|uid| {
-                json!({"apiVersion":"identity.zeabur.com/v1alpha1",
-                "kind":"User","name":"alice","uid":uid})
-            })
-            .collect();
-        json!({"apiVersion":"identity.zeabur.com/v1alpha1","kind":"Credential",
-            "metadata":{"name":name,"labels":{"identity.zeabur.com/user":"alice"},
-                "ownerReferences":owners},
-            "spec":{"user":"alice",
-                "external":{"issuer":"https://github.com","subject":name}}})
+    fn github(name: &str, owners: &[&str]) -> Credential {
+        credential(
+            name,
+            owners,
+            CredentialKind::External(ExternalId {
+                issuer: Issuer::new("https://github.com").unwrap(),
+                subject: Subject::new(name).unwrap(),
+            }),
+        )
     }
 
-    fn password() -> Value {
-        json!({"apiVersion":"identity.zeabur.com/v1alpha1","kind":"Credential",
-            "metadata":{"name":password_credential_name(ALICE_UID),
-                "labels":{"identity.zeabur.com/user":"alice"},
-                "ownerReferences":[{"apiVersion":"identity.zeabur.com/v1alpha1",
-                    "kind":"User","name":"alice","uid":ALICE_UID}]},
-            "spec":{"user":"alice",
-                "password":{"hash":"$pbkdf2-sha256$i=1$c2FsdA$aGFzaA",
-                    "totp":{"secret":"sealed","recovery":["00"],"enrolledStep":1}}}})
+    fn password() -> Credential {
+        credential(
+            &password_credential_name(ALICE_UID),
+            &[ALICE_UID],
+            CredentialKind::Password(Password {
+                hash: "$pbkdf2-sha256$i=1$c2FsdA$aGFzaA".into(),
+                totp: Some(Totp {
+                    secret: "sealed".into(),
+                    recovery: vec![RecoveryHash("00".into())],
+                    enrolled_step: 1,
+                }),
+            }),
+        )
     }
 
-    fn grant(name: &str, subject: Option<&str>) -> Value {
-        json!({"apiVersion":"identity.zeabur.com/v1alpha1","kind":"Grant",
-            "metadata":{"name":name,"labels":{"identity.zeabur.com/user":"alice"}},
-            "spec":{"user":"alice","client":"zeabur_identity","audience":"https://login.example.com",
-                "authTime":1_800_000_000,"scopes":[],"amr":["hwk","user"],
-                "expiresAt":1_800_003_600,"initialIdleExpiresAt":1_800_003_600,
-                "initialHash":"hash-1","subject":subject,"credential":"a","userVerified":true}})
+    fn invitation(name: &str, owners: &[&str]) -> Invitation {
+        let mut object = Invitation::new(
+            name,
+            InvitationSpec {
+                user: "alice".into(),
+                token_hash: "sha256:00".into(),
+                expires_at: 1_800_003_600,
+            },
+        );
+        object.metadata.owner_references = Some(owners.iter().map(|uid| owner(uid)).collect());
+        object
+    }
+
+    fn grant(name: &str, subject: Option<&str>) -> Grant {
+        let mut object = Grant::new(
+            name,
+            GrantSpec {
+                user: "alice".into(),
+                client: "zeabur_identity".into(),
+                audience: "https://login.example.com".into(),
+                auth_time: 1_800_000_000,
+                scopes: Vec::new(),
+                amr: vec!["hwk".into(), "user".into()],
+                expires_at: 1_800_003_600,
+                initial_idle_expires_at: 1_800_003_600,
+                initial_hash: "hash-1".into(),
+                subject: subject.map(Into::into),
+                credential: Some("a".into()),
+                user_verified: true,
+                device_bound: false,
+            },
+        );
+        object.metadata.labels = Some(BTreeMap::from([(
+            USER_LABEL.to_owned(),
+            "alice".to_owned(),
+        )]));
+        object
     }
 
     struct Mock {
@@ -316,11 +502,11 @@ mod tests {
     #[tokio::test]
     async fn only_the_users_own_passkeys_are_listed_or_changed() {
         let mut backend = Backend::default();
-        backend.insert("credentials", passkey("a", "alice", Some(ALICE_UID)));
-        backend.insert("credentials", passkey("b", "alice", None));
+        backend.insert(passkey("a", "alice", Some(ALICE_UID)));
+        backend.insert(passkey("b", "alice", None));
         // Labelled for alice but naming someone else, or owned by an earlier alice.
-        backend.insert("credentials", passkey("c", "mallory", None));
-        backend.insert("credentials", passkey("d", "alice", Some("uid-old-alice")));
+        backend.insert(passkey("c", "mallory", None));
+        backend.insert(passkey("d", "alice", Some("uid-old-alice")));
         let mock = mock(backend).await;
         let store = credentials(&mock);
         let listed: Vec<String> = store
@@ -341,10 +527,7 @@ mod tests {
                 Removal::NotFound
             ));
         }
-        assert_eq!(
-            mock.state.lock().await.names("credentials"),
-            ["a", "b", "c", "d"]
-        );
+        assert_eq!(mock.state.lock().await.names(), ["a", "b", "c", "d"]);
 
         assert!(matches!(
             store.rename(&alice(), "a", "Phone").await.unwrap(),
@@ -383,10 +566,10 @@ mod tests {
             .await
             .unwrap();
         let event = mock.state.lock().await.events[0].clone();
-        assert_eq!(event["involvedObject"]["kind"], "User");
-        assert_eq!(event["involvedObject"]["uid"], ALICE_UID);
-        assert_eq!(event["reason"], "PasskeyRenamed");
-        assert_eq!(event["metadata"]["generateName"], "alice.");
+        assert_eq!(event.involved_object.kind.as_deref(), Some("User"));
+        assert_eq!(event.involved_object.uid.as_deref(), Some(ALICE_UID));
+        assert_eq!(event.reason.as_deref(), Some("PasskeyRenamed"));
+        assert_eq!(event.metadata.generate_name.as_deref(), Some("alice."));
     }
 
     #[tokio::test]
@@ -399,13 +582,9 @@ mod tests {
             ("two-owners", vec![ALICE_UID, "uid-old-alice"], false),
         ];
         for (name, owners, _) in &cases {
-            backend.insert("credentials", github(name, owners));
+            backend.insert(github(name, owners));
         }
-        backend.insert(
-            "users",
-            json!({"apiVersion":"identity.zeabur.com/v1alpha1","kind":"User",
-                "metadata":{"name":"alice"},"spec":{"username":"alice"}}),
-        );
+        backend.insert(alice_object());
         let mock = mock(backend).await;
         let store = credentials(&mock);
         for (name, _, signs_in) in cases {
@@ -423,14 +602,7 @@ mod tests {
             user_subject: "uid-old-alice".into(),
         };
         assert!(store.link(&stale).await.is_err());
-        assert!(
-            !mock
-                .state
-                .lock()
-                .await
-                .names("credentials")
-                .contains(&stale.name())
-        );
+        assert!(!mock.state.lock().await.names().contains(&stale.name()));
     }
 
     #[tokio::test]
@@ -442,19 +614,7 @@ mod tests {
             ("inv-no-owner", vec![], false),
         ];
         for (name, owners, _) in &cases {
-            let owners: Vec<Value> = owners
-                .iter()
-                .map(|uid| {
-                    json!({"apiVersion":"identity.zeabur.com/v1alpha1",
-                    "kind":"User","name":"alice","uid":uid})
-                })
-                .collect();
-            backend.insert(
-                "invitations",
-                json!({"apiVersion":"identity.zeabur.com/v1alpha1","kind":"Invitation",
-                    "metadata":{"name":name,"ownerReferences":owners},
-                    "spec":{"user":"alice","tokenHash":"sha256:00","expiresAt":1_800_003_600}}),
-            );
+            backend.insert(invitation(name, owners));
         }
         let mock = mock(backend).await;
         let store = KubeSetupStore::new(Api::namespaced(mock.client.clone(), "test"))
@@ -472,13 +632,13 @@ mod tests {
     #[tokio::test]
     async fn the_last_passkey_is_never_removed() {
         let mut backend = Backend::default();
-        backend.insert("credentials", passkey("a", "alice", None));
+        backend.insert(passkey("a", "alice", None));
         let mock = mock(backend).await;
         assert!(matches!(
             credentials(&mock).remove(&alice(), "a").await.unwrap(),
             Removal::LastPasskey
         ));
-        assert_eq!(mock.state.lock().await.names("credentials"), ["a"]);
+        assert_eq!(mock.state.lock().await.names(), ["a"]);
     }
 
     /// Two removals that both list before either writes: neither may leave the user with none.
@@ -487,7 +647,7 @@ mod tests {
         for passkeys in [2, 3] {
             let mut backend = Backend::default();
             for name in ["a", "b", "c"].into_iter().take(passkeys) {
-                backend.insert("credentials", passkey(name, "alice", None));
+                backend.insert(passkey(name, "alice", None));
             }
             // Each removal's first status write waits for the other's.
             backend.held = 2;
@@ -503,7 +663,7 @@ mod tests {
                 .filter(|o| matches!(o, Removal::Removed))
                 .count();
             assert!(removed < 2, "{outcomes:?}");
-            let left = mock.state.lock().await.names("credentials");
+            let left = mock.state.lock().await.names();
             assert_eq!(left.len(), passkeys - removed);
         }
     }
@@ -512,7 +672,7 @@ mod tests {
     async fn sequential_removals_stop_at_the_last_passkey() {
         let mut backend = Backend::default();
         for name in ["a", "b", "c"] {
-            backend.insert("credentials", passkey(name, "alice", None));
+            backend.insert(passkey(name, "alice", None));
         }
         let mock = mock(backend).await;
         let store = credentials(&mock);
@@ -528,16 +688,16 @@ mod tests {
             store.remove(&alice(), "c").await.unwrap(),
             Removal::LastPasskey
         ));
-        assert_eq!(mock.state.lock().await.names("credentials"), ["c"]);
+        assert_eq!(mock.state.lock().await.names(), ["c"]);
     }
 
     #[tokio::test]
     async fn only_linked_accounts_the_user_owns_are_listed_or_unlinked() {
         let mut backend = Backend::default();
-        backend.insert("credentials", github("g-own", &[ALICE_UID]));
-        backend.insert("credentials", github("g-old", &["uid-old-alice"]));
-        backend.insert("credentials", github("g-none", &[]));
-        backend.insert("credentials", passkey("a", "alice", Some(ALICE_UID)));
+        backend.insert(github("g-own", &[ALICE_UID]));
+        backend.insert(github("g-old", &["uid-old-alice"]));
+        backend.insert(github("g-none", &[]));
+        backend.insert(passkey("a", "alice", Some(ALICE_UID)));
         let mock = mock(backend).await;
         let store = credentials(&mock);
         let listed: Vec<String> = store
@@ -558,30 +718,27 @@ mod tests {
             store.unlink(&alice(), "g-own").await.unwrap(),
             Unlink::Unlinked
         ));
-        assert_eq!(
-            mock.state.lock().await.names("credentials"),
-            ["a", "g-none", "g-old"]
-        );
+        assert_eq!(mock.state.lock().await.names(), ["a", "g-none", "g-old"]);
     }
 
     #[tokio::test]
     async fn the_last_credential_is_never_unlinked() {
         let mut backend = Backend::default();
-        backend.insert("credentials", github("g", &[ALICE_UID]));
+        backend.insert(github("g", &[ALICE_UID]));
         let mock = mock(backend).await;
         assert!(matches!(
             credentials(&mock).unlink(&alice(), "g").await.unwrap(),
             Unlink::LastCredential
         ));
-        assert_eq!(mock.state.lock().await.names("credentials"), ["g"]);
+        assert_eq!(mock.state.lock().await.names(), ["g"]);
     }
 
     /// Two unlinks that both list before either writes: neither may leave the user with nothing.
     #[tokio::test]
     async fn interleaved_unlinks_keep_a_credential() {
         let mut backend = Backend::default();
-        backend.insert("credentials", github("g1", &[ALICE_UID]));
-        backend.insert("credentials", github("g2", &[ALICE_UID]));
+        backend.insert(github("g1", &[ALICE_UID]));
+        backend.insert(github("g2", &[ALICE_UID]));
         backend.held = 2;
         backend.barrier = Some(Arc::new(Barrier::new(2)));
         let mock = mock(backend).await;
@@ -594,14 +751,14 @@ mod tests {
             !outcomes.iter().all(|o| matches!(o, Unlink::Unlinked)),
             "{outcomes:?}"
         );
-        let left = mock.state.lock().await.names("credentials");
+        let left = mock.state.lock().await.names();
         assert!(matches!(left.as_slice(), [_, ..]), "{left:?}");
     }
 
     #[tokio::test]
     async fn a_password_is_removed_only_while_the_user_keeps_another_way_in() {
         let mut backend = Backend::default();
-        backend.insert("credentials", password());
+        backend.insert(password());
         let mock = mock(backend).await;
         let store = credentials(&mock);
         let stored = store.password(&alice()).await.unwrap().unwrap();
@@ -610,10 +767,7 @@ mod tests {
             PasswordRemoval::LastCredential
         ));
 
-        mock.state
-            .lock()
-            .await
-            .insert("credentials", github("g", &[ALICE_UID]));
+        mock.state.lock().await.insert(github("g", &[ALICE_UID]));
         // A version read before a sign-in changed the password's state.
         let state = PasswordState {
             totp_last_step: Some(2),
@@ -630,7 +784,7 @@ mod tests {
             PasswordRemoval::Removed
         ));
         assert!(store.password(&alice()).await.unwrap().is_none());
-        assert_eq!(mock.state.lock().await.names("credentials"), ["g"]);
+        assert_eq!(mock.state.lock().await.names(), ["g"]);
     }
 
     /// A password removal and an unlink that both list before either writes: neither may leave
@@ -638,12 +792,8 @@ mod tests {
     #[tokio::test]
     async fn a_password_change_from_a_stale_read_is_refused() {
         let mut backend = Backend::default();
-        backend.insert("credentials", password());
-        backend.insert(
-            "users",
-            json!({"apiVersion":"identity.zeabur.com/v1alpha1","kind":"User",
-                "metadata":{"name":"alice"},"spec":{"username":"alice"}}),
-        );
+        backend.insert(password());
+        backend.insert(alice_object());
         let mock = mock(backend).await;
         let store = credentials(&mock);
         let read = store.password(&alice()).await.unwrap().unwrap();
@@ -668,8 +818,8 @@ mod tests {
     #[tokio::test]
     async fn a_password_removal_racing_an_unlink_keeps_a_credential() {
         let mut backend = Backend::default();
-        backend.insert("credentials", password());
-        backend.insert("credentials", github("g", &[ALICE_UID]));
+        backend.insert(password());
+        backend.insert(github("g", &[ALICE_UID]));
         backend.held = 2;
         backend.barrier = Some(Arc::new(Barrier::new(2)));
         let mock = mock(backend).await;
@@ -688,17 +838,17 @@ mod tests {
             ),
             "{removal:?} {unlink:?}"
         );
-        let left = mock.state.lock().await.names("credentials");
+        let left = mock.state.lock().await.names();
         assert!(matches!(left.as_slice(), [_, ..]), "{left:?}");
     }
 
     #[tokio::test]
     async fn grants_are_listed_by_uid_and_reauthenticated_by_secret() {
         let mut backend = Backend::default();
-        backend.insert("grants", grant("s-1", Some(ALICE_UID)));
+        backend.insert(grant("s-1", Some(ALICE_UID)));
         // A grant without a recorded UID belongs to no one.
-        backend.insert("grants", grant("g-legacy", None));
-        backend.insert("grants", grant("s-old", Some("uid-old-alice")));
+        backend.insert(grant("g-legacy", None));
+        backend.insert(grant("s-old", Some("uid-old-alice")));
         let mock = mock(backend).await;
         let store = KubeGrantStore::new(Api::namespaced(mock.client.clone(), "test"));
         let names: Vec<String> = store

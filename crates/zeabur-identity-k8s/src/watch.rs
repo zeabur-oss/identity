@@ -66,7 +66,10 @@ mod tests {
     use axum::http::{Request, StatusCode};
     use axum::response::{IntoResponse as _, Response};
     use k8s_openapi::api::core::v1::ConfigMap;
-    use serde_json::json;
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::ListMeta;
+    use kube::api::ObjectMeta;
+    use kube::core::Status;
+    use kube::core::response::StatusDetails;
 
     use super::*;
 
@@ -99,9 +102,21 @@ mod tests {
             seen.iter().filter(|request| request.is_some()).count()
         };
         if param("watch").is_none() {
-            return axum::Json(json!({"apiVersion":"v1", "kind":"ConfigMapList",
-                "metadata":{"resourceVersion":"100"},
-                "items":[{"metadata":{"name":"a", "namespace":"test", "resourceVersion":"99"}}]}))
+            return axum::Json(k8s_openapi::List {
+                metadata: ListMeta {
+                    resource_version: Some("100".to_owned()),
+                    ..ListMeta::default()
+                },
+                items: vec![ConfigMap {
+                    metadata: ObjectMeta {
+                        name: Some("a".to_owned()),
+                        namespace: Some("test".to_owned()),
+                        resource_version: Some("99".to_owned()),
+                        ..ObjectMeta::default()
+                    },
+                    ..ConfigMap::default()
+                }],
+            })
             .into_response();
         }
         if watches == 1 {
@@ -148,10 +163,19 @@ mod tests {
         );
     }
 
-    fn gone() -> serde_json::Value {
-        json!({"kind":"Status", "apiVersion":"v1", "metadata":{}, "status":"Failure",
-            "message":"too old resource version: 100 (200)", "reason":"Expired",
-            "details":{"group":"identity.zeabur.com", "kind":"grants"}, "code":410})
+    fn gone() -> Status {
+        let mut status = Status::failure("too old resource version: 100 (200)", "Expired")
+            .with_code(410)
+            .with_details(StatusDetails {
+                name: String::new(),
+                group: "identity.zeabur.com".to_owned(),
+                kind: "grants".to_owned(),
+                uid: String::new(),
+                causes: Vec::new(),
+                retry_after_seconds: 0,
+            });
+        status.metadata = Some(ListMeta::default());
+        status
     }
 
     #[tokio::test]
@@ -161,6 +185,6 @@ mod tests {
 
     #[tokio::test]
     async fn relists_after_a_gone_status_response() {
-        relists_after(gone().to_string()).await;
+        relists_after(serde_json::to_string(&gone()).unwrap()).await;
     }
 }

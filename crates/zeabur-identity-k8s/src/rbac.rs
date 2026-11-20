@@ -41,11 +41,11 @@ use k8s_openapi::api::rbac::v1::{
     ClusterRoleBinding, PolicyRule, Role, RoleBinding, RoleRef, Subject,
 };
 use kube::api::ObjectMeta;
-use serde_json::Value;
 use zeabur_identity_api::{ADMIN_GROUP, GROUP, IDENTITY_PREFIX, upstream_provider};
 use zeabur_identity_core::account::SETTINGS_CONFIG_MAP;
 
 use super::keys::SECRET_TYPE;
+use super::manifest::{Manifest, ManifestList};
 use super::setup::SETUP_SECRET;
 use super::{KEY_SECRET, MANAGED_BY, internal_tls, password_key};
 
@@ -161,27 +161,24 @@ fn meta(name: &str, namespace: Option<&str>) -> ObjectMeta {
 }
 
 /// The objects to install in `namespace`, in apply order.
-///
-/// # Errors
-///
-/// Returns an error if serialization fails.
-pub fn manifests(namespace: &str) -> serde_json::Result<Vec<Value>> {
+#[must_use]
+pub fn manifests(namespace: &str) -> Vec<Manifest> {
     let ns = Some(namespace);
-    Ok(vec![
-        serde_json::to_value(Namespace {
+    vec![
+        Manifest::Namespace(Box::new(Namespace {
             metadata: meta(namespace, None),
             ..Namespace::default()
-        })?,
-        serde_json::to_value(ServiceAccount {
+        })),
+        Manifest::ServiceAccount(Box::new(ServiceAccount {
             metadata: meta(NAME, ns),
             automount_service_account_token: Some(true),
             ..ServiceAccount::default()
-        })?,
-        serde_json::to_value(Role {
+        })),
+        Manifest::Role(Box::new(Role {
             metadata: meta(NAME, ns),
             rules: Some(rules()),
-        })?,
-        serde_json::to_value(RoleBinding {
+        })),
+        Manifest::RoleBinding(Box::new(RoleBinding {
             metadata: meta(NAME, ns),
             role_ref: RoleRef {
                 api_group: "rbac.authorization.k8s.io".to_owned(),
@@ -194,23 +191,27 @@ pub fn manifests(namespace: &str) -> serde_json::Result<Vec<Value>> {
                 namespace: Some(namespace.to_owned()),
                 ..Subject::default()
             }]),
-        })?,
+        })),
         // Only admin accounts carry `zeabur:admins`, and they sign in with a passkey only. Applied
         // by the installer with the cluster admin's own rights; Zeabur Identity's service account
         // cannot create bindings.
-        serde_json::to_value(group_binding(ADMINS_BINDING, "cluster-admin", ADMIN_GROUP))?,
+        Manifest::ClusterRoleBinding(Box::new(group_binding(
+            ADMINS_BINDING,
+            "cluster-admin",
+            ADMIN_GROUP,
+        ))),
         // Created empty by the installer; Zeabur Identity fills it.
-        serde_json::to_value(Secret {
+        Manifest::Secret(Box::new(Secret {
             metadata: meta(KEY_SECRET, ns),
             type_: Some(SECRET_TYPE.to_owned()),
             ..Secret::default()
-        })?,
-        serde_json::to_value(Secret {
+        })),
+        Manifest::Secret(Box::new(Secret {
             metadata: meta(password_key::SECRET, ns),
             type_: Some(password_key::SECRET_TYPE.to_owned()),
             ..Secret::default()
-        })?,
-    ])
+        })),
+    ]
 }
 
 /// Renders [`manifests`] as a Kubernetes `List` without a trailing newline.
@@ -219,11 +220,7 @@ pub fn manifests(namespace: &str) -> serde_json::Result<Vec<Value>> {
 ///
 /// Returns an error if serialization fails.
 pub fn manifests_json(namespace: &str) -> serde_json::Result<String> {
-    serde_json::to_string_pretty(&serde_json::json!({
-        "apiVersion": "v1",
-        "kind": "List",
-        "items": manifests(namespace)?,
-    }))
+    serde_json::to_string_pretty(&ManifestList::new(manifests(namespace)))
 }
 
 #[cfg(test)]
@@ -237,7 +234,7 @@ mod tests {
         // Compare parsed JSON: test builds may enable serde_json features (such as
         // `preserve_order`, through dev-dependencies) that change key order but not
         // content.
-        let parse = |s: &str| serde_json::from_str::<Value>(s).unwrap();
+        let parse = |s: &str| serde_json::from_str::<ManifestList>(s).unwrap();
         assert!(
             committed.ends_with('\n')
                 && parse(committed) == parse(&manifests_json(DEFAULT_NAMESPACE).unwrap()),

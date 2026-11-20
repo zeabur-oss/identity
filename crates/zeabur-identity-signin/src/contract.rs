@@ -5,7 +5,7 @@
 use std::fmt::Write as _;
 
 use schemars::generate::SchemaSettings;
-use serde_json::Value;
+use serde::{Deserialize, Serialize};
 
 use crate::SignInResponse;
 use crate::account::{Done, SignedIn as AccountSignedIn};
@@ -27,7 +27,14 @@ fn typescript() -> String {
     generator.subschema_for::<PasswordSetUp<'_>>();
     generator.subschema_for::<SetupOptions>();
     generator.subschema_for::<StartResponse>();
-    let mut definitions: Vec<_> = generator.take_definitions(true).into_iter().collect();
+    let mut definitions: Vec<(String, Node)> = generator
+        .take_definitions(true)
+        .into_iter()
+        .map(|(name, schema)| {
+            let node = serde_json::from_str(&serde_json::to_string(&schema).unwrap()).unwrap();
+            (name, node)
+        })
+        .collect();
     definitions.sort_by(|a, b| a.0.cmp(&b.0));
 
     let mut out = String::from(
@@ -36,7 +43,7 @@ fn typescript() -> String {
     for (name, schema) in &definitions {
         out.push('\n');
         doc(&mut out, schema, "");
-        if schema.get("properties").is_some() {
+        if schema.properties.is_some() {
             writeln!(out, "export type {name} = {}", object(schema, "")).unwrap();
         } else {
             writeln!(out, "export type {name} = {}", ty(schema, "")).unwrap();
@@ -45,22 +52,97 @@ fn typescript() -> String {
     out
 }
 
-fn doc(out: &mut String, schema: &Value, indent: &str) {
-    if let Some(text) = schema.get("description").and_then(Value::as_str) {
+/// The JSON Schema keywords this generator renders; schemars hands out the schema of each type
+/// as an untyped document, so it is read into this once.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct Node {
+    description: Option<String>,
+    #[serde(rename = "$ref")]
+    reference: Option<String>,
+    #[serde(rename = "const")]
+    constant: Option<Literal>,
+    #[serde(rename = "enum")]
+    variants: Option<Vec<Literal>>,
+    #[serde(rename = "oneOf")]
+    one_of: Option<Vec<Self>>,
+    #[serde(rename = "anyOf")]
+    any_of: Option<Vec<Self>>,
+    #[serde(rename = "type")]
+    ty: Option<Type>,
+    properties: Option<Properties>,
+    required: Vec<String>,
+    items: Option<Box<Self>>,
+}
+
+/// The `properties` of an object, in the order the type declares them.
+#[derive(Debug)]
+struct Properties(Vec<(String, Node)>);
+
+impl<'de> Deserialize<'de> for Properties {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct InOrder;
+
+        impl<'de> serde::de::Visitor<'de> for InOrder {
+            type Value = Properties;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("an object of schemas")
+            }
+
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<Properties, A::Error> {
+                let mut fields = Vec::new();
+                while let Some(entry) = map.next_entry()? {
+                    fields.push(entry);
+                }
+                Ok(Properties(fields))
+            }
+        }
+
+        deserializer.deserialize_map(InOrder)
+    }
+}
+
+/// A `const` or `enum` value: the schemas of the reply types hold scalars only.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+enum Literal {
+    Text(String),
+    Number(i64),
+    Flag(bool),
+    Null(()),
+}
+
+impl Literal {
+    fn typescript(&self) -> String {
+        serde_json::to_string(self).unwrap()
+    }
+}
+
+/// The `type` keyword: one name, or several.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum Type {
+    One(String),
+    Many(Vec<String>),
+}
+
+fn doc(out: &mut String, schema: &Node, indent: &str) {
+    if let Some(text) = &schema.description {
         writeln!(out, "{indent}/** {} */", text.replace('\n', " ")).unwrap();
     }
 }
 
-fn object(schema: &Value, indent: &str) -> String {
-    let required: Vec<&str> = schema["required"].as_array().map_or_else(Vec::new, |list| {
-        list.iter().filter_map(Value::as_str).collect()
-    });
+fn object(schema: &Node, indent: &str) -> String {
     let inner = format!("{indent}  ");
     let mut out = String::from("{\n");
-    for (field, property) in schema["properties"].as_object().unwrap() {
+    for (field, property) in &schema.properties.as_ref().unwrap().0 {
         doc(&mut out, property, &inner);
         let ty = ty(property, &inner);
-        if required.contains(&field.as_str()) {
+        if schema.required.contains(field) {
             writeln!(out, "{inner}{field}: {ty}").unwrap();
         } else {
             // Skipped when empty, never sent as null.
@@ -73,43 +155,33 @@ fn object(schema: &Value, indent: &str) -> String {
     out
 }
 
-fn ty(schema: &Value, indent: &str) -> String {
-    if let Some(reference) = schema.get("$ref").and_then(Value::as_str) {
+fn ty(schema: &Node, indent: &str) -> String {
+    if let Some(reference) = &schema.reference {
         return reference.rsplit('/').next().unwrap().to_owned();
     }
-    if let Some(value) = schema.get("const") {
-        return value.to_string();
+    if let Some(value) = &schema.constant {
+        return value.typescript();
     }
-    if let Some(values) = schema.get("enum").and_then(Value::as_array) {
-        return union(values.iter().map(Value::to_string));
+    if let Some(values) = &schema.variants {
+        return union(values.iter().map(Literal::typescript));
     }
-    if let Some(alternatives) = schema
-        .get("oneOf")
-        .or_else(|| schema.get("anyOf"))
-        .and_then(Value::as_array)
-    {
+    if let Some(alternatives) = schema.one_of.as_ref().or(schema.any_of.as_ref()) {
         return union(alternatives.iter().map(|a| ty(a, indent)));
     }
-    match &schema["type"] {
-        Value::String(name) => named(name, schema, indent),
-        Value::Array(names) => union(
-            names
-                .iter()
-                .map(|name| named(name.as_str().unwrap(), schema, indent)),
-        ),
-        other @ (Value::Null | Value::Bool(_) | Value::Number(_) | Value::Object(_)) => {
-            panic!("unsupported schema type {other} in {schema}")
-        }
+    match &schema.ty {
+        Some(Type::One(name)) => named(name, schema, indent),
+        Some(Type::Many(names)) => union(names.iter().map(|name| named(name, schema, indent))),
+        None => panic!("unsupported schema without a type: {schema:?}"),
     }
 }
 
-fn named(name: &str, schema: &Value, indent: &str) -> String {
+fn named(name: &str, schema: &Node, indent: &str) -> String {
     match name {
         "string" => "string".to_owned(),
         "integer" | "number" => "number".to_owned(),
         "boolean" => "boolean".to_owned(),
         "null" => "null".to_owned(),
-        "array" => format!("{}[]", ty(&schema["items"], indent)),
+        "array" => format!("{}[]", ty(schema.items.as_ref().unwrap(), indent)),
         "object" => object(schema, indent),
         other => panic!("unsupported schema type {other}"),
     }

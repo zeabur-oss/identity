@@ -31,30 +31,41 @@ mod tests {
     use http_body_util::{BodyExt as _, Full};
     use hyper_util::rt::TokioIo;
     use k8s_openapi::api::apps::v1::Deployment;
-    use k8s_openapi::api::core::v1::{Namespace, Node, Secret, Service, ServicePort, ServiceSpec};
-    use kube::api::{
-        Api, DeleteParams, DynamicObject, ListParams, ObjectMeta, Patch, PatchParams, PostParams,
+    use k8s_openapi::api::authentication::v1::SelfSubjectReview;
+    use k8s_openapi::api::core::v1::{
+        ConfigMap, ConfigMapVolumeSource, Container, EnvVar, Namespace, Node, Secret, Service,
+        ServicePort, ServiceSpec, Volume, VolumeMount,
     };
+    use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
+    use k8s_openapi::{ClusterResourceScope, NamespaceResourceScope};
+    use kube::api::{Api, DeleteParams, ListParams, ObjectMeta, Patch, PatchParams, PostParams};
     use kube::config::Kubeconfig;
-    use kube::core::GroupVersionKind;
-    use kube::discovery::{Scope, pinned_kind};
+    use kube::core::object::NotUsed;
+    use kube::core::{GroupVersionKind, Object};
+    use kube::discovery::pinned_kind;
     use kube::runtime::wait::await_condition;
-    use kube::{Client, ResourceExt as _};
+    use kube::{Client, Resource, ResourceExt as _};
     use passkey::client::DefaultClientData;
     use passkey::types::webauthn::{CredentialCreationOptions, CredentialRequestOptions};
     use rustls::pki_types::pem::PemObject as _;
     use rustls::pki_types::{CertificateDer, ServerName};
-    use serde_json::{Value, json};
+    use serde::de::DeserializeOwned;
+    use serde::{Deserialize, Serialize};
     use tokio::net::TcpStream;
     use tokio_rustls::TlsConnector;
     use url::Url;
     use zeabur_identity_api::client::{ClientType, OAuthClient, OAuthClientSpec};
     use zeabur_identity_api::credential::{Credential, CredentialKind};
-    use zeabur_identity_api::user::User;
+    use zeabur_identity_api::upstream_provider::{
+        OpenID, UpstreamKind, UpstreamProvider, UpstreamProviderSpec,
+    };
+    use zeabur_identity_api::user::{AccountType, User};
     use zeabur_identity_api::{USER_LABEL, definitions};
     use zeabur_identity_core::clock::{Clock as _, SystemClock};
     use zeabur_identity_core::config::BaseUrl;
     use zeabur_identity_k8s::kube_config::{self, DiscoveryMode, Distro};
+    use zeabur_identity_k8s::manifest::Manifest;
     use zeabur_identity_k8s::setup::issue_setup_link;
     use zeabur_identity_k8s::{deployment, internal_tls, rbac};
     use zeabur_identity_oauth::endpoints::FLOW_COOKIE;
@@ -75,26 +86,269 @@ mod tests {
         std::env::var(name).unwrap_or_else(|_| panic!("{name} must be set (see tests/e2e.rs)"))
     }
 
-    /// Server-side apply of any object.
-    async fn apply(client: &Client, value: Value) {
-        let object: DynamicObject = serde_json::from_value(value).unwrap();
-        let gvk = GroupVersionKind::try_from(object.types.as_ref().unwrap()).unwrap();
-        let (resource, capabilities) = pinned_kind(client, &gvk).await.unwrap();
-        let api: Api<DynamicObject> = match capabilities.scope {
-            Scope::Namespaced => Api::namespaced_with(
-                client.clone(),
-                object.namespace().as_deref().unwrap(),
-                &resource,
-            ),
-            Scope::Cluster => Api::all_with(client.clone(), &resource),
-        };
+    /// Server-side apply of `object` through `api`.
+    async fn apply_to<K>(api: &Api<K>, object: &K)
+    where
+        K: Resource + Serialize + DeserializeOwned + Clone + std::fmt::Debug + Sync,
+    {
         api.patch(
             &object.name_any(),
             &PatchParams::apply("zeabur-identity-e2e").force(),
-            &Patch::Apply(&object),
+            &Patch::Apply(object),
         )
         .await
         .unwrap();
+    }
+
+    async fn apply_namespaced<K>(client: &Client, object: &K)
+    where
+        K: Resource<Scope = NamespaceResourceScope, DynamicType = ()>
+            + Serialize
+            + DeserializeOwned
+            + Clone
+            + std::fmt::Debug
+            + Sync,
+    {
+        let api = Api::namespaced(client.clone(), object.namespace().as_deref().unwrap());
+        apply_to(&api, object).await;
+    }
+
+    async fn apply_cluster<K>(client: &Client, object: &K)
+    where
+        K: Resource<Scope = ClusterResourceScope, DynamicType = ()>
+            + Serialize
+            + DeserializeOwned
+            + Clone
+            + std::fmt::Debug
+            + Sync,
+    {
+        apply_to(&Api::all(client.clone()), object).await;
+    }
+
+    /// Server-side apply of one object of an installation.
+    async fn apply(client: &Client, manifest: &Manifest) {
+        match manifest {
+            Manifest::Namespace(object) => apply_cluster(client, &**object).await,
+            Manifest::ClusterRoleBinding(object) => apply_cluster(client, &**object).await,
+            Manifest::ServiceAccount(object) => apply_namespaced(client, &**object).await,
+            Manifest::Role(object) => apply_namespaced(client, &**object).await,
+            Manifest::RoleBinding(object) => apply_namespaced(client, &**object).await,
+            Manifest::Secret(object) => apply_namespaced(client, &**object).await,
+            Manifest::Service(object) => apply_namespaced(client, &**object).await,
+            Manifest::Deployment(object) => apply_namespaced(client, &**object).await,
+        }
+    }
+
+    /// A JSON body with no members.
+    type Empty = std::collections::BTreeMap<String, String>;
+
+    #[derive(Serialize)]
+    struct TokenBody<'a> {
+        token: &'a str,
+    }
+
+    #[derive(Serialize)]
+    struct SetupBody<'a, C> {
+        token: &'a str,
+        credential: &'a C,
+        label: &'a str,
+    }
+
+    #[derive(Serialize)]
+    struct CredentialBody<'a, C> {
+        credential: &'a C,
+    }
+
+    #[derive(Serialize)]
+    struct ProviderBody<'a> {
+        provider: &'a str,
+    }
+
+    #[derive(Serialize)]
+    struct NameBody<'a> {
+        name: &'a str,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct Tokens {
+        #[serde(rename = "access_token")]
+        access: String,
+        #[serde(rename = "refresh_token")]
+        refresh: String,
+        #[serde(rename = "id_token")]
+        id: Option<String>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct OAuthError {
+        error: String,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct Redirect {
+        redirect_to: String,
+    }
+
+    #[derive(Debug, Deserialize, PartialEq, Eq)]
+    struct UserInfo {
+        sub: String,
+    }
+
+    /// A merge patch of `spec`.
+    #[derive(Debug, Serialize)]
+    struct SpecPatch<S> {
+        spec: S,
+    }
+
+    #[derive(Debug, Serialize)]
+    struct DisabledPatch {
+        disabled: bool,
+    }
+
+    #[derive(Debug, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct AccountTypePatch {
+        account_type: AccountType,
+    }
+
+    /// The members of kubelet's stats summary that the memory check reads.
+    #[derive(Deserialize)]
+    struct StatsSummary {
+        pods: Vec<PodStats>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct PodStats {
+        pod_ref: PodRef,
+        memory: Option<PodMemory>,
+    }
+
+    #[derive(Deserialize)]
+    struct PodRef {
+        namespace: String,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct PodMemory {
+        working_set_bytes: Option<u64>,
+    }
+
+    #[derive(Serialize)]
+    struct Measurement {
+        pod_working_set_bytes: u64,
+    }
+
+    /// A kubeconfig with one cluster and one bearer token.
+    #[derive(Serialize)]
+    #[serde(rename_all = "kebab-case")]
+    struct TokenConfig {
+        api_version: &'static str,
+        kind: &'static str,
+        clusters: Vec<Named<ClusterEntry>>,
+        users: Vec<Named<UserEntry>>,
+        contexts: Vec<Named<ContextEntry>>,
+        current_context: &'static str,
+    }
+
+    #[derive(Serialize)]
+    struct Named<T> {
+        name: &'static str,
+        #[serde(flatten)]
+        entry: T,
+    }
+
+    #[derive(Serialize)]
+    struct ClusterEntry {
+        cluster: Cluster,
+    }
+
+    #[derive(Serialize)]
+    #[serde(rename_all = "kebab-case")]
+    struct Cluster {
+        server: Option<String>,
+        certificate_authority_data: Option<String>,
+    }
+
+    #[derive(Serialize)]
+    struct UserEntry {
+        user: TokenUser,
+    }
+
+    #[derive(Serialize)]
+    struct TokenUser {
+        token: String,
+    }
+
+    #[derive(Serialize)]
+    struct ContextEntry {
+        context: Context,
+    }
+
+    #[derive(Serialize)]
+    struct Context {
+        cluster: &'static str,
+        user: &'static str,
+    }
+
+    /// A merge patch of a Deployment's pod template.
+    #[derive(Debug, Serialize)]
+    struct TemplatePatch {
+        spec: TemplateSpecPatch,
+    }
+
+    #[derive(Debug, Serialize)]
+    struct TemplateSpecPatch {
+        template: PodPatch,
+    }
+
+    #[derive(Debug, Serialize)]
+    struct PodPatch {
+        spec: PodSpecPatch,
+    }
+
+    #[derive(Debug, Serialize)]
+    struct PodSpecPatch {
+        volumes: Vec<Volume>,
+        containers: Vec<Container>,
+    }
+
+    /// cert-manager's Certificate, of which the tests read and write only the conditions.
+    type Certificate = Object<CertificateSpec, CertificateStatus>;
+
+    #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct CertificateSpec {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        secret_name: Option<String>,
+    }
+
+    #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+    struct CertificateStatus {
+        #[serde(default)]
+        conditions: Vec<CertificateCondition>,
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct CertificateCondition {
+        #[serde(rename = "type")]
+        kind: String,
+        status: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        last_transition_time: Option<Time>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        observed_generation: Option<i64>,
+    }
+
+    #[derive(Debug, Serialize)]
+    struct StatusPatch<S> {
+        status: S,
     }
 
     async fn wait_for<F, Fut>(what: &str, timeout: Duration, mut check: F)
@@ -144,8 +398,9 @@ mod tests {
     }
 
     impl Reply {
-        fn json(&self) -> Value {
-            serde_json::from_slice(&self.body).unwrap_or(Value::Null)
+        fn json<T: DeserializeOwned>(&self) -> T {
+            serde_json::from_slice(&self.body)
+                .unwrap_or_else(|error| panic!("{error}: {:?}", self.body))
         }
         fn cookie(&self, name: &str) -> String {
             self.headers
@@ -199,7 +454,12 @@ mod tests {
         }
     }
 
-    async fn post_json(address: &str, path: &str, body: &Value, cookies: &str) -> Reply {
+    async fn post_json(
+        address: &str,
+        path: &str,
+        body: &(impl Serialize + Sync),
+        cookies: &str,
+    ) -> Reply {
         let mut headers = vec![("origin", ISSUER)];
         if !cookies.is_empty() {
             headers.push(("cookie", cookies));
@@ -209,7 +469,7 @@ mod tests {
             Method::POST,
             path,
             &headers,
-            Some(("application/json", body.to_string())),
+            Some(("application/json", serde_json::to_string(body).unwrap())),
         )
         .await
     }
@@ -232,22 +492,42 @@ mod tests {
             .find(|c| c.name == cluster_name)
             .and_then(|c| c.cluster.clone())
             .unwrap();
-        let config = json!({
-            "apiVersion": "v1",
-            "kind": "Config",
-            "clusters": [{ "name": "e2e", "cluster": {
-                "server": cluster.server,
-                "certificate-authority-data": cluster.certificate_authority_data,
-            }}],
-            "users": [{ "name": "e2e", "user": { "token": token } }],
-            "contexts": [{ "name": "e2e", "context": { "cluster": "e2e", "user": "e2e" } }],
-            "current-context": "e2e",
-        });
+        let config = TokenConfig {
+            api_version: "v1",
+            kind: "Config",
+            clusters: vec![Named {
+                name: "e2e",
+                entry: ClusterEntry {
+                    cluster: Cluster {
+                        server: cluster.server,
+                        certificate_authority_data: cluster.certificate_authority_data,
+                    },
+                },
+            }],
+            users: vec![Named {
+                name: "e2e",
+                entry: UserEntry {
+                    user: TokenUser {
+                        token: token.to_owned(),
+                    },
+                },
+            }],
+            contexts: vec![Named {
+                name: "e2e",
+                entry: ContextEntry {
+                    context: Context {
+                        cluster: "e2e",
+                        user: "e2e",
+                    },
+                },
+            }],
+            current_context: "e2e",
+        };
         let path = dir.join(format!(
             "zeabur-identity-e2e-{label}-{}.json",
             std::process::id()
         ));
-        std::fs::write(&path, config.to_string()).unwrap();
+        std::fs::write(&path, serde_json::to_string(&config).unwrap()).unwrap();
         path
     }
 
@@ -357,26 +637,23 @@ mod tests {
     async fn renew(client: &Client, namespace: &str, name: &str) {
         let gvk = GroupVersionKind::gvk("cert-manager.io", "v1", "Certificate");
         let (resource, _) = pinned_kind(client, &gvk).await.unwrap();
-        let certificates: Api<DynamicObject> =
+        let certificates: Api<Certificate> =
             Api::namespaced_with(client.clone(), namespace, &resource);
         let current = certificates.get(name).await.unwrap();
-        let mut conditions = current
-            .data
-            .pointer("/status/conditions")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        conditions.push(json!({
-            "type": "Issuing",
-            "status": "True",
-            "reason": "ManuallyTriggered",
-            "message": "Certificate re-issuance manually triggered",
-        }));
+        let mut status = current.status.unwrap_or_default();
+        status.conditions.push(CertificateCondition {
+            kind: "Issuing".into(),
+            status: "True".into(),
+            reason: Some("ManuallyTriggered".into()),
+            message: Some("Certificate re-issuance manually triggered".into()),
+            last_transition_time: None,
+            observed_generation: None,
+        });
         certificates
             .patch_status(
                 name,
                 &PatchParams::default(),
-                &Patch::Merge(json!({"status": {"conditions": conditions}})),
+                &Patch::Merge(&StatusPatch { status }),
             )
             .await
             .unwrap();
@@ -386,7 +663,7 @@ mod tests {
     /// with `image`, and waits until Zeabur Identity is ready.
     async fn install(admin: &Client, namespace: &str, issuer: &BaseUrl, image: &str) {
         for crd in definitions() {
-            apply(admin, serde_json::to_value(crd).unwrap()).await;
+            apply_to(&Api::<CustomResourceDefinition>::all(admin.clone()), &crd).await;
         }
         for object in deployment::manifests(
             namespace,
@@ -395,10 +672,8 @@ mod tests {
                 image: image.to_owned(),
                 ..deployment::Options::default()
             },
-        )
-        .unwrap()
-        {
-            apply(admin, object).await;
+        ) {
+            apply(admin, &object).await;
         }
         let deployments: Api<Deployment> = Api::namespaced(admin.clone(), namespace);
         rolled_out(&deployments, "Zeabur Identity to become ready").await;
@@ -473,7 +748,7 @@ mod tests {
 
     /// Signs in with `device` through Zeabur Identity's public listener, as kubectl's OIDC plugin
     /// would (authorization request, passkey, code, token), and returns the token response.
-    async fn sign_in(address: &str, device: &mut Device, scope: &str) -> Value {
+    async fn sign_in(address: &str, device: &mut Device, scope: &str) -> Tokens {
         let origin = Url::parse(ISSUER).unwrap();
         let authorize = format!(
             "/authorize?client_id=kubectl&redirect_uri=http%3A%2F%2F127.0.0.1%3A8000%2F&response_type=code&scope={scope}&code_challenge={CHALLENGE}&code_challenge_method=S256&state=e2e"
@@ -481,9 +756,9 @@ mod tests {
         let reply = http(address, Method::GET, &authorize, &[], None).await;
         assert_eq!(reply.status, StatusCode::SEE_OTHER);
         let flow = reply.cookie(FLOW_COOKIE);
-        let reply = post_json(address, "/login/options", &json!({}), "").await;
+        let reply = post_json(address, "/login/options", &Empty::new(), "").await;
         let ceremony = reply.cookie(CEREMONY_COOKIE);
-        let options: CredentialRequestOptions = serde_json::from_value(reply.json()).unwrap();
+        let options: CredentialRequestOptions = reply.json();
         let assertion = device
             .authenticate(&origin, options, DefaultClientData)
             .await
@@ -491,12 +766,14 @@ mod tests {
         let reply = post_json(
             address,
             "/login",
-            &json!({ "credential": assertion }),
+            &CredentialBody {
+                credential: &assertion,
+            },
             &format!("{FLOW_COOKIE}={flow}; {CEREMONY_COOKIE}={ceremony}"),
         )
         .await;
         assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
-        let location = reply.json()["redirect_to"].as_str().unwrap().to_owned();
+        let location = reply.json::<Redirect>().redirect_to;
         let code = form_urlencoded::parse(location.split_once('?').unwrap().1.as_bytes())
             .find(|(k, _)| k == "code")
             .unwrap()
@@ -574,10 +851,7 @@ mod tests {
         )
         .await;
         assert_eq!(refreshed.status, StatusCode::OK);
-        let current = refreshed.json()["refresh_token"]
-            .as_str()
-            .unwrap()
-            .to_owned();
+        let current = refreshed.json::<Tokens>().refresh;
         let (grant, _) = current.split_once('.').unwrap();
         let guessed = format!("{grant}.{}", "A".repeat(43));
         assert_ne!(guessed, current);
@@ -592,7 +866,7 @@ mod tests {
         )
         .await;
         assert_eq!(wrong_client.status, StatusCode::BAD_REQUEST);
-        assert_eq!(wrong_client.json()["error"], "invalid_grant");
+        assert_eq!(wrong_client.json::<OAuthError>().error, "invalid_grant");
         let refreshed = post_form(
             address,
             "/token",
@@ -604,10 +878,7 @@ mod tests {
         )
         .await;
         assert_eq!(refreshed.status, StatusCode::OK);
-        refreshed.json()["refresh_token"]
-            .as_str()
-            .unwrap()
-            .to_owned()
+        refreshed.json::<Tokens>().refresh
     }
 
     #[tokio::test]
@@ -674,9 +945,9 @@ mod tests {
 
         // Enrol a passkey from the link.
         let mut device = device();
-        let reply = post_json(&address, "/setup/options", &json!({ "token": token }), "").await;
+        let reply = post_json(&address, "/setup/options", &TokenBody { token: &token }, "").await;
         assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
-        let options: CredentialCreationOptions = serde_json::from_value(reply.json()).unwrap();
+        let options: CredentialCreationOptions = reply.json();
         let credential = device
             .register(&origin, options, DefaultClientData)
             .await
@@ -685,7 +956,11 @@ mod tests {
         let reply = post_json(
             &address,
             "/setup",
-            &json!({ "token": token, "credential": credential, "label": "e2e" }),
+            &SetupBody {
+                token: &token,
+                credential: &credential,
+                label: "e2e",
+            },
             &format!("{CEREMONY_COOKIE}={ceremony}"),
         )
         .await;
@@ -693,14 +968,10 @@ mod tests {
 
         // Sign in as kubectl would: authorization request, passkey, code, token.
         let tokens = sign_in(&address, &mut device, "openid").await;
-        assert!(tokens["refresh_token"].is_string());
-        let latest_refresh = guessed_refresh_secrets_preserve_session(
-            &address,
-            tokens["refresh_token"].as_str().unwrap(),
-        )
-        .await;
-        let access_token = tokens["access_token"].as_str().unwrap();
-        let id_token = tokens["id_token"].as_str().unwrap();
+        let latest_refresh =
+            guessed_refresh_secrets_preserve_session(&address, &tokens.refresh).await;
+        let access_token = tokens.access.as_str();
+        let id_token = tokens.id.as_deref().unwrap();
 
         // UserInfo resolves metadata by UID without changing the token contract, then checks
         // the latest user spec. A disable must take effect without waiting for a watch update.
@@ -710,12 +981,14 @@ mod tests {
         let headers = [("authorization", authorization.as_str())];
         let info = http(&address, Method::GET, "/userinfo", &headers, None).await;
         assert_eq!(info.status, StatusCode::OK);
-        assert_eq!(info.json(), json!({"sub": subject}));
+        assert_eq!(info.json::<UserInfo>(), UserInfo { sub: subject });
         users
             .patch(
                 "admin",
                 &PatchParams::default(),
-                &Patch::Merge(json!({"spec": {"disabled": true}})),
+                &Patch::Merge(&SpecPatch {
+                    spec: DisabledPatch { disabled: true },
+                }),
             )
             .await
             .unwrap();
@@ -725,7 +998,9 @@ mod tests {
             .patch(
                 "admin",
                 &PatchParams::default(),
-                &Patch::Merge(json!({"spec": {"disabled": false}})),
+                &Patch::Merge(&SpecPatch {
+                    spec: DisabledPatch { disabled: false },
+                }),
             )
             .await
             .unwrap();
@@ -746,68 +1021,67 @@ mod tests {
             },
         )
         .await;
-        let user = &serde_json::from_str::<Value>(&whoami).unwrap()["status"]["userInfo"];
-        assert_eq!(user["username"], "zeabur:admin", "{user}");
-        let groups = user["groups"].as_array().unwrap();
-        assert!(groups.contains(&json!("zeabur:admins")), "{user}");
-        assert!(groups.contains(&json!("system:authenticated")), "{user}");
+        let user = serde_json::from_str::<SelfSubjectReview>(&whoami)
+            .unwrap()
+            .status
+            .unwrap()
+            .user_info
+            .unwrap();
+        assert_eq!(user.username.as_deref(), Some("zeabur:admin"), "{user:?}");
+        let groups = user.groups.clone().unwrap_or_default();
+        assert!(groups.iter().any(|g| g == "zeabur:admins"), "{user:?}");
         assert!(
-            !groups
-                .iter()
-                .any(|g| g.as_str().unwrap().starts_with("system:masters"))
+            groups.iter().any(|g| g == "system:authenticated"),
+            "{user:?}"
+        );
+        assert!(!groups.iter().any(|g| g.starts_with("system:masters")));
+        let extra = user.extra.clone().unwrap_or_default();
+        assert_eq!(
+            extra.get("identity.zeabur.com/client-id"),
+            Some(&vec!["kubectl".to_owned()])
         );
         assert_eq!(
-            user["extra"]["identity.zeabur.com/client-id"],
-            json!(["kubectl"])
+            extra.get("identity.zeabur.com/amr"),
+            Some(&vec!["swk".to_owned(), "mfa".to_owned()])
         );
-        assert_eq!(
-            user["extra"]["identity.zeabur.com/amr"],
-            json!(["swk", "mfa"])
-        );
-        assert!(user["uid"].as_str().is_some_and(|uid| !uid.is_empty()));
+        assert!(user.uid.as_ref().is_some_and(|uid| !uid.is_empty()));
 
         // An admin account acts with full rights, with no second sign-in.
         assert_eq!(can_i(&as_user, &["*", "*", "--all-namespaces"]), "yes");
 
         // A refresh needs no passkey, as kubelogin uses it. The token follows the account type
         // at each refresh: as a regular account, the admin group and its rights are gone.
-        let set_type = |account_type: &'static str| {
+        let set_type = |account_type: AccountType| {
             let users = users.clone();
             async move {
                 users
                     .patch(
                         "admin",
                         &PatchParams::default(),
-                        &Patch::Merge(json!({"spec": {"accountType": account_type}})),
+                        &Patch::Merge(&SpecPatch {
+                            spec: AccountTypePatch { account_type },
+                        }),
                     )
                     .await
                     .unwrap();
             }
         };
-        set_type("Regular").await;
+        set_type(AccountType::Regular).await;
         let regular = refresh(&address, &latest_refresh).await;
         assert_eq!(regular.status, StatusCode::OK, "{:?}", regular.body);
-        let regular = regular.json();
-        let as_regular = token_kubeconfig(
-            &scratch,
-            "regular",
-            regular["access_token"].as_str().unwrap(),
-        );
+        let regular = regular.json::<Tokens>();
+        let as_regular = token_kubeconfig(&scratch, "regular", &regular.access);
         assert_eq!(
             can_i(&as_regular, &["list", "pods", "--all-namespaces"]),
             "no"
         );
-        set_type("Admin").await;
-        let refreshed = refresh(&address, regular["refresh_token"].as_str().unwrap()).await;
+        set_type(AccountType::Admin).await;
+        let refreshed = refresh(&address, &regular.refresh).await;
         assert_eq!(refreshed.status, StatusCode::OK, "{:?}", refreshed.body);
-        let refreshed = refreshed.json();
-        let as_admin = token_kubeconfig(
-            &scratch,
-            "admin",
-            refreshed["access_token"].as_str().unwrap(),
-        );
+        let refreshed = refreshed.json::<Tokens>();
+        let as_admin = token_kubeconfig(&scratch, "admin", &refreshed.access);
         assert_eq!(can_i(&as_admin, &["*", "*", "--all-namespaces"]), "yes");
-        let latest_refresh = refreshed["refresh_token"].as_str().unwrap().to_owned();
+        let latest_refresh = refreshed.refresh;
 
         // ID tokens are for the client, not for the cluster.
         let as_id_token = token_kubeconfig(&scratch, "id", id_token);
@@ -815,7 +1089,7 @@ mod tests {
 
         // Memory as the kubelet sees it (working set), after a full sign-in. The budget is
         // 30 MiB; the value is also written for CI's job summary.
-        let summary: Value = serde_json::from_str(
+        let summary: StatsSummary = serde_json::from_str(
             &admin
                 .request_text(
                     Request::get(format!("/api/v1/nodes/{node_name}/proxy/stats/summary"))
@@ -826,17 +1100,19 @@ mod tests {
                 .unwrap(),
         )
         .unwrap();
-        let working_set = summary["pods"]
-            .as_array()
-            .unwrap()
+        let working_set = summary
+            .pods
             .iter()
-            .find(|pod| pod["podRef"]["namespace"] == namespace.as_str())
-            .and_then(|pod| pod["memory"]["workingSetBytes"].as_u64())
+            .find(|pod| pod.pod_ref.namespace == namespace)
+            .and_then(|pod| pod.memory.as_ref()?.working_set_bytes)
             .unwrap();
         if let Ok(path) = std::env::var("ZEABUR_IDENTITY_E2E_MEASUREMENTS") {
             std::fs::write(
                 path,
-                json!({ "pod_working_set_bytes": working_set }).to_string(),
+                serde_json::to_string(&Measurement {
+                    pod_working_set_bytes: working_set,
+                })
+                .unwrap(),
             )
             .unwrap();
         }
@@ -938,11 +1214,7 @@ mod tests {
         )
         .await;
         let rotated = sign_in(&address, &mut device, "openid").await;
-        let as_rotated = token_kubeconfig(
-            &scratch,
-            "rotated",
-            rotated["access_token"].as_str().unwrap(),
-        );
+        let as_rotated = token_kubeconfig(&scratch, "rotated", &rotated.access);
         wait_for(
             "kube-apiserver to trust the new CA",
             APISERVER_PICKUP,
@@ -957,8 +1229,8 @@ mod tests {
         // Prove the family's current token works, then retry reset with no credentials left.
         let refreshed = refresh(&address, &latest_refresh).await;
         assert_eq!(refreshed.status, StatusCode::OK, "{:?}", refreshed.body);
-        let refreshed = refreshed.json();
-        let current_refresh = refreshed["refresh_token"].as_str().unwrap();
+        let refreshed = refreshed.json::<Tokens>();
+        let current_refresh = refreshed.refresh.as_str();
         let credentials: Api<Credential> = Api::namespaced(admin.clone(), &namespace);
         let selector = ListParams::default().labels(&format!("{USER_LABEL}=admin"));
         credentials
@@ -979,7 +1251,7 @@ mod tests {
         .unwrap();
         let denied = refresh(&address, current_refresh).await;
         assert_eq!(denied.status, StatusCode::BAD_REQUEST, "{:?}", denied.body);
-        assert_eq!(denied.json()["error"], "invalid_grant");
+        assert_eq!(denied.json::<OAuthError>().error, "invalid_grant");
 
         // Clean up: forget the issuer, remove the namespace.
         write_authn(&authn_dir, EMPTY_AUTHN);
@@ -1137,10 +1409,10 @@ mod tests {
     /// The account session cookie after signing in to the account page with `device`.
     async fn account_session(address: &str, device: &mut Device) -> String {
         let origin = Url::parse(ISSUER).unwrap();
-        let reply = post_json(address, "/account/session/options", &json!({}), "").await;
+        let reply = post_json(address, "/account/session/options", &Empty::new(), "").await;
         assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
         let ceremony = reply.cookie(CEREMONY_COOKIE);
-        let options: CredentialRequestOptions = serde_json::from_value(reply.json()).unwrap();
+        let options: CredentialRequestOptions = reply.json();
         let assertion = device
             .authenticate(&origin, options, DefaultClientData)
             .await
@@ -1148,7 +1420,9 @@ mod tests {
         let reply = post_json(
             address,
             "/account/session",
-            &json!({ "credential": assertion }),
+            &CredentialBody {
+                credential: &assertion,
+            },
             &format!("{CEREMONY_COOKIE}={ceremony}"),
         )
         .await;
@@ -1166,14 +1440,16 @@ mod tests {
         let started = post_json(
             address,
             "/account/links/start",
-            &json!({ "provider": "keycloak" }),
+            &ProviderBody {
+                provider: "keycloak",
+            },
             session,
         )
         .await;
         assert_eq!(started.status, StatusCode::OK, "{:?}", started.body);
         let upstream = started.cookie(UPSTREAM_COOKIE);
         let back = keycloak
-            .log_in(started.json()["redirect_to"].as_str().unwrap(), kc)
+            .log_in(&started.json::<Redirect>().redirect_to, kc)
             .await;
         let reply = callback(
             address,
@@ -1197,11 +1473,11 @@ mod tests {
         let reply = http(address, Method::GET, &authorize, &[], None).await;
         assert_eq!(reply.status, StatusCode::SEE_OTHER);
         let flow = format!("{FLOW_COOKIE}={}", reply.cookie(FLOW_COOKIE));
-        let started = post_json(address, "/upstream/keycloak/start", &json!({}), &flow).await;
+        let started = post_json(address, "/upstream/keycloak/start", &Empty::new(), &flow).await;
         assert_eq!(started.status, StatusCode::OK, "{:?}", started.body);
         let upstream = started.cookie(UPSTREAM_COOKIE);
         let back = keycloak
-            .log_in(started.json()["redirect_to"].as_str().unwrap(), kc)
+            .log_in(&started.json::<Redirect>().redirect_to, kc)
             .await;
         callback(
             address,
@@ -1234,7 +1510,7 @@ mod tests {
         )
         .await;
         assert_eq!(tokens.status, StatusCode::OK, "{:?}", tokens.body);
-        let authorization = format!("Bearer {}", tokens.json()["access_token"].as_str().unwrap());
+        let authorization = format!("Bearer {}", tokens.json::<Tokens>().access);
         let info = http(
             address,
             Method::GET,
@@ -1244,7 +1520,7 @@ mod tests {
         )
         .await;
         assert_eq!(info.status, StatusCode::OK);
-        info.json()["sub"].as_str().unwrap().to_owned()
+        info.json::<UserInfo>().sub
     }
 
     /// The checked-in OpenID scenario against Keycloak, which `scripts/keycloak-e2e.sh` serves
@@ -1265,13 +1541,17 @@ mod tests {
         install(&admin, &namespace, &issuer, &image).await;
 
         // Trust the provider's CA: a ConfigMap, mounted, and the image's bundle kept.
-        apply(
+        apply_namespaced(
             &admin,
-            json!({
-                "apiVersion": "v1", "kind": "ConfigMap",
-                "metadata": {"name": "upstream-ca", "namespace": namespace},
-                "data": {"ca.crt": ca},
-            }),
+            &ConfigMap {
+                metadata: ObjectMeta {
+                    name: Some("upstream-ca".into()),
+                    namespace: Some(namespace.clone()),
+                    ..ObjectMeta::default()
+                },
+                data: Some([("ca.crt".to_owned(), ca)].into()),
+                ..ConfigMap::default()
+            },
         )
         .await;
         let deployments: Api<Deployment> = Api::namespaced(admin.clone(), &namespace);
@@ -1279,42 +1559,83 @@ mod tests {
             .patch(
                 rbac::NAME,
                 &PatchParams::default(),
-                &Patch::Strategic(json!({"spec": {"template": {"spec": {
-                    "volumes": [{"name": "upstream-ca", "configMap": {"name": "upstream-ca"}}],
-                    "containers": [{
-                        "name": rbac::NAME,
-                        "env": [
-                            {"name": "SSL_CERT_FILE", "value": "/etc/ssl/certs/ca-certificates.crt"},
-                            {"name": "SSL_CERT_DIR", "value": "/etc/zeabur-identity-upstream-ca"},
-                        ],
-                        "volumeMounts": [{"name": "upstream-ca", "mountPath": "/etc/zeabur-identity-upstream-ca", "readOnly": true}],
-                    }],
-                }}}})),
+                &Patch::Strategic(&TemplatePatch {
+                    spec: TemplateSpecPatch {
+                        template: PodPatch {
+                            spec: PodSpecPatch {
+                                volumes: vec![Volume {
+                                    name: "upstream-ca".into(),
+                                    config_map: Some(ConfigMapVolumeSource {
+                                        name: "upstream-ca".into(),
+                                        ..ConfigMapVolumeSource::default()
+                                    }),
+                                    ..Volume::default()
+                                }],
+                                containers: vec![Container {
+                                    name: rbac::NAME.into(),
+                                    env: Some(vec![
+                                        EnvVar {
+                                            name: "SSL_CERT_FILE".into(),
+                                            value: Some(
+                                                "/etc/ssl/certs/ca-certificates.crt".into(),
+                                            ),
+                                            ..EnvVar::default()
+                                        },
+                                        EnvVar {
+                                            name: "SSL_CERT_DIR".into(),
+                                            value: Some("/etc/zeabur-identity-upstream-ca".into()),
+                                            ..EnvVar::default()
+                                        },
+                                    ]),
+                                    volume_mounts: Some(vec![VolumeMount {
+                                        name: "upstream-ca".into(),
+                                        mount_path: "/etc/zeabur-identity-upstream-ca".into(),
+                                        read_only: Some(true),
+                                        ..VolumeMount::default()
+                                    }]),
+                                    ..Container::default()
+                                }],
+                            },
+                        },
+                    },
+                }),
             )
             .await
             .unwrap();
         rolled_out(&deployments, "the Deployment to roll out with the CA").await;
 
         // The provider: its client secret, then the object.
-        apply(
+        apply_namespaced(
             &admin,
-            json!({
-                "apiVersion": "v1", "kind": "Secret",
-                "metadata": {"name": "zeabur-identity-upstream", "namespace": namespace},
-                "stringData": {"keycloak": KEYCLOAK_SECRET},
-            }),
+            &Secret {
+                metadata: ObjectMeta {
+                    name: Some("zeabur-identity-upstream".into()),
+                    namespace: Some(namespace.clone()),
+                    ..ObjectMeta::default()
+                },
+                string_data: Some([("keycloak".to_owned(), KEYCLOAK_SECRET.to_owned())].into()),
+                ..Secret::default()
+            },
         )
         .await;
-        apply(
-            &admin,
-            json!({
-                "apiVersion": "identity.zeabur.com/v1alpha1", "kind": "UpstreamProvider",
-                "metadata": {"name": "keycloak", "namespace": namespace},
-                "spec": {
-                    "clientId": "zeabur-identity",
-                    "openid": {"issuer": keycloak.issuer, "displayName": "Keycloak"},
-                },
-            }),
+        let provider_resource = kube::api::ApiResource::erase::<UpstreamProvider>(&());
+        let provider = Object::<UpstreamProviderSpec, NotUsed>::new(
+            "keycloak",
+            &provider_resource,
+            UpstreamProviderSpec {
+                client_id: "zeabur-identity".into(),
+                kind: UpstreamKind::OpenID(OpenID {
+                    issuer: keycloak.issuer.clone(),
+                    display_name: Some("Keycloak".into()),
+                    scopes: None,
+                    mfa: zeabur_identity_api::upstream_provider::Mfa::default(),
+                }),
+            },
+        )
+        .within(&namespace);
+        apply_to(
+            &Api::namespaced_with(admin.clone(), &namespace, &provider_resource),
+            &provider,
         )
         .await;
         let clients: Api<OAuthClient> = Api::namespaced(admin.clone(), &namespace);
@@ -1366,9 +1687,9 @@ mod tests {
         let token = link.url.split_once("#token=").unwrap().1.to_owned();
         let mut device = device();
         let origin = Url::parse(ISSUER).unwrap();
-        let reply = post_json(&address, "/setup/options", &json!({ "token": token }), "").await;
+        let reply = post_json(&address, "/setup/options", &TokenBody { token: &token }, "").await;
         assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
-        let options: CredentialCreationOptions = serde_json::from_value(reply.json()).unwrap();
+        let options: CredentialCreationOptions = reply.json();
         let credential = device
             .register(&origin, options, DefaultClientData)
             .await
@@ -1377,7 +1698,11 @@ mod tests {
         let reply = post_json(
             &address,
             "/setup",
-            &json!({ "token": token, "credential": credential, "label": "e2e" }),
+            &SetupBody {
+                token: &token,
+                credential: &credential,
+                label: "e2e",
+            },
             &format!("{CEREMONY_COOKIE}={ceremony}"),
         )
         .await;
@@ -1387,7 +1712,11 @@ mod tests {
             .patch(
                 "alice",
                 &PatchParams::default(),
-                &Patch::Merge(json!({"spec": {"accountType": "Regular"}})),
+                &Patch::Merge(&SpecPatch {
+                    spec: AccountTypePatch {
+                        account_type: AccountType::Regular,
+                    },
+                }),
             )
             .await
             .unwrap();
@@ -1428,7 +1757,7 @@ mod tests {
         let reply = post_json(
             &address,
             "/account/links/remove",
-            &json!({ "name": bob }),
+            &NameBody { name: &bob },
             &session,
         )
         .await;

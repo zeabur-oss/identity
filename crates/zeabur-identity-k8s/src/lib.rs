@@ -11,6 +11,7 @@ pub mod internal_tls;
 pub mod invitations;
 pub mod keys;
 pub mod kube_config;
+pub mod manifest;
 pub mod objects;
 pub mod password_key;
 pub mod rbac;

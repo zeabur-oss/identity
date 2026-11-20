@@ -134,7 +134,7 @@ mod tests {
     use axum::body::Body;
     use axum::http::{Method, Request};
     use http_body_util::BodyExt as _;
-    use serde_json::Value;
+    use serde::Deserialize;
     use tower::ServiceExt as _;
     use zeabur_identity_core::clock::SystemClock;
     use zeabur_identity_core::config::BaseUrl;
@@ -144,6 +144,39 @@ mod tests {
 
     use super::*;
     use crate::discovery::ProviderMetadata;
+
+    /// The discovery member the test reads.
+    #[derive(Deserialize)]
+    struct Discovery {
+        issuer: String,
+    }
+
+    /// A public JWK (RFC 7517 §4, RFC 7518 §6): a private member fails the parse.
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct PublicJwk {
+        kty: String,
+        #[serde(rename = "use")]
+        usage: String,
+        alg: String,
+        kid: String,
+        #[serde(default)]
+        crv: Option<String>,
+        #[serde(default)]
+        x: Option<String>,
+        #[serde(default)]
+        y: Option<String>,
+        #[serde(default)]
+        n: Option<String>,
+        #[serde(default)]
+        e: Option<String>,
+    }
+
+    /// A JWK set (RFC 7517 §5).
+    #[derive(Deserialize)]
+    struct PublicJwkSet {
+        keys: Vec<PublicJwk>,
+    }
 
     async fn app(reconciled: bool) -> Router {
         let issuer = BaseUrl::parse("issuer", "https://login.example.com").unwrap();
@@ -183,8 +216,8 @@ mod tests {
         assert_eq!(headers[header::CACHE_CONTROL], "public, max-age=300");
         let (_, _, oauth) = fetch(&app, OAUTH_METADATA_PATH).await;
         assert_eq!(oidc, oauth);
-        let doc: Value = serde_json::from_slice(&oidc).unwrap();
-        assert_eq!(doc["issuer"], "https://login.example.com");
+        let doc: Discovery = serde_json::from_slice(&oidc).unwrap();
+        assert_eq!(doc.issuer, "https://login.example.com");
     }
 
     #[tokio::test]
@@ -193,23 +226,22 @@ mod tests {
         let (status, headers, body) = fetch(&app, JWKS_PATH).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(headers[header::ACCESS_CONTROL_ALLOW_ORIGIN], "*");
-        let set: Value = serde_json::from_slice(&body).unwrap();
-        let keys = set["keys"].as_array().unwrap();
-        let algs: HashSet<&str> = keys.iter().map(|k| k["alg"].as_str().unwrap()).collect();
+        let set: PublicJwkSet = serde_json::from_slice(&body).unwrap();
+        let keys = &set.keys;
+        let algs: HashSet<&str> = keys.iter().map(|k| k.alg.as_str()).collect();
         assert_eq!(
             algs,
             HashSet::from(["ES256", "RS256"]),
             "both advertised algorithms"
         );
-        let kids: HashSet<&str> = keys.iter().map(|k| k["kid"].as_str().unwrap()).collect();
+        let kids: HashSet<&str> = keys.iter().map(|k| k.kid.as_str()).collect();
         assert_eq!(kids.len(), keys.len(), "distinct kids (RFC 7517 §4.5)");
         for key in keys {
-            assert_eq!(key["use"], "sig");
-            for private in ["d", "p", "q", "dp", "dq", "qi"] {
-                assert!(
-                    key.get(private).is_none(),
-                    "private member {private} published"
-                );
+            assert_eq!(key.usage, "sig");
+            match key.kty.as_str() {
+                "EC" => assert!(key.crv.is_some() && key.x.is_some() && key.y.is_some()),
+                "RSA" => assert!(key.n.is_some() && key.e.is_some()),
+                other => panic!("unexpected key type {other}"),
             }
         }
     }

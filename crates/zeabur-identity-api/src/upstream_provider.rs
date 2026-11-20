@@ -141,17 +141,15 @@ pub struct GitHub {}
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
-
     use super::*;
 
     #[test]
     fn the_field_that_is_set_names_the_kind() {
         let github: UpstreamProviderSpec =
-            serde_json::from_value(json!({"clientId": "Iv1.abc", "github": {}})).unwrap();
+            serde_json::from_str(r#"{"clientId":"Iv1.abc","github":{}}"#).unwrap();
         assert_eq!(github.kind, UpstreamKind::GitHub(GitHub {}));
-        let openid: UpstreamProviderSpec = serde_json::from_value(
-            json!({"clientId": "c", "openid": {"issuer": "https://accounts.google.com"}}),
+        let openid: UpstreamProviderSpec = serde_json::from_str(
+            r#"{"clientId":"c","openid":{"issuer":"https://accounts.google.com"}}"#,
         )
         .unwrap();
         let UpstreamKind::OpenID(openid) = openid.kind else {
@@ -164,35 +162,34 @@ mod tests {
 
     #[test]
     fn mfa_is_unknown_unless_set_to_enforced() {
-        let read = |mfa: serde_json::Value| {
-            serde_json::from_value::<UpstreamProviderSpec>(json!({
-                "clientId": "c",
-                "openid": {"issuer": "https://login.example.com", "mfa": mfa},
-            }))
+        let read = |mfa: &str| {
+            serde_json::from_str::<UpstreamProviderSpec>(&format!(
+                r#"{{"clientId":"c","openid":{{"issuer":"https://login.example.com","mfa":{mfa}}}}}"#
+            ))
         };
         let Ok(UpstreamProviderSpec {
             kind: UpstreamKind::OpenID(openid),
             ..
-        }) = read(json!("Enforced"))
+        }) = read(r#""Enforced""#)
         else {
             panic!("Enforced was refused");
         };
         assert_eq!(openid.mfa, Mfa::Enforced);
-        for bad in [json!("enforced"), json!(true), json!("Required")] {
-            assert!(read(bad.clone()).is_err(), "{bad}");
+        for bad in [r#""enforced""#, "true", r#""Required""#] {
+            assert!(read(bad).is_err(), "{bad}");
         }
     }
 
     #[test]
     fn github_has_no_mfa_field() {
-        let spec = json!({"clientId": "Iv1.abc", "github": {"mfa": "Enforced"}});
-        let github: UpstreamProviderSpec = serde_json::from_value(spec).unwrap();
+        let spec = r#"{"clientId":"Iv1.abc","github":{"mfa":"Enforced"}}"#;
+        let github: UpstreamProviderSpec = serde_json::from_str(spec).unwrap();
         assert_eq!(github.kind, UpstreamKind::GitHub(GitHub {}));
     }
 
     #[test]
     fn a_v0_2_0_object_without_a_kind_field_is_refused() {
-        let stored = json!({"type": "GitHub", "clientId": "Iv1.abc", "clientSecretKey": "github"});
-        assert!(serde_json::from_value::<UpstreamProviderSpec>(stored).is_err());
+        let stored = r#"{"type":"GitHub","clientId":"Iv1.abc","clientSecretKey":"github"}"#;
+        assert!(serde_json::from_str::<UpstreamProviderSpec>(stored).is_err());
     }
 }
