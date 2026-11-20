@@ -38,7 +38,7 @@ kubectl -n "$NS" create configmap zeabur-identity-settings --from-literal=admin-
 
 #### 2. 在新的 Deployment 之前创建密码密钥
 
-v0.4.0 把哈希密码时加入的密钥存在 Secret `zeabur-identity-password-key`。安装程序会创建空的 Secret，Zeabur Identity 启动时再填入密钥；但 Zeabur Identity 不能自己创建这个 Secret，没有它就不会启动。下面的升级文件会略过 Secret，所以请在**检查并应用资源清单**步骤、应用新的 Deployment 之前创建它。Secret 已经存在时，这条命令什么也不做：
+v0.4.0 把哈希密码时加入的密钥存在 Secret `zeabur-identity-password-key`。安装 Zeabur Identity 时会创建空的 Secret，Zeabur Identity 启动时再填入密钥；但 Zeabur Identity 不能自己创建这个 Secret，没有它就不会启动。下面的升级文件会略过 Secret，所以请在**检查并应用资源清单**步骤、应用新的 Deployment 之前创建它。Secret 已经存在时，这条命令什么也不做：
 
 ```sh
 kubectl -n "$NS" get secret zeabur-identity-password-key ||

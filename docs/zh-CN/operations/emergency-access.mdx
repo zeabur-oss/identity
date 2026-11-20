@@ -178,7 +178,7 @@ Zeabur Identity 的配置流程会添加以下文件。K3s 使用路径中的 `k
 - 认证配置文件：`/etc/rancher/k3s/zeabur-identity/authn.yaml`。
 - 指向认证配置文件的 drop-in：`/etc/rancher/k3s/config.yaml.d/50-zeabur-identity.yaml`。
 
-在 RKE2 上，drop-in 还会将 `/etc/rancher/rke2/zeabur-identity` 挂载到 kube-apiserver Pod。Zeabur 安装程序会在 RKE2 上配置这些文件。
+在 RKE2 上，drop-in 还会将 `/etc/rancher/rke2/zeabur-identity` 挂载到 kube-apiserver Pod。用 Zeatend 搭建的集群没有这些文件，配置改由 Zeatend 根据 `/etc/zeatend/config.yaml` 的 `apiServer.authenticationConfig` 写入。要修改时改那里，再运行 `sudo zeatend apply`。
 
 K3s／RKE2 按字母顺序读取 drop-in。除非键名以 `+` 结尾，否则后读取的文件会替换之前的列表。因此，`50-zeabur-identity.yaml` 会覆盖较早文件中的 `kube-apiserver-arg` 配置。移除前，先确认哪些配置会重新生效。
 

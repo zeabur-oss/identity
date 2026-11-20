@@ -19,10 +19,9 @@ manage people in Zeabur, not here:
 
 - **Invite people and choose their projects** in **Members**:
   [Invite members and assign project permissions](https://oss.zeabur.com/docs/zeabur/cluster/members/).
-- **Setting up Zeabur on a cluster?** Zeabur Identity is installed first.
-  [Install Zeabur in an existing cluster](https://oss.zeabur.com/docs/zeabur/install/existing-cluster/)
-  lists what you need and links to the steps. One command that installs Zeabur together with
-  Zeabur Identity is tracked in [zeabur-oss/zeabur#430](https://github.com/zeabur-oss/zeabur/issues/430).
+- **Setting up Zeabur on a cluster?** One `helm install` installs Zeabur and Zeabur Identity
+  together. See
+  [Install Zeabur in an existing cluster](https://oss.zeabur.com/docs/zeabur/install/existing-cluster/).
 
 To move from zeabur.com to your own server, or for anything else about Zeabur, see the
 [Zeabur documentation](https://oss.zeabur.com/docs/zeabur/).
@@ -144,7 +143,7 @@ Report security issues as described in [SECURITY.md](SECURITY.md).
 
 Apache-2.0. Contributions are accepted under the [Developer Certificate of Origin](DCO).
 
-The sign-in pages take their styles and component classes from Zeabur's design system
+The sign-in pages take their styles and component classes from the Zeabur Design System
 (Apache-2.0, built on [shadcn/ui](https://ui.shadcn.com), MIT) and ship the
 [Geist](https://github.com/vercel/geist-font) font (SIL Open Font License 1.1,
 `vendor/geist/LICENSE.txt` in the design system). The container image includes

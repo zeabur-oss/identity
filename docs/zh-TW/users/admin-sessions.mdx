@@ -9,7 +9,7 @@ description: 建立與切換管理員帳號、選擇管理員的登入方式、�
 
 `User` 預設是一般帳號。設定 `spec.accountType: Admin` 後，帳號就會成為管理員帳號。
 
-只有管理員帳號的權杖帶有 `admins` 群組，Kubernetes 會將這個群組識別為 `zeabur:admins`。安裝程式會用 ClusterRoleBinding `zeabur-identity-cluster-admins`，將 `zeabur:admins` 綁定至 `cluster-admin`。管理員登入後就有完整的叢集權限，不需要再次登入。
+只有管理員帳號的權杖帶有 `admins` 群組，Kubernetes 會將這個群組識別為 `zeabur:admins`。安裝 Zeabur Identity 時會用 ClusterRoleBinding `zeabur-identity-cluster-admins`，將 `zeabur:admins` 綁定至 `cluster-admin`。管理員登入後就有完整的叢集權限，不需要再次登入。
 
 一般帳號只有你為所屬群組綁定的權限，預設沒有任何權限。
 

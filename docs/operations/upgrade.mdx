@@ -38,7 +38,7 @@ See [Choose how admins sign in](../users/admin-sessions.mdx#choose-how-admins-si
 
 #### 2. Create the password key before the new Deployment
 
-v0.4.0 keeps the key it mixes into password hashes in the Secret `zeabur-identity-password-key`. The installer creates it empty and Zeabur Identity fills it at startup, but Zeabur Identity can't create the Secret itself and doesn't start without it. The upgrade files below leave out Secrets, so create this one in the **Review and apply the manifests** step, before the new Deployment. The command does nothing when the Secret already exists:
+v0.4.0 keeps the key it mixes into password hashes in the Secret `zeabur-identity-password-key`. Installing Zeabur Identity creates it empty and Zeabur Identity fills it at startup, but Zeabur Identity can't create the Secret itself and doesn't start without it. The upgrade files below leave out Secrets, so create this one in the **Review and apply the manifests** step, before the new Deployment. The command does nothing when the Secret already exists:
 
 ```sh
 kubectl -n "$NS" get secret zeabur-identity-password-key ||

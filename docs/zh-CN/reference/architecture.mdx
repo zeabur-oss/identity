@@ -101,7 +101,7 @@ kube-apiserver 使用 Zeabur Identity 公开的密钥，验证令牌签名。密
 | [`zeabur-identityctl`](../../../crates/zeabur-identityctl) | **可执行文件**：管理员 CLI | api, core, keys, k8s |
 | [`zeabur-identity-test-support`](../../../crates/zeabur-identity-test-support), [`zeabur-identity-e2e`](../../../crates/zeabur-identity-e2e) | 测试辅助工具；集群上的端到端测试 | — |
 
-登录页面的 TypeScript 与 Tailwind 源码放在 [`ui/`](../../../ui)，并以包的形式使用 Zeabur 设计系统。构建产物与设计系统的样式类都会提交到 `crates/zeabur-identity-ui`，并嵌入可执行文件。样式类以 askama 宏的形式存储在 `templates/ds.html` 中。
+登录页面的 TypeScript 与 Tailwind 源码放在 [`ui/`](../../../ui)，并以包的形式使用 Zeabur Design System。构建产物与设计系统的样式类都会提交到 `crates/zeabur-identity-ui`，并嵌入可执行文件。样式类以 askama 宏的形式存储在 `templates/ds.html` 中。
 
 ## 开发
 

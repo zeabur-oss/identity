@@ -38,7 +38,7 @@ kubectl -n "$NS" create configmap zeabur-identity-settings --from-literal=admin-
 
 #### 2. 在新的 Deployment 之前建立密碼金鑰
 
-v0.4.0 把雜湊密碼時加入的金鑰存在 Secret `zeabur-identity-password-key`。安裝程式會建立空的 Secret，Zeabur Identity 啟動時再填入金鑰；但 Zeabur Identity 不能自己建立這個 Secret，沒有它就不會啟動。下面的升級檔案會略過 Secret，所以請在**檢查並套用資源清單**步驟、套用新的 Deployment 之前建立它。Secret 已經存在時，這個指令不會做任何事：
+v0.4.0 把雜湊密碼時加入的金鑰存在 Secret `zeabur-identity-password-key`。安裝 Zeabur Identity 時會建立空的 Secret，Zeabur Identity 啟動時再填入金鑰；但 Zeabur Identity 不能自己建立這個 Secret，沒有它就不會啟動。下面的升級檔案會略過 Secret，所以請在**檢查並套用資源清單**步驟、套用新的 Deployment 之前建立它。Secret 已經存在時，這個指令不會做任何事：
 
 ```sh
 kubectl -n "$NS" get secret zeabur-identity-password-key ||

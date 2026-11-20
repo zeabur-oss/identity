@@ -392,7 +392,7 @@ If you exported `settings.json`, restore the `teams` and `admin-sign-in` setting
 
 `identity-secrets.json` contains a list. Each of the other files contains a single Secret. This filter handles both formats.
 
-This step uses `apply` because the installer has already created empty signing key and password key Secrets. If the apply reports a conflict, identify the field owner before deciding whether to add `--force-conflicts`.
+This step uses `apply` because installing Zeabur Identity already created empty signing key and password key Secrets. If the apply reports a conflict, identify the field owner before deciding whether to add `--force-conflicts`.
 
 </Step>
 
@@ -456,7 +456,7 @@ Public JWKS, client secret hashes, and passkeys can't reconstruct private signin
 - Delete all grants and invitations so everyone must sign in again.
 - Users and passkeys remain unaffected.
 
-If Secret `zeabur-identity-signing-keys` is empty, Zeabur Identity creates new keys at startup. If the Secret no longer exists, Zeabur Identity can't create it on its own. Check all backups, then use the installer as a cluster admin to recreate the empty Secret.
+If Secret `zeabur-identity-signing-keys` is empty, Zeabur Identity creates new keys at startup. If the Secret no longer exists, Zeabur Identity can't create it on its own. Check all backups. Then, as a cluster admin, recreate the empty Secret the same way you installed Zeabur Identity.
 
 If you suspect someone stole the keys, restoring old keys doesn't remove the risk. Treat the keys as compromised and use new ones.
 
@@ -468,7 +468,7 @@ Nothing else can rebuild the key in Secret `zeabur-identity-password-key`. If it
 - Passkeys, linked accounts and sessions keep working.
 - For each user who signed in with a password, delete the password's `Credential` and send a new setup link. A user who also has a passkey or a linked account needs `--reset`, which deletes those too.
 
-If the Secret is empty, Zeabur Identity fills it at startup. If the Secret no longer exists, Zeabur Identity can't create it. Check all backups, then use the installer as a cluster admin to recreate the empty Secret.
+If the Secret is empty, Zeabur Identity fills it at startup. If the Secret no longer exists, Zeabur Identity can't create it. Check all backups. Then, as a cluster admin, recreate the empty Secret the same way you installed Zeabur Identity.
 
 ### Internal certificates
 
@@ -519,7 +519,7 @@ Run `zeabur-identityctl kube-config` for your Kubernetes distribution with the o
 
 Follow [Install and sign in on k3s](../get-started/quickstart.mdx) or [Install on an existing cluster](../get-started/existing-cluster.mdx) to install the generated configuration on every control plane machine.
 
-If you use the Zeabur installer, run `zeabur-installer apply` on the first server instead.
+On a cluster set up with Zeatend, put the configuration in `apiServer.authenticationConfig` in `/etc/zeatend/config.yaml` and run `sudo zeatend apply` on each server instead.
 
 </Step>
 

@@ -178,7 +178,7 @@ The Zeabur Identity setup process adds the following files. K3s uses `k3s` in th
 - Authentication configuration file: `/etc/rancher/k3s/zeabur-identity/authn.yaml`.
 - Drop-in that points to the authentication configuration file: `/etc/rancher/k3s/config.yaml.d/50-zeabur-identity.yaml`.
 
-On RKE2, the drop-in also mounts `/etc/rancher/rke2/zeabur-identity` into the kube-apiserver Pod. The Zeabur installer configures these files on RKE2.
+On RKE2, the drop-in also mounts `/etc/rancher/rke2/zeabur-identity` into the kube-apiserver Pod. On a cluster set up with Zeatend, Zeatend writes the configuration from `apiServer.authenticationConfig` in `/etc/zeatend/config.yaml` instead of these files. Change it there and run `sudo zeatend apply`.
 
 K3s/RKE2 reads drop-ins in alphabetical order. Unless a key ends with `+`, a later file replaces the earlier list. As a result, `50-zeabur-identity.yaml` overrides `kube-apiserver-arg` settings in earlier files. Before you remove it, check which settings will take effect again.
 
