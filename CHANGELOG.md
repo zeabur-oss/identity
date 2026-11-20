@@ -2,6 +2,36 @@
 
 All notable changes to Zeabur Identity. Versions follow [Semantic Versioning](https://semver.org/); each section comes from the change files in `.changeset/` (docs/internal/releasing.md).
 
+## 0.3.2 (2026-11-20)
+
+### Features
+
+#### A Helm chart: `oci://ghcr.io/zeabur-oss/charts/identity`
+
+`helm install identity oci://ghcr.io/zeabur-oss/charts/identity` installs the CRDs, the server, an Ingress with a Let's Encrypt certificate at `identity.<ip>.sslip.io` by default, and prints the first administrator's setup link. Each release publishes the chart with the image pinned by digest. The committed CRDs moved to `deploy/chart/identity/crds/crds.yaml` and the RBAC to `deploy/chart/identity/files/rbac.json`.
+
+#### `zeabur-identity setup-link` stores a setup token made elsewhere
+
+`zeabur-identity setup-link --token-hash sha256:<hex>` runs in the cluster with the pod's service account and stores the first administrator's setup token from its hash, as `zeabur-identityctl setup-link` does. A Helm chart can make the token, print the link in its notes, and run this in a hook Job, which never sees the token. If the user can already sign in, it changes nothing.
+
+### Fixes
+
+#### `zeabur-identityctl kube-config` writes the kube-apiserver configuration as JSON
+
+The file still starts with a comment line and still goes to `authn.yaml`: kube-apiserver reads JSON as YAML. The certificate authority is now one string with `\n` line breaks instead of a block.
+
+#### Refusals from the sign-in endpoints say why in the page language
+
+Each RFC 9457 problem now carries `detail`, its message in the language of the request's `Accept-Language`, and, where they apply, `refresh` (the page shows a list that changed) and `next` (`code`, `ended`, `new-link` or `reauth`). The sign-in pages show `detail` instead of keeping their own message for each problem.
+
+#### The server starts one worker thread per CPU
+
+The server used to start two Tokio worker threads. It now starts one per CPU that the container can use, which is Tokio's default.
+
+#### Text buttons on the sign-in pages are easier to hit
+
+The "other ways" and "use another account" buttons and the disclosure summaries are at least 24 px high. The passkey dialogs on the account page take their element ids from the passkey name instead of its position in the list.
+
 ## 0.3.1 (2026-11-19)
 
 ### Features
