@@ -7,6 +7,12 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 source scripts/lib.sh
 
+# A double cast tells the compiler to stop checking; narrow the type or use `satisfies` instead.
+if grep -rnE --include='*.ts' '\bas (unknown as|any|never)\b' ui --exclude-dir=node_modules; then
+  echo "error: remove 'as unknown as', 'as any' and 'as never' from ui/" >&2
+  exit 1
+fi
+
 (cd ui && bun ci && bun run fmt:check && bun run lint && bun run typecheck)
 ./scripts/build-ui.sh
 git diff --exit-code -- crates/zeabur-identity-ui/templates/ds.html
