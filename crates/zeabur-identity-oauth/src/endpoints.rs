@@ -22,8 +22,8 @@
 //! [`Lifetimes::refresh_absolute`](crate::Lifetimes::refresh_absolute) after `auth_time`.
 //!
 //! The token response adds `refresh_expires_in`: the seconds until the refresh token dies if it is
-//! not used. Keycloak returns the same field. Zeabur uses it to end an idle browser session at the
-//! same limit.
+//! not used. Keycloak returns the same field. Zeabur OSS uses it to end an idle browser session at
+//! the same limit.
 
 use std::sync::Arc;
 use std::time::Duration;
