@@ -53,26 +53,9 @@ impl SecretKeyStore {
         }
     }
 
-    fn secret(
-        &self,
-        keyset: &StoredKeyset,
-        revision: Option<&Revision>,
-    ) -> Result<Secret, StoreError> {
+    fn data(keyset: &StoredKeyset) -> Result<BTreeMap<String, ByteString>, StoreError> {
         let json = serde_json::to_vec(keyset).map_err(StoreError::backend)?;
-        Ok(Secret {
-            metadata: ObjectMeta {
-                name: Some(self.name.clone()),
-                resource_version: revision.map(|r| r.0.clone()),
-                labels: Some(BTreeMap::from([(
-                    MANAGED_BY.0.to_owned(),
-                    MANAGED_BY.1.to_owned(),
-                )])),
-                ..ObjectMeta::default()
-            },
-            type_: Some(SECRET_TYPE.to_owned()),
-            data: Some(BTreeMap::from([(DATA_KEY.to_owned(), ByteString(json))])),
-            ..Secret::default()
-        })
+        Ok(BTreeMap::from([(DATA_KEY.to_owned(), ByteString(json))]))
     }
 }
 
@@ -109,10 +92,39 @@ impl KeyStore for SecretKeyStore {
         keyset: &StoredKeyset,
         expected: Option<&Revision>,
     ) -> Result<Revision, StoreError> {
-        let secret = self.secret(keyset, expected)?;
+        let data = Self::data(keyset)?;
         let result = match expected {
-            None => self.api.create(&PostParams::default(), &secret).await,
-            Some(_) => {
+            None => {
+                let secret = Secret {
+                    metadata: ObjectMeta {
+                        name: Some(self.name.clone()),
+                        labels: Some(BTreeMap::from([(
+                            MANAGED_BY.0.to_owned(),
+                            MANAGED_BY.1.to_owned(),
+                        )])),
+                        ..ObjectMeta::default()
+                    },
+                    type_: Some(SECRET_TYPE.to_owned()),
+                    data: Some(data),
+                    ..Secret::default()
+                };
+                self.api.create(&PostParams::default(), &secret).await
+            }
+            // Only `data` changes: the labels and annotations are the installer's, and a Helm
+            // upgrade fails on a label another field manager changed.
+            Some(revision) => {
+                let Some(mut secret) = self
+                    .api
+                    .get_opt(&self.name)
+                    .await
+                    .map_err(StoreError::backend)?
+                else {
+                    return Err(StoreError::Conflict);
+                };
+                if secret.metadata.resource_version.as_deref() != Some(revision.0.as_str()) {
+                    return Err(StoreError::Conflict);
+                }
+                secret.data = Some(data);
                 self.api
                     .replace(&self.name, &PostParams::default(), &secret)
                     .await
