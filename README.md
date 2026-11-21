@@ -7,24 +7,24 @@
 
 # Zeabur Identity
 
-**Everyone on your team signs in to Zeabur with their own account, and no one shares an admin
-password or file.** Zeabur Identity is the part of Zeabur that knows who is signing in. It shows
+**Everyone on your team signs in to Zeabur OSS with their own account, and no one shares an admin
+password or file.** Zeabur Identity is the part of Zeabur OSS that knows who is signing in. It shows
 the sign-in page, checks each person's passkey, password, or GitHub or Google account, and gives them
 only the access you assigned.
 
-## Using Zeabur?
+## Using Zeabur OSS?
 
-Zeabur's sign-in page is Zeabur Identity, so a cluster that runs Zeabur already has it. You
-manage people in Zeabur, not here:
+The sign-in page of Zeabur OSS is Zeabur Identity, so a cluster that runs Zeabur OSS already has it. You
+manage people in Zeabur OSS, not here:
 
 - **Invite people and choose their projects** in **Members**:
   [Invite members and assign project permissions](https://oss.zeabur.com/docs/zeabur/cluster/members/).
-- **Setting up Zeabur on a cluster?** One `helm install` installs Zeabur and Zeabur Identity
+- **Setting up Zeabur OSS on a cluster?** One `helm install` installs Zeabur OSS and Zeabur Identity
   together. See
-  [Install Zeabur in an existing cluster](https://oss.zeabur.com/docs/zeabur/install/existing-cluster/).
+  [Install Zeabur OSS in an existing cluster](https://oss.zeabur.com/docs/zeabur/install/existing-cluster/).
 
-To move from zeabur.com to your own server, or for anything else about Zeabur, see the
-[Zeabur documentation](https://oss.zeabur.com/docs/zeabur/).
+To move from Zeabur to your own server, or for anything else about Zeabur OSS, see the
+[Zeabur OSS documentation](https://oss.zeabur.com/docs/zeabur/).
 
 ## What it does for you
 
@@ -39,7 +39,7 @@ To move from zeabur.com to your own server, or for anything else about Zeabur, s
 
 ## Use it on its own
 
-Zeabur Identity also works without Zeabur, on any self-managed Kubernetes cluster. It replaces the
+Zeabur Identity also works without Zeabur OSS, on any self-managed Kubernetes cluster. It replaces the
 one admin kubeconfig that never expires and gets copied to every laptop: `kubectl` opens your
 browser, each person signs in with their own account, and the token they get lasts minutes, not
 years.
@@ -120,10 +120,10 @@ Then:
 
 ## Documentation
 
-For Zeabur users:
+For Zeabur OSS users:
 
 - [Invite members and assign project permissions](https://oss.zeabur.com/docs/zeabur/cluster/members/)
-- [Install Zeabur in an existing cluster](https://oss.zeabur.com/docs/zeabur/install/existing-cluster/)
+- [Install Zeabur OSS in an existing cluster](https://oss.zeabur.com/docs/zeabur/install/existing-cluster/)
 
 Using Zeabur Identity on its own:
 

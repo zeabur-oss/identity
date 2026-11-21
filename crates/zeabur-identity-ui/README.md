@@ -23,9 +23,9 @@ page routes) and the `zeabur-identity` server.
 
 The sources live in `ui/` at the repository root: `ui/styles/app.css` (the theme setup, the font
 and the forced-colours focus outline), the TypeScript in `ui/src/` and `ui/scripts/gen-classes.ts`.
-Zeabur's design system is a package (`ui/package.json`): `app.css` imports its tokens, utilities
+The Zeabur Design System is a package (`ui/package.json`): `app.css` imports its tokens, utilities
 and base styles, and `gen-classes.ts` writes its component classes, from the React-free `cva`
-functions, as the askama macros in `templates/ds.html`. The pages look like Zeabur's own sign-in:
+functions, as the askama macros in `templates/ds.html`. The pages look like the sign-in of Zeabur OSS:
 the Zeabur mark over a centred card, Geist, the violet gradient button and the white one, on
 zGray-50 (zGray-950 in dark mode). `scripts/build-ui.sh` generates `ds.html`, runs Tailwind CSS v4
 over `app.css`, which scans the templates for class names, runs `bun build --minify` over each
@@ -80,7 +80,7 @@ Button edges are not checked: their text and icon identify them (WCAG 1.4.11).
 
 ## Credits
 
-Styles and class strings come from [Zeabur's design system][zds] (Apache-2.0), itself built on
+Styles and class strings come from [the Zeabur Design System][zds] (Apache-2.0), itself built on
 [shadcn/ui][shadcn] (MIT License). The Zeabur mark is a trademark of Zeabur Inc. Icons are
 inline Phosphor SVGs (MIT License). The [Geist][geist] font (the design system's copy) is
 embedded under the SIL Open Font License 1.1 (`assets/LICENSE-Geist.txt`); Chinese text uses
