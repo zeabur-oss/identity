@@ -18,7 +18,9 @@ mod tests {
     use k8s_openapi::api::core::v1::{Namespace, Secret, ServiceAccount};
     use k8s_openapi::api::rbac::v1::{ClusterRoleBinding, Role, RoleBinding, RoleRef, Subject};
     use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
-    use kube::api::{Api, ApiResource, DeleteParams, ListParams, ObjectMeta, PostParams};
+    use kube::api::{
+        Api, ApiResource, DeleteParams, ListParams, ObjectMeta, Patch, PatchParams, PostParams,
+    };
     use kube::core::Object;
     use kube::core::object::NotUsed;
     use kube::{Client, Config, ResourceExt as _};
@@ -788,6 +790,66 @@ mod tests {
         assert_eq!(
             secret.type_.as_deref(),
             Some(zeabur_identity_k8s::keys::SECRET_TYPE)
+        );
+        env.cleanup().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs a Kubernetes cluster (KUBECONFIG)"]
+    async fn signing_keys_leave_the_installers_metadata_alone() {
+        let env = Env::new().await;
+        // What Helm applies over the installer-created Secret: its labels and annotations.
+        let installed = json!({
+            "apiVersion": "v1",
+            "kind": "Secret",
+            "metadata": {
+                "name": KEY_SECRET,
+                "labels": {"app.kubernetes.io/managed-by": "Helm"},
+                "annotations": {"meta.helm.sh/release-name": "zeabur"},
+            },
+            "type": zeabur_identity_k8s::keys::SECRET_TYPE,
+        });
+        let helm_apply = |force: bool| {
+            let secrets = env.admin_api::<Secret>();
+            let installed = installed.clone();
+            async move {
+                let mut params = PatchParams::apply("helm");
+                params.force = force;
+                secrets
+                    .patch(KEY_SECRET, &params, &Patch::Apply(installed))
+                    .await
+            }
+        };
+        helm_apply(true).await.unwrap();
+
+        let manager = KeyManager::new(
+            SecretKeyStore::new(env.zeabur_identity_api(), KEY_SECRET),
+            SystemClock,
+            RotationPolicy::DEFAULT,
+        );
+        manager.reconcile().await.unwrap();
+
+        // `helm upgrade` applies the same object again, without taking fields from others.
+        let secret = helm_apply(false).await.unwrap();
+        assert_eq!(
+            secret
+                .labels()
+                .get("app.kubernetes.io/managed-by")
+                .map(String::as_str),
+            Some("Helm")
+        );
+        assert_eq!(
+            secret
+                .annotations()
+                .get("meta.helm.sh/release-name")
+                .map(String::as_str),
+            Some("zeabur")
+        );
+        assert!(
+            secret
+                .data
+                .is_some_and(|data| data.contains_key(zeabur_identity_k8s::keys::DATA_KEY)),
+            "the keys Zeabur Identity wrote are still there"
         );
         env.cleanup().await;
     }

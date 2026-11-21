@@ -13,6 +13,7 @@ use std::io;
 use std::sync::Arc;
 use std::time::Duration;
 
+use axum::http::{HeaderValue, header};
 use axum::serve::Listener as _;
 use k8s_openapi::api::core::v1::Secret;
 use kube::Client;
@@ -108,7 +109,15 @@ pub async fn serve(config: ServeConfig) -> Result<(), ServeError> {
     let tls = server_config(Arc::clone(&resolver)).map_err(io::Error::other)?;
     let internal_listener = TlsListener::new(internal_listener, tls)?;
     tracing::info!(address = %internal_listener.local_addr()?, "internal listener bound");
-    let client = Client::try_default().await?;
+    let mut kube_config = kube::Config::infer()
+        .await
+        .map_err(kube::Error::InferConfig)?;
+    // The API server names the field manager of each write after the User-Agent's product.
+    kube_config.headers.push((
+        header::USER_AGENT,
+        HeaderValue::from_static(concat!("zeabur-identity/", env!("CARGO_PKG_VERSION"))),
+    ));
+    let client = Client::try_from(kube_config)?;
     let namespace = namespace
         .clone()
         .unwrap_or_else(|| client.default_namespace().to_owned());
