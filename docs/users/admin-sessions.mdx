@@ -9,7 +9,7 @@ By default, admin accounts sign in with a passkey, or with a password and a code
 
 A `User` is a regular account by default. Set `spec.accountType: Admin` to make it an admin account.
 
-Only admin account tokens include the `admins` group, which Kubernetes recognizes as `zeabur:admins`. The installer binds `zeabur:admins` to `cluster-admin` with the ClusterRoleBinding `zeabur-identity-cluster-admins`. Admins have full cluster permissions immediately after signing in and don't need to sign in again.
+Only admin account tokens include the `admins` group, which Kubernetes recognizes as `zeabur:admins`. Installing Zeabur Identity binds `zeabur:admins` to `cluster-admin` with the ClusterRoleBinding `zeabur-identity-cluster-admins`. Admins have full cluster permissions immediately after signing in and don't need to sign in again.
 
 Regular accounts have only the permissions you bind to their groups. They have no permission bindings by default.
 

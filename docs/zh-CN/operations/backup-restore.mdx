@@ -392,7 +392,7 @@ done
 
 `identity-secrets.json` 包含列表，其他文件各包含一份 Secret。这个过滤器能处理两种格式。
 
-这里使用 `apply`，因为安装程序已创建空的签名密钥与密码密钥 Secret。如果应用时报冲突，先查明字段所有者，再决定是否加入 `--force-conflicts`。
+这里使用 `apply`，因为安装 Zeabur Identity 时已创建空的签名密钥与密码密钥 Secret。如果应用时报冲突，先查明字段所有者，再决定是否加入 `--force-conflicts`。
 
 </Step>
 
@@ -456,7 +456,7 @@ zeabur-identityctl setup-link --namespace "$NS" --issuer "$ZEABUR_IDENTITY_ISSUE
 - 删除所有授权与邀请，让所有人重新登录。
 - 用户与通行密钥不受影响。
 
-如果 Secret `zeabur-identity-signing-keys` 为空，Zeabur Identity 会在启动时创建新密钥。如果 Secret 已不存在，Zeabur Identity 无法自行创建。检查所有备份后，再以集群管理员身份使用安装程序，重建空的 Secret。
+如果 Secret `zeabur-identity-signing-keys` 为空，Zeabur Identity 会在启动时创建新密钥。如果 Secret 已不存在，Zeabur Identity 无法自行创建。检查所有备份后，再以集群管理员身份，用当初安装 Zeabur Identity 的方式重建空的 Secret。
 
 如果怀疑密钥遭窃，恢复旧密钥无法排除风险。应视为密钥泄露，改用新密钥。
 
@@ -468,7 +468,7 @@ zeabur-identityctl setup-link --namespace "$NS" --issuer "$ZEABUR_IDENTITY_ISSUE
 - 通行密钥、已关联的账号和会话不受影响。
 - 对每位用密码登录的用户，删除密码的 `Credential`，再发送新的设置链接。如果用户还有通行密钥或已关联的账号，要加上 `--reset`，这些也会一并删除。
 
-如果 Secret 为空，Zeabur Identity 会在启动时填入密钥。如果 Secret 已不存在，Zeabur Identity 无法自行创建。检查所有备份后，再以集群管理员身份使用安装程序，重建空的 Secret。
+如果 Secret 为空，Zeabur Identity 会在启动时填入密钥。如果 Secret 已不存在，Zeabur Identity 无法自行创建。检查所有备份后，再以集群管理员身份，用当初安装 Zeabur Identity 的方式重建空的 Secret。
 
 ### 内部证书
 
@@ -519,7 +519,7 @@ kubectl -n zeabur-identity wait certificate/zeabur-identity-internal-tls --for=c
 
 按[在 k3s 上安装并登录](../get-started/quickstart.mdx)或[安装到已有集群](../get-started/existing-cluster.mdx)，将输出的配置安装到每台控制平面机器。
 
-如果你使用 Zeabur 安装程序，改在第一台服务器运行 `zeabur-installer apply`。
+如果集群是用 Zeatend 搭建的，改为把配置写进 `/etc/zeatend/config.yaml` 的 `apiServer.authenticationConfig`，再在每台服务器运行 `sudo zeatend apply`。
 
 </Step>
 

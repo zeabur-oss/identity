@@ -17,9 +17,9 @@
 Zeabur 开源版的登录页就是 Zeabur Identity，所以运行 Zeabur 开源版的集群已经装好了。人员在 Zeabur 开源版里管理，不在这里：
 
 - **邀请成员、选择他们能用的项目**：在**成员**页操作，见[邀请成员并分配项目权限](https://oss.zeabur.com/zh-CN/docs/zeabur/cluster/members/)。
-- **要在集群上部署 Zeabur 开源版**？需要先装好 Zeabur Identity。[在已有集群上安装 Zeabur 开源版](https://oss.zeabur.com/zh-CN/docs/zeabur/install/existing-cluster/)列出了需要准备的东西，也附有安装步骤的链接。用一条命令同时装好 Zeabur 开源版和 Zeabur Identity 的进度，见 [zeabur-oss/zeabur#430](https://github.com/zeabur-oss/zeabur/issues/430)。
+- **要在集群上部署 Zeabur 开源版**？一次 `helm install` 就会同时装好 Zeabur 开源版和 Zeabur Identity，见[在已有集群上安装 Zeabur 开源版](https://oss.zeabur.com/zh-CN/docs/zeabur/install/existing-cluster/)。
 
-要从 Zeabur 迁移到自己的服务器，或想了解 Zeabur 开源版的其他功能，请看 [Zeabur 开源版文档](https://oss.zeabur.com/zh-CN/docs/zeabur/)。
+要从 zeabur.com 迁移到自己的服务器，或想了解 Zeabur 开源版的其他功能，请看 [Zeabur 开源版文档](https://oss.zeabur.com/zh-CN/docs/zeabur/)。
 
 ## 它能帮你做什么
 
@@ -114,4 +114,4 @@ zeabur-identityctl setup-link --username admin
 
 Apache-2.0。贡献按 [Developer Certificate of Origin](DCO) 接受。
 
-登录页的样式和组件类名来自 Zeabur 开源版的设计系统（Apache-2.0，基于 [shadcn/ui](https://ui.shadcn.com)，MIT），并附带 [Geist](https://github.com/vercel/geist-font) 字体（SIL Open Font License 1.1，见设计系统中的 `vendor/geist/LICENSE.txt`）。容器镜像包含 nixpkgs 打包的 Mozilla CA 证书包（MPL-2.0）。
+登录页的样式和组件类名来自 Zeabur Design System（Apache-2.0，基于 [shadcn/ui](https://ui.shadcn.com)，MIT），并附带 [Geist](https://github.com/vercel/geist-font) 字体（SIL Open Font License 1.1，见设计系统中的 `vendor/geist/LICENSE.txt`）。容器镜像包含 nixpkgs 打包的 Mozilla CA 证书包（MPL-2.0）。
