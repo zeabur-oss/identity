@@ -238,9 +238,9 @@ Zeabur Identity 不會檢查這項設定，也不會讀取提供者的 `amr` 或
 
 ## 修改或移除提供者
 
-- **修改設定。**編輯 `UpstreamProvider`，下次登入就會使用新設定。請保留原名，因為向提供者註冊的回呼網址包含這個名稱。
-- **更換用戶端密鑰。**更新 `zeabur-identity-upstream` 中該提供者的鍵，下次登入就會使用新值。
-- **移除提供者。**刪除物件，再到提供者刪除用戶端：
+- **修改設定**。編輯 `UpstreamProvider`，下次登入就會使用新設定。請保留原名，因為向提供者註冊的回呼網址包含這個名稱。
+- **更換用戶端密鑰**。更新 `zeabur-identity-upstream` 中該提供者的鍵，下次登入就會使用新值。
+- **移除提供者**。刪除物件，再到提供者刪除用戶端：
 
   ```sh
   kubectl -n zeabur-identity delete upstreamprovider NAME

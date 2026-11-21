@@ -238,9 +238,9 @@ Zeabur Identity 不会检查这项配置，也不会读取提供方的 `amr` 或
 
 ## 修改或移除提供方
 
-- **修改配置。**编辑 `UpstreamProvider`，下一次登录就会使用新配置。保留原来的名称，因为名称是提供方已注册回调地址的一部分。
-- **更换客户端密钥。**更新 `zeabur-identity-upstream` 中对应提供方的键，下一次登录就会使用新密钥。
-- **移除提供方。**删除对象，再到提供方删除客户端：
+- **修改配置**。编辑 `UpstreamProvider`，下一次登录就会使用新配置。保留原来的名称，因为名称是提供方已注册回调地址的一部分。
+- **更换客户端密钥**。更新 `zeabur-identity-upstream` 中对应提供方的键，下一次登录就会使用新密钥。
+- **移除提供方**。删除对象，再到提供方删除客户端：
 
   ```sh
   kubectl -n zeabur-identity delete upstreamprovider NAME
