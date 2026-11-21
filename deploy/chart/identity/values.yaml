@@ -21,7 +21,7 @@ global:
 # Empty: https://identity.<global.domain>.
 issuer: ""
 
-# Let people redeem invitation links (`zeabur-identityctl invite`, Zeabur's Members page).
+# Let people redeem invitation links (`zeabur-identityctl invite`, the Members page of Zeabur OSS).
 invitations: true
 
 ingress:

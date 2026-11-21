@@ -47,7 +47,7 @@
 //!   atomic replace.
 //!
 //! [`instructions`] follows the documented mechanism of K3s and RKE2 ([K3s], [RKE2]). The RKE2
-//! steps write the same files, flags and mount as the Zeabur installer.
+//! steps write the same files, flags and mount as the Zeabur OSS installer.
 //!
 //! # References
 //!
