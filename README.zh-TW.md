@@ -19,7 +19,7 @@ Zeabur 開源版的登入頁就是 Zeabur Identity，所以執行 Zeabur 開源�
 - **邀請成員、選擇他們能用的專案**：在**成員**頁操作，見[邀請成員並指派專案權限](https://oss.zeabur.com/zh-TW/docs/zeabur/cluster/members/)。
 - **要在叢集上架設 Zeabur 開源版**？一次 `helm install` 就會同時裝好 Zeabur 開源版和 Zeabur Identity，見[在既有叢集安裝 Zeabur 開源版](https://oss.zeabur.com/zh-TW/docs/zeabur/install/existing-cluster/)。
 
-要從 zeabur.com 搬到自己的伺服器，或想了解 Zeabur 開源版的其他功能，請看 [Zeabur 開源版文件](https://oss.zeabur.com/zh-TW/docs/zeabur/)。
+要從 Zeabur 搬到自己的伺服器，或想了解 Zeabur 開源版的其他功能，請看 [Zeabur 開源版文件](https://oss.zeabur.com/zh-TW/docs/zeabur/)。
 
 ## 它能幫你做什麼
 

@@ -105,7 +105,7 @@ kubectl -n zeabur-identity create configmap zeabur-identity-settings --from-lite
 kubectl -n zeabur-identity patch configmap zeabur-identity-settings --type merge -p '{"data":{"teams":"single"}}'
 ```
 
-Zeabur 的 **Settings** 頁面也會將設定寫入同一個 ConfigMap。Zeabur Identity 每次登入與更新權杖時都會讀取設定，不需要重新啟動。
+Zeabur 開源版的 **Settings** 頁面也會將設定寫入同一個 ConfigMap。Zeabur Identity 每次登入與更新權杖時都會讀取設定，不需要重新啟動。
 
 如果 ConfigMap 或設定鍵不存在，Zeabur Identity 會使用預設值。如果值不在可用值之內，Zeabur Identity 會採用較嚴格的設定：`teams` 用 `multiple`，`admin-sign-in` 用 `device-bound-passkey`。
 

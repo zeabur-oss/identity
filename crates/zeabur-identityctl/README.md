@@ -86,7 +86,7 @@ zeabur-identityctl kube-config --distro k3s --max-token-lifetime 15m
 ```
 
 The default internal discovery mode needs [cert-manager](https://cert-manager.io/docs/).
-`kube-config` applies a root CA (10 years), a `CA` Issuer and a serving certificate in Zeabur
+`kube-config` applies a root CA (10 years), a `CA` Issuer and a serving certificate in Zeabur OSS
 Identity's namespace, waits until cert-manager issues them, and prints the root CA in the
 configuration. cert-manager renews the serving certificate with its defaults (90 days, renewed
 30 days before expiry). The configuration does not change when it does. Without cert-manager,

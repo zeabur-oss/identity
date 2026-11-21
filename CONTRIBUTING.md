@@ -143,7 +143,7 @@ catch a compromised release. An urgent security update overrides it for one comm
 The sign-in pages' build tools (`ui/package.json`) follow the same rules: exact versions in a
 committed `bun.lock`, no release younger than seven days (`ui/bunfig.toml`), OSI-approved
 licences and no install scripts. Add them with `bun add -d <pkg>` from `ui/`. TypeScript,
-Tailwind CSS, oxlint, oxfmt and fallow are at the versions Zeabur's web interface uses: move one
+Tailwind CSS, oxlint, oxfmt and fallow are at the versions the Zeabur OSS web interface uses: move one
 here when web moves it. Only the built assets ship. `bun pm untrusted` lists `@parcel/watcher`,
 through the Tailwind CLI, whose prebuilt binary is used. The design system is
 `@zeabur-oss/design-system` from npm at an exact version, exempt from the seven-day wait; its

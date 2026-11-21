@@ -105,7 +105,7 @@ To switch back to a single team later, update the configuration:
 kubectl -n zeabur-identity patch configmap zeabur-identity-settings --type merge -p '{"data":{"teams":"single"}}'
 ```
 
-The **Settings** page in Zeabur also writes to this ConfigMap. Zeabur Identity reads the settings at each sign-in and token refresh. No restart is required.
+The **Settings** page in Zeabur OSS also writes to this ConfigMap. Zeabur Identity reads the settings at each sign-in and token refresh. No restart is required.
 
 If the ConfigMap or a setting key doesn't exist, Zeabur Identity uses the default value. If a value isn't one of the accepted values, Zeabur Identity uses the stricter choice: `multiple` for `teams` and `device-bound-passkey` for `admin-sign-in`.
 
