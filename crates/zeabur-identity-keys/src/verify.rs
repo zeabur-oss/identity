@@ -5,7 +5,7 @@
 //! that names a critical header extension is refused because none is understood
 //! (RFC 7515 §4.1.11; RFC 8725 §3.1). The caller validates the claims.
 //!
-//! This is not `jsonwebtoken`: version 11 accepts any `crit` header and binds no key to an
+//! This is not `jsonwebtoken`: version 12 binds a key to an algorithm family, not to one
 //! algorithm. The tests use it as an independent check.
 
 use aws_lc_rs::signature::{
