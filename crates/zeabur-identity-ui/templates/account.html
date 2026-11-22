@@ -43,7 +43,7 @@
     <noscript>{% call ui::alert(m.noscript_title, "default", "Key", live = "") %}{{ m.noscript_body }}{% endcall %}</noscript>
     <form id="sign-in" data-post="/account/session/password" class="flex flex-col gap-5" novalidate>
       {{ password::steps(m, "") }}
-      <button type="submit" class="{{ ds::button("primary", "lg") }} w-full">{{ m.login_submit }}</button>
+      <button type="submit" class="{{ ds::button("default", "lg") }} w-full">{{ m.login_submit }}</button>
     </form>
     <div id="passkey-sign-in" class="flex flex-col gap-5">
       {{ ui::field_separator(m.upstream_or) }}
@@ -102,7 +102,7 @@
         {% call ui::alert(m.backup_title, "warn", "Key", live = "") %}{{ m.backup_body }}{% endcall %}
         {%- endif %}
         {%- if view.passkey_confirms %}
-        {% call ui::dialog("add", "add-title", m.add_passkey, m.add, m.cancel, "primary", "Fingerprint") %}
+        {% call ui::dialog("add", "add-title", m.add_passkey, m.add, m.cancel, "default", "Fingerprint") %}
         {% call ui::field("add-label", m.setup_label, m.setup_label_hint) %}
         <input id="add-label" name="label" type="text" maxlength="{{ zeabur_identity_api::credential::MAX_LABEL }}" autofocus autocomplete="off" class="{{ ds::input() }}"
                {{- ui::field_describedby("add-label", m.setup_label_hint) }}>

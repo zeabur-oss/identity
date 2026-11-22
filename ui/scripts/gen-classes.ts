@@ -60,7 +60,7 @@ const macros: Record<string, Macro> = {
   button: {
     classes: buttonVariants,
     params: {
-      variant: ["primary", "secondary", "destructive", "secondary-destructive"],
+      variant: ["default", "secondary", "destructive", "secondary-destructive"],
       size: ["lg", "sm"],
     },
   },
