@@ -38,7 +38,7 @@
           data-msg-password-missing="{{ m.password_missing }}"
           {%- if let Some(seconds) = expires_in %} data-expires-in="{{ seconds }}"{% endif %}>
       {{ password::steps(m, login_hint.unwrap_or_default()) }}
-      <button type="submit" class="{{ ds::button("primary", "lg") }} w-full">{{ m.login_submit }}</button>
+      <button type="submit" class="{{ ds::button("default", "lg") }} w-full">{{ m.login_submit }}</button>
     </form>
     <div id="alternatives" class="flex flex-col gap-5">
       {{ ui::field_separator(m.upstream_or) }}

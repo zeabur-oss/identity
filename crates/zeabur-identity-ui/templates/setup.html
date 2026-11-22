@@ -26,7 +26,7 @@
       </div>
       {%- if let Some(client) = client %}
       {% call ui::alert(m.setup_done_title, "default", "Key", live = "") %}{{ m.setup_done_continue_body }}{% endcall %}
-      <a href="/login" class="{{ ds::button("primary", "lg") }} w-full">{{ icons::icon("Fingerprint") }}<span class="truncate">{{ m.login_continue_to }} {{ client }}</span></a>
+      <a href="/login" class="{{ ds::button("default", "lg") }} w-full">{{ icons::icon("Fingerprint") }}<span class="truncate">{{ m.login_continue_to }} {{ client }}</span></a>
       {%- else if apps.is_empty() %}
       {% call ui::alert(m.setup_done_title, "default", "Key", live = "") %}{{ m.setup_done_body }}{% endcall %}
       {%- else %}
@@ -44,7 +44,7 @@
           data-msg-failed="{{ m.passkey_failed }}" data-msg-cancelled="{{ m.passkey_cancelled }}"
           data-msg-working="{{ m.working }}" data-msg-error="{{ m.generic_error }}"
           data-msg-missing="{{ m.setup_missing_token }}">
-      <button type="submit" class="{{ ds::button("primary", "lg") }} w-full">{{ icons::icon("Fingerprint") }}{{ m.setup_create }}</button>
+      <button type="submit" class="{{ ds::button("default", "lg") }} w-full">{{ icons::icon("Fingerprint") }}{{ m.setup_create }}</button>
     </form>
     <div id="alternatives" class="flex flex-col gap-5">
       {{ ui::field_separator(m.upstream_or) }}
@@ -76,7 +76,7 @@
                autocomplete="one-time-code" spellcheck="false">
         {% endcall %}
       </div>
-      <button type="submit" class="{{ ds::button("primary", "lg") }} w-full">{{ m.setup_password_set }}</button>
+      <button type="submit" class="{{ ds::button("default", "lg") }} w-full">{{ m.setup_password_set }}</button>
       <button type="button" id="other-ways" class="inline-flex min-h-6 items-center self-center rounded-md px-1.5 text-[0.8125rem] leading-5 text-secondary hover:text-main">{{ m.setup_other_ways }}</button>
     </form>
   </div>

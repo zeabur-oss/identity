@@ -72,7 +72,7 @@
 {#- A modal dialog in a list row, marked data-<name> and opened by the row's button with
     data-opens="<name>". The call body goes under the title; the confirm button closes the dialog
     with the value "confirm". -#}
-{%- macro dialog(name, id, title, confirm, cancel, variant = "primary", icon_name = "", form_id = "") -%}
+{%- macro dialog(name, id, title, confirm, cancel, variant = "default", icon_name = "", form_id = "") -%}
 <dialog data-slot="dialog-content" data-{{ name }} aria-labelledby="{{ id }}" class="{{ ds::dialog() }}">
   <form method="dialog"{% if !form_id.is_empty() %} id="{{ form_id }}"{% endif %}>
     <div data-slot="dialog-header" class="{{ ds::dialog_header() }}">
