@@ -3,6 +3,8 @@
 # Requires k3d, kubectl, curl and jq. Creates/deletes its own disposable k3s cluster;
 # downloads k3s (scripts/k3d-up.sh) and k3d's helper image if absent. Never rebuilds.
 set -euo pipefail
+# shellcheck source=scripts/lib.sh
+source "$(dirname "$0")/lib.sh"
 
 if [[ $# != 2 ]]; then
   echo "usage: release-smoke.sh <zeabur-identityctl-archive> <image-ref>" >&2
@@ -110,14 +112,13 @@ if [[ "$platform" != "linux/$arch" ]]; then
 fi
 docker tag "$image_id" "$local_image"
 image_tagged=true
-# A registry pull can retain a multi-platform index with only native content.
-# Export only that platform so containerd does not require absent sibling manifests.
-docker image save --platform "linux/$arch" --output "$work/image.tar" "$local_image"
 # k3d-up.sh writes the kubeconfig to $work, never to the caller's.
 cluster_started=true
 CLUSTER="$cluster" "$(dirname "$0")/k3d-up.sh" "$work" \
   --k3s-arg '--disable=traefik@server:0' --k3s-arg '--disable=servicelb@server:0'
-k3d image import "$work/image.tar" --cluster "$cluster"
+# A registry pull can retain a multi-platform index with only native content.
+# Export only that platform so containerd does not require absent sibling manifests.
+k3d_import "$cluster" --platform "linux/$arch" "$local_image"
 kubectl apply -f "$work/crds.json"
 wait_for kube-system kubectl wait --for=condition=Established --timeout=90s -f "$work/crds.json"
 kubectl apply -f "$work/rbac.json"

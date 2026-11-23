@@ -32,6 +32,10 @@ rule signin-raw-body "$signin" '\w:\s*(axum::(body::|extract::)?)?(Bytes\b|Json<
   'body: Bytes,' \
   'take request::Body<Account or SameOrigin, T>, which refuses a cross-site request before it reads the body'
 
+rule k3d-image-import '*.sh *.md *.mdx *.yml' 'k3d\s+image\s+import(\s|$)' \
+  'k3d image import zeabur-identity:e2e --cluster zeabur-identity' \
+  'k3d 5.9.0 can report success before ctr reads the tarball; use k3d_import (scripts/lib.sh), which pipes docker image save into ctr in each node'
+
 if ((failures > 0)); then
   exit 1
 fi

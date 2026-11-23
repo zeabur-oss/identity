@@ -8,6 +8,7 @@
 # Run inside `nix develop` on Linux with Docker. Not part of CI: it pulls the Keycloak image.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+source scripts/lib.sh
 
 keycloak_image="${KEYCLOAK_IMAGE:-quay.io/keycloak/keycloak:26.8.1}"
 cluster=zeabur-identity-keycloak
@@ -50,7 +51,7 @@ chmod 0644 "$certs/tls.key" "$certs/tls.crt"
 CLUSTER="$cluster" ./scripts/k3d-up.sh "$work"
 export KUBECONFIG="$work/kubeconfig"
 ./scripts/build-image.sh zeabur-identity:e2e
-k3d image import zeabur-identity:e2e --cluster "$cluster"
+k3d_import "$cluster" zeabur-identity:e2e
 
 docker run -d --name "$container" --network "k3d-$cluster" -p "$port:$port" \
   -v "$certs:/opt/keycloak/conf/certs:ro" \
