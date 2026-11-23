@@ -16,7 +16,6 @@
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
-use axum::body::Bytes;
 use axum::extract::State;
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
@@ -37,15 +36,16 @@ use zeabur_identity_store::{
 };
 
 use crate::account::{
-    Audit, LAST_CREDENTIAL, done, record, revoke_all_but, signed_in, start_session, with_cookie,
+    Account, Audit, LAST_CREDENTIAL, done, record, revoke_all_but, start_session, with_cookie,
 };
 use crate::audit::Record;
 use crate::device::Requester;
 use crate::method::{SignInMethod, finish};
 use crate::problem::{Extensions, Problem, Step};
+use crate::request::{Body, SameOrigin};
 use crate::{
-    Backend, NO_REQUEST, SETUP_INVALID, Shared, SignIn, check_account, check_request, cookie, json,
-    parse, redeemed, refused, set_cookie_with, valid_setup_token,
+    Backend, NO_REQUEST, SETUP_INVALID, Shared, SignIn, check_account, cookie, json, redeemed,
+    refused, set_cookie_with, valid_setup_token,
 };
 
 /// Cookie holding the browser's device entries, one per user who signed in here.
@@ -452,10 +452,10 @@ pub(crate) struct SignedIn {
 pub(crate) async fn sign_in<B: Backend>(
     State(service): State<Shared<B>>,
     headers: HeaderMap,
-    body: Bytes,
+    request: Result<Body<SameOrigin, SignInRequest>, Problem>,
 ) -> Response {
     let mut identity = None;
-    let result = sign_in_with(&service, &headers, &body, &mut identity).await;
+    let result = sign_in_with(&service, &headers, request, &mut identity).await;
     let (user, subject) = (
         identity.as_ref().map(|u: &User| u.name.as_str()),
         identity.as_ref().map(|u| u.subject.as_str()),
@@ -475,11 +475,10 @@ pub(crate) async fn sign_in<B: Backend>(
 async fn sign_in_with<B: Backend>(
     service: &SignIn<B>,
     headers: &HeaderMap,
-    body: &[u8],
+    request: Result<Body<SameOrigin, SignInRequest>, Problem>,
     identity: &mut Option<User>,
 ) -> Result<Response, Failure> {
-    check_request(headers, service.oauth.issuer.as_str())?;
-    let request: SignInRequest = parse(body)?;
+    let Body(SameOrigin, request) = request?;
     let flow = cookie(headers, FLOW_COOKIE).ok_or(NO_REQUEST)?;
     let authentication = authenticate(service, headers, &request, identity).await?;
     let subject = authentication.subject.clone();
@@ -578,7 +577,7 @@ pub(crate) async fn account_session<B: Backend>(
     State(service): State<Shared<B>>,
     requester: Requester,
     headers: HeaderMap,
-    body: Bytes,
+    request: Result<Body<SameOrigin, SignInRequest>, Problem>,
 ) -> Response {
     let mut identity = None;
     let mut audit = Audit {
@@ -586,8 +585,7 @@ pub(crate) async fn account_session<B: Backend>(
         ..Audit::default()
     };
     let result: Result<Response, Failure> = async {
-        check_request(&headers, service.oauth.issuer.as_str())?;
-        let request: SignInRequest = parse(&body)?;
+        let Body(SameOrigin, request) = request?;
         let authentication = authenticate(&service, &headers, &request, &mut identity).await?;
         audit.credential.clone_from(&authentication.credential);
         let token = start_session(&service, &authentication).await?;
@@ -806,21 +804,18 @@ fn strong(entered: &str, owner: &User, issuer: &str) -> Result<Normalized, Failu
 /// `POST /setup/password/options`: what setting a password with this setup link asks for.
 pub(crate) async fn set_up_options<B: Backend>(
     State(service): State<Shared<B>>,
-    headers: HeaderMap,
-    body: Bytes,
+    request: Result<Body<SameOrigin, OptionsRequest>, Problem>,
 ) -> Response {
-    options_with(&service, &headers, &body)
+    options_with(&service, request)
         .await
         .unwrap_or_else(IntoResponse::into_response)
 }
 
 async fn options_with<B: Backend>(
     service: &SignIn<B>,
-    headers: &HeaderMap,
-    body: &[u8],
+    request: Result<Body<SameOrigin, OptionsRequest>, Problem>,
 ) -> Result<Response, Problem> {
-    check_request(headers, service.oauth.issuer.as_str())?;
-    let request: OptionsRequest = parse(body)?;
+    let Body(SameOrigin, request) = request?;
     let now = service.oauth.now();
     let directory = &service.oauth.directory;
     let (_, owner) = valid_setup_token(&service.setup, directory, &request.token, now).await?;
@@ -842,15 +837,12 @@ async fn options_with<B: Backend>(
         uri,
         sealed,
     };
-    let mut response = json(
+    let response = json(
         StatusCode::OK,
         &SetupOptions {
             totp: Some(enrolment),
         },
     );
-    response
-        .headers_mut()
-        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     Ok(response)
 }
 
@@ -859,10 +851,10 @@ pub(crate) async fn set_up<B: Backend>(
     State(service): State<Shared<B>>,
     headers: HeaderMap,
     requester: Requester,
-    body: Bytes,
+    request: Result<Body<SameOrigin, SetupRequest>, Problem>,
 ) -> Response {
     let mut user = None;
-    let result = set_up_with(&service, &headers, &requester, &body, &mut user).await;
+    let result = set_up_with(&service, &headers, &requester, request, &mut user).await;
     let record = Record {
         event: "auth.password_enrollment",
         messages: ["password set", "setting a password failed"],
@@ -878,11 +870,10 @@ async fn set_up_with<B: Backend>(
     service: &SignIn<B>,
     headers: &HeaderMap,
     requester: &Requester,
-    body: &[u8],
+    request: Result<Body<SameOrigin, SetupRequest>, Problem>,
     user: &mut Option<String>,
 ) -> Result<Response, Failure> {
-    check_request(headers, service.oauth.issuer.as_str())?;
-    let request: SetupRequest = parse(body)?;
+    let Body(SameOrigin, request) = request?;
     let now = service.oauth.now();
     let (token, owner) = valid_setup_token(
         &service.setup,
@@ -951,23 +942,18 @@ async fn set_up_with<B: Backend>(
             recovery_codes,
         },
     );
-    if enrolled.is_some() {
-        response
-            .headers_mut()
-            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    }
     passwords.remember(&mut response, headers, &owner.subject);
     Ok(response)
 }
 
 #[derive(Deserialize)]
-struct ChangeRequest {
+pub(crate) struct ChangeRequest {
     current: String,
     new: String,
 }
 
 #[derive(Deserialize)]
-struct RemoveRequest {
+pub(crate) struct RemoveRequest {
     current: String,
 }
 
@@ -1032,7 +1018,7 @@ pub(crate) async fn change<B: Backend>(
     State(service): State<Shared<B>>,
     requester: Requester,
     headers: HeaderMap,
-    body: Bytes,
+    request: Result<Body<Account, ChangeRequest>, Problem>,
 ) -> Response {
     let now = service.oauth.now();
     let mut user = None;
@@ -1041,8 +1027,7 @@ pub(crate) async fn change<B: Backend>(
         ..Audit::default()
     };
     let result: Result<Response, Failure> = async {
-        let request: ChangeRequest = parse(&body)?;
-        let account = signed_in(&service, &headers, now).await?;
+        let Body(account, request) = request?;
         audit.session = Some(account.token.name().to_owned());
         let owner = user.insert(account.user);
         let stored = check_current(&service, &headers, owner, &request.current, now).await?;
@@ -1082,7 +1067,7 @@ pub(crate) async fn remove<B: Backend>(
     State(service): State<Shared<B>>,
     requester: Requester,
     headers: HeaderMap,
-    body: Bytes,
+    request: Result<Body<Account, RemoveRequest>, Problem>,
 ) -> Response {
     let now = service.oauth.now();
     let mut user = None;
@@ -1091,8 +1076,7 @@ pub(crate) async fn remove<B: Backend>(
         ..Audit::default()
     };
     let result: Result<Response, Failure> = async {
-        let request: RemoveRequest = parse(&body)?;
-        let account = signed_in(&service, &headers, now).await?;
+        let Body(account, request) = request?;
         audit.session = Some(account.token.name().to_owned());
         let owner = user.insert(account.user);
         let stored = check_current(&service, &headers, owner, &request.current, now).await?;

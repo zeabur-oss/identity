@@ -8,6 +8,7 @@ pub mod pages;
 pub mod passkeys;
 pub mod password;
 pub mod problem;
+mod request;
 pub mod upstream;
 
 #[cfg(test)]
@@ -16,7 +17,6 @@ mod contract;
 use std::sync::Arc;
 
 use axum::Router;
-use axum::body::Bytes;
 use axum::extract::State;
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
@@ -50,6 +50,7 @@ use crate::method::{SignInMethod, finish};
 use crate::passkeys::{Passkeys, aaguid, backup_flags, credential_name};
 use crate::password::Passwords;
 use crate::problem::{Extensions, Problem, Step, UnknownCredential};
+use crate::request::{Body, SameOrigin};
 use crate::upstream::provider::Providers;
 
 /// Cookie holding the sealed WebAuthn ceremony state (`SameSite=Strict`).
@@ -107,6 +108,14 @@ impl<B: Backend> std::fmt::Debug for SignIn<B> {
 
 pub(crate) type Shared<B> = Arc<SignIn<B>>;
 
+impl<B: Backend> request::State for Shared<B> {
+    type Backend = B;
+
+    fn sign_in(&self) -> &SignIn<B> {
+        self
+    }
+}
+
 /// The sign-in routes.
 pub fn router<B: Backend>(service: Shared<B>) -> Router {
     Router::new()
@@ -121,20 +130,12 @@ pub fn router<B: Backend>(service: Shared<B>) -> Router {
             post(password::set_up_options::<B>),
         )
         .merge(account::routes::<B>())
+        .layer(request::no_store())
+        .merge(account::passkey_endpoints::<B>())
         .layer(axum::middleware::from_fn(problem::localize))
         .with_state(service)
 }
 
-const CROSS_SITE: Problem = Problem::new(
-    StatusCode::FORBIDDEN,
-    "cross-site",
-    "Send this request from the sign-in page.",
-);
-const NOT_JSON: Problem = Problem::new(
-    StatusCode::UNSUPPORTED_MEDIA_TYPE,
-    "not-json",
-    "Send the request body as JSON.",
-);
 pub(crate) const BAD_REQUEST: Problem = Problem::new(
     StatusCode::BAD_REQUEST,
     "bad-request",
@@ -187,33 +188,6 @@ pub(crate) const NO_REQUEST: Problem = Problem::new(
 )
 .next(Step::Ended);
 
-/// Cross-site request protection for the JSON endpoints: `Sec-Fetch-Site: same-origin`, or, for
-/// browsers that do not send Fetch Metadata, an `Origin` equal to the issuer. Requests with
-/// neither are refused. The JSON content type adds a CORS preflight for any cross-origin caller.
-pub(crate) fn check_request(headers: &HeaderMap, issuer: &str) -> Result<(), Problem> {
-    let header = |name| {
-        headers
-            .get(name)
-            .and_then(|v: &HeaderValue| v.to_str().ok())
-    };
-    let allowed = match (header("sec-fetch-site"), header(header::ORIGIN.as_str())) {
-        (Some(site), _) => site == "same-origin",
-        (None, Some(origin)) => origin == issuer,
-        (None, None) => false,
-    };
-    if !allowed {
-        return Err(CROSS_SITE);
-    }
-    let json = header(header::CONTENT_TYPE.as_str())
-        .and_then(|v| v.split(';').next())
-        .is_some_and(|v| v.trim().eq_ignore_ascii_case("application/json"));
-    if json { Ok(()) } else { Err(NOT_JSON) }
-}
-
-pub(crate) fn parse<T: DeserializeOwned>(body: &[u8]) -> Result<T, Problem> {
-    serde_json::from_slice(body).map_err(|_malformed| BAD_REQUEST)
-}
-
 /// Reads a cookie by name from the request.
 #[must_use]
 pub fn cookie<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
@@ -254,11 +228,7 @@ pub(crate) fn clear_cookie(response: &mut Response, name: &str, same_site: &str)
 }
 
 pub(crate) fn json<T: Serialize>(status: StatusCode, body: &T) -> Response {
-    let mut response = (status, axum::Json(body)).into_response();
-    response
-        .headers_mut()
-        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    response
+    (status, axum::Json(body)).into_response()
 }
 
 /// Sealed ceremony state.
@@ -576,13 +546,11 @@ pub(crate) async fn valid_setup_token<S: SetupStore, D: Directory>(
 
 async fn setup_options<B: Backend>(
     State(service): State<Shared<B>>,
-    headers: HeaderMap,
-    body: Bytes,
+    request: Result<Body<SameOrigin, SetupOptionsRequest>, Problem>,
 ) -> Response {
     let mut identity = None;
     let result: Result<Response, Problem> = async {
-        check_request(&headers, service.oauth.issuer.as_str())?;
-        let request: SetupOptionsRequest = parse(&body)?;
+        let Body(SameOrigin, request) = request?;
         let now = service.oauth.now();
         let (_, user) = valid_setup_token(
             &service.setup,
@@ -633,12 +601,11 @@ async fn setup_finish<B: Backend>(
     State(service): State<Shared<B>>,
     headers: HeaderMap,
     requester: Requester,
-    body: Bytes,
+    request: Result<Body<SameOrigin, SetupRequest>, Problem>,
 ) -> Response {
     let mut user = None;
     let result: Result<Response, Problem> = async {
-        check_request(&headers, service.oauth.issuer.as_str())?;
-        let request: SetupRequest = parse(&body)?;
+        let Body(SameOrigin, request) = request?;
         let now = service.oauth.now();
         let ceremony: Ceremony<PasskeyRegistration> =
             open(&service.oauth, &headers, REGISTRATION_PURPOSE, now)?;
@@ -735,10 +702,10 @@ struct SignInRequest {
 
 async fn login_options<B: Backend>(
     State(service): State<Shared<B>>,
-    headers: HeaderMap,
+    origin: Result<SameOrigin, Problem>,
 ) -> Response {
     let result: Result<Response, Problem> = (|| {
-        check_request(&headers, service.oauth.issuer.as_str())?;
+        let SameOrigin = origin?;
         let now = service.oauth.now();
         let (options, state) = service
             .passkeys
@@ -781,12 +748,11 @@ pub(crate) struct SignInResponse {
 async fn login_finish<B: Backend>(
     State(service): State<Shared<B>>,
     headers: HeaderMap,
-    body: Bytes,
+    request: Result<Body<SameOrigin, SignInRequest>, Problem>,
 ) -> Response {
     let mut identity = None;
     let result: Result<Response, Refused> = async {
-        check_request(&headers, service.oauth.issuer.as_str())?;
-        let request: SignInRequest = parse(&body)?;
+        let Body(SameOrigin, request) = request?;
         let now = service.oauth.now();
         let flow = cookie(&headers, FLOW_COOKIE).ok_or(NO_REQUEST)?.to_owned();
         let ceremony: Ceremony<DiscoverableAuthentication> =
@@ -846,45 +812,6 @@ mod tests {
             map.append(*name, HeaderValue::from_str(value).unwrap());
         }
         map
-    }
-
-    #[test]
-    fn same_origin_checks() {
-        let issuer = "https://login.example.com";
-        let json = ("content-type", "application/json; charset=utf-8");
-        assert!(
-            check_request(&headers(&[("sec-fetch-site", "same-origin"), json]), issuer).is_ok()
-        );
-        assert!(check_request(&headers(&[("origin", issuer), json]), issuer).is_ok());
-        assert_eq!(
-            check_request(
-                &headers(&[("sec-fetch-site", "cross-site"), ("origin", issuer), json]),
-                issuer
-            ),
-            Err(CROSS_SITE)
-        );
-        assert_eq!(
-            check_request(&headers(&[("sec-fetch-site", "same-site"), json]), issuer),
-            Err(CROSS_SITE)
-        );
-        assert_eq!(
-            check_request(
-                &headers(&[("origin", "https://evil.example"), json]),
-                issuer
-            ),
-            Err(CROSS_SITE)
-        );
-        assert_eq!(check_request(&headers(&[json]), issuer), Err(CROSS_SITE));
-        assert_eq!(
-            check_request(
-                &headers(&[
-                    ("sec-fetch-site", "same-origin"),
-                    ("content-type", "text/plain")
-                ]),
-                issuer
-            ),
-            Err(NOT_JSON)
-        );
     }
 
     #[test]

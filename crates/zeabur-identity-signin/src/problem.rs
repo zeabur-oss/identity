@@ -184,7 +184,6 @@ impl Problem {
             header::CONTENT_TYPE,
             HeaderValue::from_static("application/problem+json"),
         );
-        headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
         response
     }
 }

@@ -2052,6 +2052,55 @@ mod tests {
             response.status()
         }
 
+        /// A cross-site request is refused for being cross-site before its body is read, so a
+        /// body that does not parse still gets 403, and the refusal is not cached.
+        #[tokio::test]
+        async fn cross_site_requests_are_refused_before_the_body_is_read() {
+            let (h, _first, session) = signed_in().await;
+            let routes = [
+                "/setup/options",
+                "/setup",
+                "/setup/password/options",
+                "/setup/password",
+                "/login/options",
+                "/login",
+                "/login/password",
+                "/account/session/options",
+                "/account/session",
+                "/account/session/password",
+                "/account/sign-out",
+                "/account/reauth/options",
+                "/account/reauth",
+                "/account/passkeys/options",
+                "/account/passkeys",
+                "/account/passkeys/rename",
+                "/account/passkeys/remove",
+                "/account/sessions/revoke",
+                "/account/sessions/revoke-others",
+                "/account/links/remove",
+                "/account/password",
+                "/account/password/remove",
+            ];
+            for path in routes {
+                let reply = call(
+                    &h.app,
+                    Method::POST,
+                    path,
+                    Some("not json".to_owned()),
+                    &session.cookies(),
+                    Some("https://evil.example"),
+                )
+                .await;
+                assert_eq!(reply.status, StatusCode::FORBIDDEN, "{path}");
+                assert_eq!(
+                    reply.kind(),
+                    "urn:zeabur-identity:problem:cross-site",
+                    "{path}"
+                );
+                assert_eq!(reply.headers[header::CACHE_CONTROL], "no-store", "{path}");
+            }
+        }
+
         #[tokio::test]
         async fn changes_need_a_same_origin_json_request() {
             let (h, _first, session) = signed_in().await;
