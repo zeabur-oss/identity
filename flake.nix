@@ -62,6 +62,7 @@
               syft
               curl
               binutils
+              ripgrep # scripts/ci/patterns.sh
 
               # Sign-in page assets: bun installs the rest from ui/bun.lock.
               brotli
