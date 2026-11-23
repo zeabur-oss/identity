@@ -1,9 +1,8 @@
 //! Command-line interface of `zeabur-identityctl`.
 
-use std::time::Duration;
-
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use zeabur_identity_core::config::{BaseUrl, ConfigError, parse_duration};
+use jiff::Span;
+use zeabur_identity_core::config::{BaseUrl, ConfigError};
 use zeabur_identity_k8s::kube_config::{DiscoveryMode, Distro};
 
 /// Administer Zeabur Identity with your own kubeconfig: install manifests, configure
@@ -153,8 +152,8 @@ pub(crate) struct InviteArgs {
     #[arg(long)]
     pub admin: bool,
     /// How long the link stays valid, at most 7 days.
-    #[arg(long, default_value = "7d", value_parser = parse_duration)]
-    pub valid_for: Duration,
+    #[arg(long, default_value = "7d")]
+    pub valid_for: Span,
     /// Remove the user's pending invitations, passkeys, linked accounts and sessions first
     /// (account recovery). Without it, a user who can already sign in gets no invitation.
     #[arg(long)]
@@ -225,8 +224,8 @@ pub(crate) struct KubeConfigArgs {
     #[arg(long = "audience", default_value = "kubernetes")]
     pub audiences: Vec<String>,
     /// Longest token lifetime kube-apiserver accepts.
-    #[arg(long, default_value = "1h", value_parser = parse_duration)]
-    pub max_token_lifetime: Duration,
+    #[arg(long, default_value = "1h")]
+    pub max_token_lifetime: Span,
 }
 
 /// Arguments of `zeabur-identityctl setup-link`.
@@ -243,8 +242,8 @@ pub(crate) struct SetupLinkArgs {
     #[arg(long, env = "ZEABUR_IDENTITY_NAMESPACE", default_value = zeabur_identity_k8s::rbac::DEFAULT_NAMESPACE)]
     pub namespace: String,
     /// How long the link stays valid, at most 7 days.
-    #[arg(long, default_value = "60m", value_parser = parse_duration)]
-    pub valid_for: Duration,
+    #[arg(long, default_value = "60m")]
+    pub valid_for: Span,
     /// Remove the user's pending invitations, passkeys, linked accounts and sessions first
     /// (account recovery).
     #[arg(long)]

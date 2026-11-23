@@ -4,7 +4,8 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use zeabur_identity_core::config::{BaseUrl, ConfigError, parse_duration};
+use jiff::Span;
+use zeabur_identity_core::config::{BaseUrl, ConfigError, duration};
 use zeabur_identity_keys::rotation::RotationPolicy;
 
 use crate::config::{ServeConfig, Store};
@@ -60,8 +61,8 @@ pub struct SetupLinkArgs {
     #[arg(long, value_parser = parse_token_hash)]
     pub token_hash: String,
     /// How long the token stays valid, at most 7 days.
-    #[arg(long, default_value = "24h", value_parser = parse_duration)]
-    pub valid_for: Duration,
+    #[arg(long, default_value = "24h")]
+    pub valid_for: Span,
     /// Namespace Zeabur Identity runs in.
     #[arg(long, env = "ZEABUR_IDENTITY_NAMESPACE")]
     pub namespace: String,
@@ -90,29 +91,37 @@ pub struct ServeArgs {
 
     /// Lifetime of a regular account's access and ID tokens. kube-apiserver cannot revoke them,
     /// so this is also how long a revoked session can still call the cluster.
-    #[arg(long, env = "ZEABUR_IDENTITY_TOKEN_LIFETIME", default_value = "10m", value_parser = parse_duration)]
-    pub token_lifetime: Duration,
+    #[arg(long, env = "ZEABUR_IDENTITY_TOKEN_LIFETIME", default_value = "10m")]
+    pub token_lifetime: Span,
 
     /// A refresh-token family ends if unused this long.
-    #[arg(long, env = "ZEABUR_IDENTITY_REFRESH_IDLE", default_value = "1h", value_parser = parse_duration)]
-    pub refresh_idle: Duration,
+    #[arg(long, env = "ZEABUR_IDENTITY_REFRESH_IDLE", default_value = "1h")]
+    pub refresh_idle: Span,
 
     /// A refresh-token family ends this long after sign-in.
-    #[arg(long, env = "ZEABUR_IDENTITY_REFRESH_ABSOLUTE", default_value = "12h", value_parser = parse_duration)]
-    pub refresh_absolute: Duration,
+    #[arg(long, env = "ZEABUR_IDENTITY_REFRESH_ABSOLUTE", default_value = "12h")]
+    pub refresh_absolute: Span,
 
     /// Accept invitations (`zeabur-identityctl invite`) as enrolment links.
     #[arg(long, env = "ZEABUR_IDENTITY_INVITATIONS")]
     pub invitations: bool,
 
     /// Lifetime of an admin account's access and ID tokens. They carry `cluster-admin`.
-    #[arg(long, env = "ZEABUR_IDENTITY_ADMIN_TOKEN_LIFETIME", default_value = "5m", value_parser = parse_duration)]
-    pub admin_token_lifetime: Duration,
+    #[arg(
+        long,
+        env = "ZEABUR_IDENTITY_ADMIN_TOKEN_LIFETIME",
+        default_value = "5m"
+    )]
+    pub admin_token_lifetime: Span,
 
     /// An admin account's refresh-token family ends if unused this long, when several teams share
     /// the cluster or admins need a device-bound passkey. Otherwise `--refresh-idle` applies.
-    #[arg(long, env = "ZEABUR_IDENTITY_ADMIN_REFRESH_IDLE", default_value = "15m", value_parser = parse_duration)]
-    pub admin_refresh_idle: Duration,
+    #[arg(
+        long,
+        env = "ZEABUR_IDENTITY_ADMIN_REFRESH_IDLE",
+        default_value = "15m"
+    )]
+    pub admin_refresh_idle: Span,
 
     /// Address of the internal TLS listener kube-apiserver fetches discovery and keys from.
     /// Binds at startup; TLS handshakes fail until `zeabur-identityctl kube-config` issues its
@@ -169,11 +178,11 @@ impl ServeArgs {
                 key_secret: zeabur_identity_k8s::KEY_SECRET.to_owned(),
             },
             lifetimes: zeabur_identity_oauth::Lifetimes {
-                access_token: self.token_lifetime,
-                refresh_idle: self.refresh_idle,
-                refresh_absolute: self.refresh_absolute,
-                admin_access_token: self.admin_token_lifetime,
-                admin_refresh_idle: self.admin_refresh_idle,
+                access_token: duration("--token-lifetime", self.token_lifetime)?,
+                refresh_idle: duration("--refresh-idle", self.refresh_idle)?,
+                refresh_absolute: duration("--refresh-absolute", self.refresh_absolute)?,
+                admin_access_token: duration("--admin-token-lifetime", self.admin_token_lifetime)?,
+                admin_refresh_idle: duration("--admin-refresh-idle", self.admin_refresh_idle)?,
                 ..zeabur_identity_oauth::Lifetimes::DEFAULT
             },
         };
@@ -185,6 +194,7 @@ impl ServeArgs {
 #[cfg(test)]
 mod tests {
     use clap::CommandFactory as _;
+    use zeabur_identity_core::config::DurationRule;
 
     use super::*;
 
@@ -224,6 +234,42 @@ mod tests {
         let mixed = ["--issuer", "https://login.example.com", "setup-link"];
         assert!(cli(&mixed).is_err());
         assert!(cli(&["--token-hash", &hash]).is_err());
+    }
+
+    /// The defaults keep their values, and a flag that is not a positive, fixed length names
+    /// itself in the error.
+    #[test]
+    fn lifetimes_are_jiff_spans() {
+        let issuer = ["--issuer", "https://login.example.com"];
+        let lifetimes = parse(&issuer).unwrap().config().unwrap().lifetimes;
+        assert_eq!(lifetimes.access_token, Duration::from_mins(10));
+        assert_eq!(lifetimes.refresh_idle, Duration::from_hours(1));
+        assert_eq!(lifetimes.refresh_absolute, Duration::from_hours(12));
+        assert_eq!(lifetimes.admin_access_token, Duration::from_mins(5));
+        assert_eq!(lifetimes.admin_refresh_idle, Duration::from_mins(15));
+
+        let config = |flag, value| {
+            parse(&[issuer[0], issuer[1], flag, value])
+                .unwrap()
+                .config()
+        };
+        let lifetimes = config("--refresh-absolute", "1d").unwrap().lifetimes;
+        assert_eq!(lifetimes.refresh_absolute, Duration::from_hours(24));
+        assert_eq!(
+            config("--refresh-idle", "0s").unwrap_err(),
+            ConfigError::BadDuration {
+                field: "--refresh-idle",
+                reason: DurationRule::Positive
+            }
+        );
+        assert_eq!(
+            config("--refresh-absolute", "1mo").unwrap_err(),
+            ConfigError::BadDuration {
+                field: "--refresh-absolute",
+                reason: DurationRule::FixedLength
+            }
+        );
+        assert!(parse(&[issuer[0], issuer[1], "--token-lifetime", "10"]).is_err());
     }
 
     #[test]
