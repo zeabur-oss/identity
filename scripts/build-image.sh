@@ -6,7 +6,8 @@ set -euo pipefail
 
 tag="${1:?usage: build-image.sh <tag>}"
 root="$(cd "$(dirname "$0")/.." && pwd)"
-target="$(uname -m | sed -e 's/^arm64$/aarch64/')-unknown-linux-musl"
+arch=$(uname -m)
+target="${arch/#arm64/aarch64}-unknown-linux-musl"
 
 "$root/scripts/build-ui.sh"
 ZEABUR_IDENTITY_UI_DIST="$root/ui/dist" cargo build --release --locked --target "$target" -p zeabur-identity --manifest-path "$root/Cargo.toml"

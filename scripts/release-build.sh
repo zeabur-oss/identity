@@ -35,7 +35,7 @@ release=${CARGO_TARGET_DIR:-$root/target}/$target/release
 ZEABUR_IDENTITY_UI_DIST=$root/ui/dist cargo auditable build --release --locked --target "$target" \
   --manifest-path "$root/Cargo.toml" -p zeabur-identityctl -p zeabur-identity
 for binary in zeabur-identityctl zeabur-identity; do
-  if readelf --program-headers --dynamic "$release/$binary" | grep -q 'INTERP\|(NEEDED)'; then
+  if readelf --program-headers --dynamic "$release/$binary" | rg -q 'INTERP|\(NEEDED\)'; then
     echo "$binary is not a fully static executable" >&2
     exit 1
   fi

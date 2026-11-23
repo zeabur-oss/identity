@@ -15,10 +15,17 @@ cargo() {
 k3d_import() {
   local cluster=$1 nodes node
   shift
-  nodes=$(docker ps --filter "label=k3d.cluster=$cluster" --format '{{.Label "k3d.role"}} {{.Names}}' |
-    awk '$1 == "server" || $1 == "agent" { print $2 }')
+  nodes=$(for role in server agent; do
+    docker ps --filter "label=k3d.cluster=$cluster" --filter "label=k3d.role=$role" --format '{{.Names}}'
+  done)
   [[ -n $nodes ]] || { echo "k3d cluster $cluster has no nodes" >&2; return 1; }
   for node in $nodes; do
     docker image save "$@" | docker exec -i "$node" ctr image import --all-platforms -
   done
+}
+
+# Prints the pods in namespace $1 with a container that is not ready, or with no container yet.
+pods_not_ready() {
+  kubectl -n "$1" get pods -o json |
+    jq -r '.items[] | select((.status.containerStatuses // []) | length == 0 or any(.[]; .ready | not)) | .metadata.name'
 }
