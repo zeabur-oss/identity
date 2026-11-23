@@ -29,7 +29,7 @@ use std::time::Duration;
 use axum::Router;
 use axum::extract::{RawQuery, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
-use axum::response::{IntoResponse, Response};
+use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -140,9 +140,10 @@ pub(crate) fn passkey_endpoints<B: Backend>() -> Router<Shared<B>> {
     )
 }
 
-/// The account routes.
+/// The account routes. `/` leads to the account page, which offers sign-in without a session.
 pub(crate) fn routes<B: Backend>() -> Router<Shared<B>> {
     Router::new()
+        .route("/", get(|| async { Redirect::to(ACCOUNT_PATH) }))
         .route(ACCOUNT_PATH, get(page::<B>))
         .route("/account/session/options", post(session_options::<B>))
         .route("/account/session", post(session_create::<B>))
