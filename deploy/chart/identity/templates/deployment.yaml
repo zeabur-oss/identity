@@ -1,117 +1,35 @@
-{{- /* The same Service and Deployment as `zeabur-identityctl manifests` (crates/zeabur-identity-k8s/src/deployment.rs). */ -}}
-apiVersion: v1
-kind: Service
-metadata:
-  name: zeabur-identity
-  namespace: {{ include "identity.namespace" . }}
-  labels:
-    {{- include "identity.labels" . | nindent 4 }}
-spec:
-  type: ClusterIP
-  selector:
-    app.kubernetes.io/name: zeabur-identity
-  ports:
-    - name: http
-      port: 80
-      targetPort: http
-      protocol: TCP
-    - name: internal
-      port: 443
-      targetPort: internal
-      protocol: TCP
+{{- /* files/deployment.json is the Service and Deployment of `zeabur-identityctl manifests`, which a test keeps current. Only what the values choose is set here. */ -}}
+{{- range (.Files.Get "files/deployment.json" | fromJson).items }}
 ---
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: zeabur-identity
-  namespace: {{ include "identity.namespace" . }}
-  labels:
-    {{- include "identity.labels" . | nindent 4 }}
-spec:
-  replicas: 1
-  strategy:
-    type: Recreate
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: zeabur-identity
-  template:
-    metadata:
-      labels:
-        {{- include "identity.labels" . | nindent 8 }}
-        {{- with .Values.podLabels }}
-        {{- toYaml . | nindent 8 }}
-        {{- end }}
-      {{- with .Values.podAnnotations }}
-      annotations:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-    spec:
-      serviceAccountName: zeabur-identity
-      {{- with .Values.imagePullSecrets }}
-      imagePullSecrets:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      securityContext:
-        runAsUser: 65532
-        runAsGroup: 65532
-        fsGroup: 65532
-        runAsNonRoot: true
-        seccompProfile:
-          type: RuntimeDefault
-      containers:
-        - name: zeabur-identity
-          image: {{ include "identity.image" . }}
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
-          {{- if .Values.invitations }}
-          args: [--invitations]
-          {{- end }}
-          env:
-            - name: ZEABUR_IDENTITY_ISSUER
-              value: {{ include "identity.issuer" . | quote }}
-            - name: ZEABUR_IDENTITY_NAMESPACE
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.namespace
-          ports:
-            - name: http
-              containerPort: 8080
-              protocol: TCP
-            - name: internal
-              containerPort: 8443
-              protocol: TCP
-          startupProbe:
-            httpGet:
-              path: /healthz
-              port: http
-            periodSeconds: 10
-            failureThreshold: 12
-          readinessProbe:
-            httpGet:
-              path: /readyz
-              port: http
-            periodSeconds: 10
-          livenessProbe:
-            httpGet:
-              path: /healthz
-              port: http
-            periodSeconds: 10
-          resources:
-            {{- toYaml .Values.resources | nindent 12 }}
-          securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            runAsNonRoot: true
-            capabilities:
-              drop: [ALL]
-      {{- with .Values.nodeSelector }}
-      nodeSelector:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- with .Values.tolerations }}
-      tolerations:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- with .Values.affinity }}
-      affinity:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
+{{- $object := deepCopy . }}
+{{- $labels := merge (fromYaml (include "identity.labels" $)) ($object.metadata.labels | default dict) }}
+{{- $_ := set $object.metadata "labels" $labels }}
+{{- if eq $object.kind "Deployment" }}
+{{- $pod := $object.spec.template }}
+{{- $_ := set $pod.metadata "labels" (merge (dict) $labels ($.Values.podLabels | default dict)) }}
+{{- with $.Values.podAnnotations }}
+{{- $_ := set $pod.metadata "annotations" . }}
+{{- end }}
+{{- $spec := $pod.spec }}
+{{- range $key := list "imagePullSecrets" "nodeSelector" "tolerations" "affinity" }}
+{{- with index $.Values $key }}
+{{- $_ := set $spec $key . }}
+{{- end }}
+{{- end }}
+{{- $container := index $spec.containers 0 }}
+{{- $_ := set $container "image" (include "identity.image" $) }}
+{{- $_ := set $container "imagePullPolicy" $.Values.image.pullPolicy }}
+{{- if $.Values.invitations }}
+{{- $_ := set $container "args" (list "--invitations") }}
+{{- end }}
+{{- range $container.env }}
+{{- if eq .name "ZEABUR_IDENTITY_ISSUER" }}
+{{- $_ := set . "value" (include "identity.issuer" $) }}
+{{- end }}
+{{- end }}
+{{- with $.Values.resources }}
+{{- $_ := set $container "resources" . }}
+{{- end }}
+{{- end }}
+{{ toYaml $object }}
+{{- end }}

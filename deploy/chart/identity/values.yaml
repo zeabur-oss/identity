@@ -43,12 +43,8 @@ admin:
   user: admin
   validFor: 24h
 
-resources:
-  requests:
-    cpu: 10m
-    memory: 24Mi
-  limits:
-    memory: 128Mi
+# The container's resources. Empty: the requests and limits in files/deployment.json.
+resources: {}
 
 podAnnotations: {}
 podLabels: {}
