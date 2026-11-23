@@ -202,7 +202,7 @@ Build and import the image, then run the end-to-end scenario against the same cl
 
 ```sh
 ./scripts/build-image.sh zeabur-identity:e2e
-k3d image import zeabur-identity:e2e --cluster zeabur-identity
+(source scripts/lib.sh; k3d_import zeabur-identity zeabur-identity:e2e)
 ZEABUR_IDENTITY_E2E_IMAGE=zeabur-identity:e2e \
 ZEABUR_IDENTITY_E2E_AUTHN_DIR="$dir/authn" \
 ZEABUR_IDENTITY_E2E_MEASUREMENTS="$dir/measurements.json" \
