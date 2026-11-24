@@ -11,6 +11,8 @@
 # ZEABUR_REGISTRY_MIRRORS (`docker.io=http://mirror:5001,ghcr.io=...`) makes the node pull
 # through those mirrors. Delete the cluster with `k3d cluster delete <name>`.
 set -euo pipefail
+# shellcheck source=scripts/lib.sh
+source "$(dirname "$0")/lib.sh"
 
 dir="${1:?usage: k3d-up.sh <dir> [k3d cluster create arguments...]}"
 shift
@@ -27,8 +29,7 @@ wait_for() {
   echo "error: timed out: $*" >&2
   kubectl -n "$ns" get pods -o wide >&2 || true
   kubectl -n "$ns" get events --sort-by=.lastTimestamp >&2 || true
-  for pod in $(kubectl -n "$ns" get pods --no-headers 2> /dev/null \
-    | awk '{ split($2, ready, "/"); if (ready[1] != ready[2]) print $1 }'); do
+  for pod in $(pods_not_ready "$ns" 2> /dev/null); do
     kubectl -n "$ns" describe pod "$pod" >&2 || true
     kubectl -n "$ns" logs "$pod" --all-containers --prefix --tail=40 >&2 || true
   done

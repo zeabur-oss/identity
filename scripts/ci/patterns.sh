@@ -36,6 +36,10 @@ rule k3d-image-import '*.sh *.md *.mdx *.yml' 'k3d\s+image\s+import(\s|$)' \
   'k3d image import zeabur-identity:e2e --cluster zeabur-identity' \
   'k3d 5.9.0 can report success before ctr reads the tarball; use k3d_import (scripts/lib.sh), which pipes docker image save into ctr in each node'
 
+rule text-scraping 'scripts/**' '\b(grep|sed|awk|cut)\b' \
+  'uname -m | sed -e s/arm64/aarch64/' \
+  'scraping text breaks without an error when a column or quoting changes; read structured output with jq, yq or kubectl -o jsonpath, filter with flags such as docker ps --filter, search text with rg, and write a long script with branches as a Rust test or a Bun script'
+
 if ((failures > 0)); then
   exit 1
 fi
