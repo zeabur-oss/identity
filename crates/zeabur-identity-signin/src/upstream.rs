@@ -54,7 +54,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Router;
-use axum::body::Bytes;
 use axum::extract::{Path, RawQuery, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
@@ -80,14 +79,15 @@ use zeabur_identity_ui::pages::{ErrorReason, accept_language, error_page, notice
 
 use self::http::HttpClient;
 use self::provider::{Authorization, Exchange, Provider, UpstreamError};
-use crate::account::{Account, Audit, current, record, require_fresh, signed_in};
+use crate::account::{Account, Audit, current, record, require_fresh};
 use crate::audit::Record;
 use crate::device::Requester;
 use crate::method::finish;
 use crate::problem::Problem;
+use crate::request::{Body, SameOrigin};
 use crate::{
-    Backend, NO_REQUEST, SignIn, check_account, check_request, clear_cookie, cookie, json, parse,
-    redeemed, valid_setup_token,
+    Backend, NO_REQUEST, SignIn, check_account, clear_cookie, cookie, json, redeemed,
+    valid_setup_token,
 };
 
 /// Cookie holding the sealed pending upstream request.
@@ -134,12 +134,21 @@ impl<B: Backend, H> Upstream<B, H> {
 
 type Shared<B, H> = Arc<Upstream<B, H>>;
 
+impl<B: Backend, H: HttpClient> crate::request::State for Shared<B, H> {
+    type Backend = B;
+
+    fn sign_in(&self) -> &SignIn<B> {
+        &self.sign_in
+    }
+}
+
 /// The upstream routes.
 pub fn router<B: Backend, H: HttpClient>(service: Shared<B, H>) -> Router {
     Router::new()
         .route(UPSTREAM_START_ROUTE, post(start::<B, H>))
         .route(UPSTREAM_CALLBACK_ROUTE, get(callback::<B, H>))
         .route("/account/links/start", post(account_start::<B, H>))
+        .layer(crate::request::no_store())
         .layer(axum::middleware::from_fn(crate::problem::localize))
         .with_state(service)
 }
@@ -205,16 +214,15 @@ async fn start<B: Backend, H: HttpClient>(
     State(service): State<Shared<B, H>>,
     Path(provider): Path<String>,
     headers: HeaderMap,
-    body: Bytes,
+    request: Result<Body<SameOrigin, StartRequest>, Problem>,
 ) -> Response {
     // Only a configured provider's ID is logged, never another path segment.
     let configured = service.provider(&provider);
     let normalized_provider = configured.as_ref().map(|p| p.id().as_str());
     let result: Result<Response, Problem> = async {
         let sign_in = &service.sign_in;
-        check_request(&headers, sign_in.oauth.issuer.as_str())?;
         let provider = service.provider(&provider).ok_or(UNKNOWN_PROVIDER)?;
-        let request: StartRequest = parse(&body)?;
+        let Body(SameOrigin, request) = request?;
         let now = sign_in.oauth.now();
         if let Some(token) = &request.token {
             // Linking: check the link and the account type now, so they fail before the user
@@ -307,8 +315,7 @@ struct AccountStartRequest {
 async fn account_start<B: Backend, H: HttpClient>(
     State(service): State<Shared<B, H>>,
     requester: Requester,
-    headers: HeaderMap,
-    body: Bytes,
+    request: Result<Body<Account, AccountStartRequest>, Problem>,
 ) -> Response {
     let sign_in = &service.sign_in;
     let now = sign_in.oauth.now();
@@ -318,8 +325,7 @@ async fn account_start<B: Backend, H: HttpClient>(
         ..Audit::default()
     };
     let result: Result<Response, Problem> = async {
-        let request: AccountStartRequest = parse(&body)?;
-        let account = signed_in(sign_in, &headers, now).await?;
+        let Body(account, request) = request?;
         audit.session = Some(account.token.name().to_owned());
         user = Some(account.user.clone());
         let provider = service
@@ -386,9 +392,6 @@ async fn finish_account_link<B: Backend>(
     if let Ok(value) = HeaderValue::try_from(format!("{issuer}{ACCOUNT_PATH}#notice=linked")) {
         response.headers_mut().insert(header::LOCATION, value);
     }
-    response
-        .headers_mut()
-        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     clear_cookie(&mut response, UPSTREAM_COOKIE, "Lax");
     Ok(response)
 }
@@ -607,9 +610,6 @@ async fn callback<B: Backend, H: HttpClient>(
             if let Ok(value) = HeaderValue::try_from(location) {
                 response.headers_mut().insert(header::LOCATION, value);
             }
-            response
-                .headers_mut()
-                .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
             sign_in
                 .passwords
                 .remember(&mut response, &headers, &user.subject);

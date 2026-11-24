@@ -33,6 +33,7 @@ serde_cbor_2.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+tower-http.workspace = true
 tracing.workspace = true
 url.workspace = true
 webauthn-rs.workspace = true

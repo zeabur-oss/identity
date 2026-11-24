@@ -1259,6 +1259,31 @@ mod tests {
         assert!(!reply.headers.contains_key(header::LOCATION));
     }
 
+    /// A cross-site start is refused before its body is read, and the refusal is not cached.
+    #[tokio::test]
+    async fn cross_site_starts_are_refused_before_the_body_is_read() {
+        let h = harness().await;
+        let session = account_session(&h, "dana", 0).await;
+        for path in ["/upstream/google/start", "/account/links/start"] {
+            let request = Request::builder()
+                .method(Method::POST)
+                .uri(path)
+                .header(header::ORIGIN, "https://evil.example")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &session.cookie)
+                .body(Body::from("not json"))
+                .unwrap();
+            let reply = call(&h.app, request).await;
+            assert_eq!(reply.status, StatusCode::FORBIDDEN, "{path}");
+            assert_eq!(
+                reply.parse::<Problem>().kind,
+                "urn:zeabur-identity:problem:cross-site",
+                "{path}"
+            );
+            assert_eq!(reply.headers[header::CACHE_CONTROL], "no-store", "{path}");
+        }
+    }
+
     #[tokio::test]
     async fn an_admin_links_only_marked_providers_from_the_account_page() {
         let h = harness().await;

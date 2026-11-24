@@ -9,7 +9,7 @@
 //!
 //! Every change is one write to the user's own objects, which the stores find by the session's
 //! user and UID, never by a name from the request. Changes need the session cookie, the
-//! same-origin and JSON checks of the other endpoints (`check_request`). Adding or
+//! same-origin and JSON checks of the other endpoints (`crate::request`). Adding or
 //! removing a passkey also needs a user-verified passkey assertion from the last
 //! [`REAUTH_WINDOW`], made with one of the user's own passkeys and recorded on the session.
 //! Removing a passkey revokes every session and grant that signed in or re-authenticated with
@@ -27,7 +27,6 @@
 use std::time::Duration;
 
 use axum::Router;
-use axum::body::Bytes;
 use axum::extract::{RawQuery, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
@@ -62,12 +61,12 @@ use crate::device::Requester;
 use crate::method::SignInMethod;
 use crate::passkeys::{BackupFlags, backup_flags};
 use crate::problem::{Problem, Step};
+use crate::request::{Body, SameOrigin};
 use crate::upstream::provider::{Descriptor, GITHUB_ISSUER, GOOGLE_ISSUER};
 use crate::{
     Accepted, BAD_REQUEST, Backend, CEREMONY_COOKIE, CEREMONY_EXPIRED, CEREMONY_LIFETIME, Ceremony,
-    PASSKEY_FAILED, Refused, SignIn, Verified, accepted, check_account, check_request, clean_label,
-    clear_cookie, cookie, json, new_passkey, open, parse, seal, set_cookie, set_cookie_with, touch,
-    verify_assertion,
+    PASSKEY_FAILED, Refused, SignIn, Verified, accepted, check_account, clean_label, clear_cookie,
+    cookie, json, new_passkey, open, seal, set_cookie, set_cookie_with, touch, verify_assertion,
 };
 
 /// Cookie holding the account session, `<grant name>.<secret>` (`SameSite=Lax`, so a link to
@@ -85,7 +84,7 @@ const SIGN_IN_PURPOSE: &str = "zeabur-identity/account-sign-in/v1";
 const REAUTH_PURPOSE: &str = "zeabur-identity/reauth/v1";
 const REGISTRATION_PURPOSE: &str = "zeabur-identity/account-registration/v1";
 
-const SIGNED_OUT: Problem = Problem::new(
+pub(crate) const SIGNED_OUT: Problem = Problem::new(
     StatusCode::UNAUTHORIZED,
     "signed-out",
     "Your session ended. Sign in again.",
@@ -133,14 +132,18 @@ pub(crate) const LAST_CREDENTIAL: Problem = Problem::new(
 
 type Shared<B> = std::sync::Arc<SignIn<B>>;
 
-/// The account routes and `/.well-known/passkey-endpoints`.
+/// `/.well-known/passkey-endpoints`, which caches may keep.
+pub(crate) fn passkey_endpoints<B: Backend>() -> Router<Shared<B>> {
+    Router::new().route(
+        "/.well-known/passkey-endpoints",
+        get(serve_passkey_endpoints::<B>),
+    )
+}
+
+/// The account routes.
 pub(crate) fn routes<B: Backend>() -> Router<Shared<B>> {
     Router::new()
         .route(ACCOUNT_PATH, get(page::<B>))
-        .route(
-            "/.well-known/passkey-endpoints",
-            get(passkey_endpoints::<B>),
-        )
         .route("/account/session/options", post(session_options::<B>))
         .route("/account/session", post(session_create::<B>))
         .route(
@@ -273,16 +276,6 @@ pub(crate) async fn current<B: Backend>(
         session,
         token,
     }))
-}
-
-/// A change request: same origin, JSON and a valid session.
-pub(crate) async fn signed_in<B: Backend>(
-    service: &SignIn<B>,
-    headers: &HeaderMap,
-    now: UnixTime,
-) -> Result<Account, Problem> {
-    check_request(headers, service.oauth.issuer.as_str())?;
-    current(service, headers, now).await?.ok_or(SIGNED_OUT)
 }
 
 /// Whether the session's latest authentication verified the user within [`REAUTH_WINDOW`].
@@ -420,7 +413,7 @@ struct PasskeyEndpoints {
 /// `GET /.well-known/passkey-endpoints` (W3C, "A Well-Known URL for Relying Party Passkey
 /// Endpoints"): where a password manager sends people to add or manage passkeys. Served
 /// directly, never redirected.
-async fn passkey_endpoints<B: Backend>(State(service): State<Shared<B>>) -> Response {
+async fn serve_passkey_endpoints<B: Backend>(State(service): State<Shared<B>>) -> Response {
     let issuer = service.oauth.issuer.as_str().trim_end_matches('/');
     let body = PasskeyEndpoints {
         enroll: format!("{issuer}{ACCOUNT_PATH}#add"),
@@ -695,10 +688,11 @@ async fn finish_assertion<B: Backend>(
 
 async fn session_options<B: Backend>(
     State(service): State<Shared<B>>,
-    headers: HeaderMap,
+    origin: Result<SameOrigin, Problem>,
 ) -> Response {
-    let result = check_request(&headers, service.oauth.issuer.as_str())
-        .and_then(|()| assertion_options(&service, SIGN_IN_PURPOSE, None, service.oauth.now()));
+    let result = origin.and_then(|SameOrigin| {
+        assertion_options(&service, SIGN_IN_PURPOSE, None, service.oauth.now())
+    });
     result.unwrap_or_else(IntoResponse::into_response)
 }
 
@@ -747,7 +741,7 @@ async fn session_create<B: Backend>(
     State(service): State<Shared<B>>,
     requester: Requester,
     headers: HeaderMap,
-    body: Bytes,
+    request: Result<Body<SameOrigin, AssertionRequest>, Problem>,
 ) -> Response {
     let now = service.oauth.now();
     let mut user = None;
@@ -756,8 +750,7 @@ async fn session_create<B: Backend>(
         ..Audit::default()
     };
     let result: Result<Response, Refused> = async {
-        check_request(&headers, service.oauth.issuer.as_str())?;
-        let request: AssertionRequest = parse(&body)?;
+        let Body(SameOrigin, request) = request?;
         let verified = finish_assertion(
             &service,
             &headers,
@@ -791,16 +784,15 @@ async fn session_create<B: Backend>(
 async fn sign_out<B: Backend>(
     State(service): State<Shared<B>>,
     requester: Requester,
-    headers: HeaderMap,
+    account: Result<Account, Problem>,
 ) -> Response {
-    let now = service.oauth.now();
     let mut user = None;
     let mut audit = Audit {
         requester: Some(&requester),
         ..Audit::default()
     };
     let result: Result<Response, Problem> = async {
-        let account = signed_in(&service, &headers, now).await?;
+        let account = account?;
         audit.session = Some(account.token.name.clone());
         service
             .oauth
@@ -819,11 +811,11 @@ async fn sign_out<B: Backend>(
 
 async fn reauth_options<B: Backend>(
     State(service): State<Shared<B>>,
-    headers: HeaderMap,
+    account: Result<Account, Problem>,
 ) -> Response {
     let now = service.oauth.now();
     let result: Result<Response, Problem> = async {
-        let account = signed_in(&service, &headers, now).await?;
+        let account = account?;
         assertion_options(&service, REAUTH_PURPOSE, Some(account.token.name), now)
     }
     .await;
@@ -834,7 +826,7 @@ async fn reauth<B: Backend>(
     State(service): State<Shared<B>>,
     requester: Requester,
     headers: HeaderMap,
-    body: Bytes,
+    request: Result<Body<Account, AssertionRequest>, Problem>,
 ) -> Response {
     let now = service.oauth.now();
     let mut user = None;
@@ -843,8 +835,7 @@ async fn reauth<B: Backend>(
         ..Audit::default()
     };
     let result: Result<Response, Refused> = async {
-        let request: AssertionRequest = parse(&body)?;
-        let account = signed_in(&service, &headers, now).await?;
+        let Body(account, request) = request?;
         audit.session = Some(account.token.name.clone());
         let verified = finish_assertion(
             &service,
@@ -887,10 +878,13 @@ async fn reauth<B: Backend>(
     result.unwrap_or_else(|refused| refused.respond(service.passkeys.rp_id()))
 }
 
-async fn add_options<B: Backend>(State(service): State<Shared<B>>, headers: HeaderMap) -> Response {
+async fn add_options<B: Backend>(
+    State(service): State<Shared<B>>,
+    account: Result<Account, Problem>,
+) -> Response {
     let now = service.oauth.now();
     let result: Result<Response, Problem> = async {
-        let account = signed_in(&service, &headers, now).await?;
+        let account = account?;
         require_fresh(&account, now)?;
         let exclude = service
             .credentials
@@ -931,7 +925,7 @@ async fn add<B: Backend>(
     State(service): State<Shared<B>>,
     requester: Requester,
     headers: HeaderMap,
-    body: Bytes,
+    request: Result<Body<Account, AddRequest>, Problem>,
 ) -> Response {
     let now = service.oauth.now();
     let mut user = None;
@@ -940,8 +934,7 @@ async fn add<B: Backend>(
         ..Audit::default()
     };
     let result: Result<Response, Problem> = async {
-        let request: AddRequest = parse(&body)?;
-        let account = signed_in(&service, &headers, now).await?;
+        let Body(account, request) = request?;
         audit.session = Some(account.token.name.clone());
         require_fresh(&account, now)?;
         let ceremony: Ceremony<PasskeyRegistration> =
@@ -1003,8 +996,7 @@ async fn add<B: Backend>(
 async fn rename<B: Backend>(
     State(service): State<Shared<B>>,
     requester: Requester,
-    headers: HeaderMap,
-    body: Bytes,
+    request: Result<Body<Account, RenameRequest>, Problem>,
 ) -> Response {
     let now = service.oauth.now();
     let mut user = None;
@@ -1013,8 +1005,7 @@ async fn rename<B: Backend>(
         ..Audit::default()
     };
     let result: Result<Response, Problem> = async {
-        let request: RenameRequest = parse(&body)?;
-        let account = signed_in(&service, &headers, now).await?;
+        let Body(account, request) = request?;
         audit.session = Some(account.token.name.clone());
         let label = clean_label(Some(&request.label)).ok_or(BAD_REQUEST)?;
         let passkeys = service
@@ -1086,8 +1077,7 @@ pub(crate) async fn revoke_by_credential<B: Backend>(
 async fn remove<B: Backend>(
     State(service): State<Shared<B>>,
     requester: Requester,
-    headers: HeaderMap,
-    body: Bytes,
+    request: Result<Body<Account, NameRequest>, Problem>,
 ) -> Response {
     let now = service.oauth.now();
     let mut user = None;
@@ -1096,8 +1086,7 @@ async fn remove<B: Backend>(
         ..Audit::default()
     };
     let result: Result<Response, Problem> = async {
-        let request: NameRequest = parse(&body)?;
-        let account = signed_in(&service, &headers, now).await?;
+        let Body(account, request) = request?;
         audit.session = Some(account.token.name.clone());
         require_fresh(&account, now)?;
         let passkeys = service
@@ -1140,8 +1129,7 @@ async fn remove<B: Backend>(
 async fn unlink<B: Backend>(
     State(service): State<Shared<B>>,
     requester: Requester,
-    headers: HeaderMap,
-    body: Bytes,
+    request: Result<Body<Account, NameRequest>, Problem>,
 ) -> Response {
     let now = service.oauth.now();
     let mut user = None;
@@ -1150,8 +1138,7 @@ async fn unlink<B: Backend>(
         ..Audit::default()
     };
     let result: Result<Response, Problem> = async {
-        let request: NameRequest = parse(&body)?;
-        let account = signed_in(&service, &headers, now).await?;
+        let Body(account, request) = request?;
         audit.session = Some(account.token.name.clone());
         require_fresh(&account, now)?;
         let linked = service
@@ -1192,8 +1179,7 @@ async fn unlink<B: Backend>(
 async fn revoke<B: Backend>(
     State(service): State<Shared<B>>,
     requester: Requester,
-    headers: HeaderMap,
-    body: Bytes,
+    request: Result<Body<Account, NameRequest>, Problem>,
 ) -> Response {
     let now = service.oauth.now();
     let mut user = None;
@@ -1202,8 +1188,7 @@ async fn revoke<B: Backend>(
         ..Audit::default()
     };
     let result: Result<Response, Problem> = async {
-        let request: NameRequest = parse(&body)?;
-        let account = signed_in(&service, &headers, now).await?;
+        let Body(account, request) = request?;
         let grants = service
             .oauth
             .grants
@@ -1262,7 +1247,7 @@ pub(crate) async fn revoke_all_but<B: Backend>(
 async fn revoke_others<B: Backend>(
     State(service): State<Shared<B>>,
     requester: Requester,
-    headers: HeaderMap,
+    account: Result<Account, Problem>,
 ) -> Response {
     let now = service.oauth.now();
     let mut user = None;
@@ -1271,7 +1256,7 @@ async fn revoke_others<B: Backend>(
         ..Audit::default()
     };
     let result: Result<Response, Problem> = async {
-        let account = signed_in(&service, &headers, now).await?;
+        let account = account?;
         audit.revoked = revoke_all_but(&service, &account.user, &account.token.name).await?;
         record(&service, &account.user, "SessionRevoked", &audit, now).await;
         user = Some(account.user);
