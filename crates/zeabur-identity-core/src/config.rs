@@ -50,6 +50,8 @@ pub enum DurationRule {
     Positive,
     /// Weeks or smaller units: a month or a year has no fixed length.
     FixedLength,
+    /// Whole seconds: expiry times are Unix seconds, so a fraction would be dropped.
+    WholeSeconds,
 }
 
 impl fmt::Display for DurationRule {
@@ -57,6 +59,7 @@ impl fmt::Display for DurationRule {
         f.write_str(match self {
             Self::Positive => "must be longer than zero",
             Self::FixedLength => "must use weeks, days or smaller units",
+            Self::WholeSeconds => "must be a whole number of seconds",
         })
     }
 }
@@ -192,16 +195,21 @@ impl fmt::Display for BaseUrl {
 ///
 /// # Errors
 ///
-/// Returns [`ConfigError::BadDuration`] for months or years, and for zero or a negative span.
+/// Returns [`ConfigError::BadDuration`] for months or years, for zero or a negative span, and for
+/// a fraction of a second.
 pub fn duration(field: &'static str, span: Span) -> Result<Duration, ConfigError> {
     let bad = |reason| ConfigError::BadDuration { field, reason };
     let signed = span
         .to_duration(SpanRelativeTo::days_are_24_hours())
         .map_err(|_calendar| bad(DurationRule::FixedLength))?;
-    Duration::try_from(signed)
+    let length = Duration::try_from(signed)
         .ok()
         .filter(|length| !length.is_zero())
-        .ok_or_else(|| bad(DurationRule::Positive))
+        .ok_or_else(|| bad(DurationRule::Positive))?;
+    if length.subsec_nanos() != 0 {
+        return Err(bad(DurationRule::WholeSeconds));
+    }
+    Ok(length)
 }
 
 #[cfg(test)]
@@ -293,6 +301,9 @@ mod tests {
         refused("-1s", DurationRule::Positive);
         refused("1mo", DurationRule::FixedLength);
         refused("1y", DurationRule::FixedLength);
+        refused("500ms", DurationRule::WholeSeconds);
+        refused("PT0.5S", DurationRule::WholeSeconds);
+        refused("1.5s", DurationRule::WholeSeconds);
         for bad in ["", "7", "d", "7 x", "5M", "99999999999999999999d"] {
             assert!(bad.parse::<Span>().is_err(), "{bad}");
         }
