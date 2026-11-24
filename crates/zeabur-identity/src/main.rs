@@ -11,6 +11,7 @@ use tracing_subscriber::util::SubscriberInitExt as _;
 use zeabur_identity::cli::{Cli, Command, LogFormat, ServeArgs, SetupLinkArgs};
 use zeabur_identity::serve::ServeError;
 use zeabur_identity_core::clock::Clock as _;
+use zeabur_identity_core::config::duration;
 use zeabur_identity_k8s::setup::LinkError;
 
 #[tokio::main]
@@ -27,6 +28,13 @@ async fn main() -> ExitCode {
 }
 
 async fn setup_link(args: &SetupLinkArgs) -> ExitCode {
+    let valid_for = match duration("--valid-for", args.valid_for) {
+        Ok(length) => length,
+        Err(error) => {
+            tracing::error!(reason = "invalid_configuration", %error, "configuration failed");
+            return ExitCode::from(2);
+        }
+    };
     let result = async {
         let client = kube::Client::try_default().await.map_err(LinkError::from)?;
         let now = zeabur_identity_core::clock::SystemClock.now();
@@ -35,7 +43,7 @@ async fn setup_link(args: &SetupLinkArgs) -> ExitCode {
             &args.namespace,
             &args.user,
             &args.token_hash,
-            args.valid_for,
+            valid_for,
             false,
             now,
         )

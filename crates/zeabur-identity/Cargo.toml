@@ -22,6 +22,7 @@ zeabur-identity-k8s.workspace = true
 axum.workspace = true
 bytes.workspace = true
 clap.workspace = true
+jiff.workspace = true
 k8s-openapi.workspace = true
 kube.workspace = true
 rustls.workspace = true

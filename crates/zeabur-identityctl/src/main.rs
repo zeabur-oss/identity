@@ -9,6 +9,7 @@ use std::process::ExitCode;
 use clap::Parser as _;
 use zeabur_identity_api::user::AccountType;
 use zeabur_identity_core::clock::Clock as _;
+use zeabur_identity_core::config::{ConfigError, duration};
 
 use crate::cli::{
     AccountTypeArg, AccountTypeArgs, Cli, ClientCommand, ClientCreateArgs, ClientKind,
@@ -101,6 +102,10 @@ fn client_create(args: ClientCreateArgs) -> ExitCode {
 }
 
 async fn invite(args: &InviteArgs) -> ExitCode {
+    let valid_for = match duration("--valid-for", args.valid_for) {
+        Ok(length) => length,
+        Err(error) => return flag_error(&error),
+    };
     let invitee = zeabur_identity_k8s::invitations::Invitee {
         username: args.username.clone(),
         display_name: args.display_name.clone(),
@@ -118,7 +123,7 @@ async fn invite(args: &InviteArgs) -> ExitCode {
             &args.namespace,
             &args.issuer,
             &invitee,
-            args.valid_for,
+            valid_for,
             args.reset,
             zeabur_identity_core::clock::SystemClock.now(),
         )
@@ -138,7 +143,7 @@ async fn invite(args: &InviteArgs) -> ExitCode {
             output::stderr(&format!(
                 "Send this link to {}. It works once and expires in {}.",
                 args.username,
-                span(args.valid_for)
+                span(valid_for)
             ));
             ExitCode::SUCCESS
         }
@@ -186,13 +191,17 @@ async fn account_type(args: &AccountTypeArgs) -> ExitCode {
 }
 
 async fn kube_config(args: &KubeConfigArgs) -> ExitCode {
+    let max_token_lifetime = match duration("--max-token-lifetime", args.max_token_lifetime) {
+        Ok(length) => length,
+        Err(error) => return flag_error(&error),
+    };
     let request = zeabur_identity_k8s::kube_config::Request {
         namespace: args.namespace.clone(),
         distro: args.distro,
         issuer: args.issuer.clone(),
         discovery: args.discovery,
         audiences: args.audiences.clone(),
-        max_token_lifetime: args.max_token_lifetime,
+        max_token_lifetime,
     };
     let result = async {
         let client = kube::Client::try_default().await?;
@@ -218,6 +227,10 @@ async fn kube_config(args: &KubeConfigArgs) -> ExitCode {
 }
 
 async fn setup_link(args: &SetupLinkArgs) -> ExitCode {
+    let valid_for = match duration("--valid-for", args.valid_for) {
+        Ok(length) => length,
+        Err(error) => return flag_error(&error),
+    };
     let result = async {
         let client = kube::Client::try_default().await?;
         let now = zeabur_identity_core::clock::SystemClock.now();
@@ -226,7 +239,7 @@ async fn setup_link(args: &SetupLinkArgs) -> ExitCode {
             &args.namespace,
             &args.issuer,
             &args.username,
-            args.valid_for,
+            valid_for,
             args.reset,
             now,
         )
@@ -240,7 +253,7 @@ async fn setup_link(args: &SetupLinkArgs) -> ExitCode {
             output::stderr(&format!(
                 "Open this link in a browser to enroll a passkey for {}. It works once and expires in {}.",
                 args.username,
-                span(args.valid_for)
+                span(valid_for)
             ));
             ExitCode::SUCCESS
         }
@@ -253,6 +266,12 @@ async fn setup_link(args: &SetupLinkArgs) -> ExitCode {
 
 /// A duration in the largest whole unit that states it exactly: `7 days`, `12 hours`, `90
 /// minutes`, `45 seconds`.
+/// A flag value the command cannot use: exit code 2, as for clap's own errors.
+fn flag_error(error: &ConfigError) -> ExitCode {
+    output::stderr(&format!("error: {error}"));
+    ExitCode::from(2)
+}
+
 fn span(duration: std::time::Duration) -> String {
     let secs = duration.as_secs();
     let (count, unit) = [(86_400, "day"), (3_600, "hour"), (60, "minute")]

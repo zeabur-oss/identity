@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use http::Uri;
 use http::uri::InvalidUri;
+use jiff::{Span, SpanRelativeTo};
 use thiserror::Error;
 
 /// A configuration value that failed validation.
@@ -26,17 +27,41 @@ pub enum ConfigError {
         /// The rule that was broken.
         reason: BaseUrlRule,
     },
-    /// The value is not a valid duration.
-    #[error(
-        "invalid duration {0:?}: use a whole number with a unit, for example 300s, 5m, 24h, or 7d"
-    )]
-    InvalidDuration(String),
+    /// The duration breaks a rule for duration flags.
+    #[error("{field}: {reason}")]
+    BadDuration {
+        /// The configuration field.
+        field: &'static str,
+        /// The rule that was broken.
+        reason: DurationRule,
+    },
     /// Options that only work together were given alone.
     #[error("{0}")]
     Incomplete(&'static str),
     /// The key rotation timings are inconsistent.
     #[error("key rotation: {0}")]
     BadRotationPolicy(&'static str),
+}
+
+/// A rule for duration flags.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DurationRule {
+    /// Longer than zero.
+    Positive,
+    /// Weeks or smaller units: a month or a year has no fixed length.
+    FixedLength,
+    /// Whole seconds: expiry times are Unix seconds, so a fraction would be dropped.
+    WholeSeconds,
+}
+
+impl fmt::Display for DurationRule {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Positive => "must be longer than zero",
+            Self::FixedLength => "must use weeks, days or smaller units",
+            Self::WholeSeconds => "must be a whole number of seconds",
+        })
+    }
 }
 
 /// A rule for issuer-style base URLs.
@@ -165,31 +190,26 @@ impl fmt::Display for BaseUrl {
     }
 }
 
-/// Parses durations written as a whole number and a unit: `s`, `m`, `h` or `d`.
+/// The length of the duration flag `field`, a [`Span`] in jiff's friendly format (`10m`, `7d`,
+/// `1h30m`) or ISO 8601 (`PT10M`). A day is 24 hours.
 ///
 /// # Errors
 ///
-/// Returns [`ConfigError::InvalidDuration`] for any other form, for zero, or on overflow.
-pub fn parse_duration(input: &str) -> Result<Duration, ConfigError> {
-    let invalid = || ConfigError::InvalidDuration(input.to_owned());
-    let split = input
-        .find(|c: char| !c.is_ascii_digit())
-        .ok_or_else(invalid)?;
-    let (digits, unit) = input.split_at(split);
-    let Ok(value) = digits.parse::<u64>() else {
-        return Err(invalid());
-    };
-    let unit_secs = match unit {
-        "s" => 1,
-        "m" => 60,
-        "h" => 3_600,
-        "d" => 86_400,
-        _ => return Err(invalid()),
-    };
-    match value.checked_mul(unit_secs) {
-        Some(0) | None => Err(invalid()),
-        Some(secs) => Ok(Duration::from_secs(secs)),
+/// Returns [`ConfigError::BadDuration`] for months or years, for zero or a negative span, and for
+/// a fraction of a second.
+pub fn duration(field: &'static str, span: Span) -> Result<Duration, ConfigError> {
+    let bad = |reason| ConfigError::BadDuration { field, reason };
+    let signed = span
+        .to_duration(SpanRelativeTo::days_are_24_hours())
+        .map_err(|_calendar| bad(DurationRule::FixedLength))?;
+    let length = Duration::try_from(signed)
+        .ok()
+        .filter(|length| !length.is_zero())
+        .ok_or_else(|| bad(DurationRule::Positive))?;
+    if length.subsec_nanos() != 0 {
+        return Err(bad(DurationRule::WholeSeconds));
     }
+    Ok(length)
 }
 
 #[cfg(test)]
@@ -247,36 +267,71 @@ mod tests {
         assert!(BaseUrl::parse("issuer", "https://xn--exmple-cua.com").is_ok());
     }
 
+    /// Parses `input` as clap does (jiff's `FromStr`), then applies [`duration`].
+    fn parse(field: &'static str, input: &str) -> Result<Duration, ConfigError> {
+        let span: Span = input.parse().unwrap_or_else(|e| panic!("{input}: {e}"));
+        duration(field, span)
+    }
+
+    /// Every form accepted before jiff (a whole number and `s`, `m`, `h` or `d`)
+    /// keeps its value.
     #[test]
-    fn parses_durations() {
-        assert_eq!(parse_duration("300s"), Ok(Duration::from_secs(300)));
-        assert_eq!(parse_duration("5m"), Ok(Duration::from_secs(300)));
-        assert_eq!(parse_duration("24h"), Ok(Duration::from_hours(24)));
-        assert_eq!(parse_duration("7d"), Ok(Duration::from_hours(7 * 24)));
-        for bad in [
-            "",
-            "7",
-            "d",
-            "0s",
-            "1.5h",
-            "-1s",
-            "7 d",
-            "1w",
-            "99999999999999999999d",
-        ] {
-            assert!(parse_duration(bad).is_err(), "{bad}");
+    fn accepts_the_old_forms() {
+        assert_eq!(parse("f", "300s"), Ok(Duration::from_secs(300)));
+        assert_eq!(parse("f", "5m"), Ok(Duration::from_secs(300)));
+        assert_eq!(parse("f", "60m"), Ok(Duration::from_hours(1)));
+        assert_eq!(parse("f", "24h"), Ok(Duration::from_hours(24)));
+        assert_eq!(parse("f", "7d"), Ok(Duration::from_hours(7 * 24)));
+        assert_eq!(parse("f", "007d"), Ok(Duration::from_hours(7 * 24)));
+    }
+
+    #[test]
+    fn refuses_empty_and_unbounded_lengths() {
+        let refused = |input: &str, reason| {
+            assert_eq!(
+                parse("--valid-for", input),
+                Err(ConfigError::BadDuration {
+                    field: "--valid-for",
+                    reason
+                }),
+                "{input}"
+            );
+        };
+        refused("0s", DurationRule::Positive);
+        refused("-1s", DurationRule::Positive);
+        refused("1mo", DurationRule::FixedLength);
+        refused("1y", DurationRule::FixedLength);
+        refused("500ms", DurationRule::WholeSeconds);
+        refused("PT0.5S", DurationRule::WholeSeconds);
+        refused("1.5s", DurationRule::WholeSeconds);
+        for bad in ["", "7", "d", "7 x", "5M", "99999999999999999999d"] {
+            assert!(bad.parse::<Span>().is_err(), "{bad}");
         }
     }
 
     proptest! {
+        /// A whole number and a unit keep the old value, up to the largest span jiff holds
+        /// (about 20,000 years).
         #[test]
-        fn duration_round_trips(secs in 1_u64..=10_000_000) {
-            prop_assert_eq!(parse_duration(&format!("{secs}s")), Ok(Duration::from_secs(secs)));
+        fn old_forms_keep_their_value(
+            (unit, secs, count) in prop_oneof![
+                (1_u64..=631_107_417_600).prop_map(|n| ("s", 1_u64, n)),
+                (1_u64..=10_518_456_960).prop_map(|n| ("m", 60, n)),
+                (1_u64..=175_307_616).prop_map(|n| ("h", 3_600, n)),
+                (1_u64..=7_304_484).prop_map(|n| ("d", 86_400, n)),
+            ]
+        ) {
+            prop_assert_eq!(
+                parse("f", &format!("{count}{unit}")),
+                Ok(Duration::from_secs(count * secs))
+            );
         }
 
         #[test]
-        fn parse_duration_never_panics(input in "\\PC*") {
-            drop(parse_duration(&input));
+        fn duration_never_panics(input in "\\PC*") {
+            if let Ok(span) = input.parse::<Span>() {
+                drop(duration("f", span));
+            }
         }
 
         #[test]
