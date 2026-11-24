@@ -2,6 +2,22 @@
 
 All notable changes to Zeabur Identity. Versions follow [Semantic Versioning](https://semver.org/); each section comes from the change files in `.changeset/` (docs/internal/releasing.md).
 
+## 0.3.4 (2026-11-24)
+
+### Fixes
+
+#### Duration flags accept jiff's friendly format
+
+`--token-lifetime`, `--refresh-idle`, `--valid-for` and the other duration flags of `zeabur-identity` and `zeabur-identityctl` now also accept compound and ISO 8601 values, such as `1h30m`, `1w` or `PT10M`. Every value they accepted before keeps its meaning, up to about 20,000 years. A value of zero, a negative value, or one in months or years is refused with the name of the flag.
+
+#### The Identity URL opens the account page
+
+Opening the bare Identity URL, such as `https://identity.<ip>.sslip.io/`, now redirects to `/account`, which offers sign-in when there is no session. Before, the browser downloaded an empty file. An unknown path now answers `404` with a short plain-text page instead of an empty, untyped response.
+
+#### url 2.5.9 for RUSTSEC-2026-0592
+
+The `url` crate is now 2.5.9, which fixes [RUSTSEC-2026-0592](https://rustsec.org/advisories/RUSTSEC-2026-0592.html).
+
 ## 0.3.3 (2026-11-22)
 
 ### Fixes

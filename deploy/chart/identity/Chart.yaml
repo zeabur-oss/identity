@@ -4,7 +4,7 @@ description: >-
   Zeabur Identity, the passkey-first OpenID Connect issuer for Kubernetes: its CRDs, the server,
   its address and the first administrator's setup link.
 type: application
-version: 0.3.3
+version: 0.3.4
 home: https://github.com/zeabur-oss/identity
 icon: https://oss.zeabur.com/favicon.svg
 sources:
