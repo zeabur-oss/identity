@@ -17,12 +17,13 @@ k3d_push() {
   local image=$1 cluster=$2 ref=$3 registry port
   shift 3
   registry="$cluster-registry"
-  port=$(docker port "$registry" 5000/tcp)
+  port=$(docker port "$registry" 5000/tcp) || return
   port=${port%%$'\n'*}
   port=${port##*:}
   [[ -n $port ]] || { echo "k3d registry $registry has no host port" >&2; return 1; }
-  docker tag "$image" "localhost:$port/$ref"
-  docker push --quiet "$@" "localhost:$port/$ref" >&2
+  # The callers run this in $(...), where errexit is off: every step returns its own failure.
+  docker tag "$image" "localhost:$port/$ref" || return
+  docker push --quiet "$@" "localhost:$port/$ref" >&2 || return
   docker image rm "localhost:$port/$ref" >/dev/null
   echo "$registry:5000/$ref"
 }
