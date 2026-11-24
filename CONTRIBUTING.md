@@ -198,12 +198,15 @@ cargo nextest run --locked --run-ignored only -E 'binary(kubernetes)'
 The script's header says what it sets up: the API server reads its authentication configuration
 from `$dir/authn/authn.yaml`, which starts with no issuer, and the kubeconfig stays in `$dir`.
 
-Build and import the image, then run the end-to-end scenario against the same cluster:
+`k3d-up.sh` also gives the cluster a registry of its own, `zeabur-identity-registry`. Build the
+image and push it there, then run the end-to-end scenario against the same cluster. `k3d_push`
+prints the reference the nodes pull the image by: `zeabur-identity-registry:5000/` and the tag
+you gave. Use a new tag for every run; the kubelet does not pull a tag it already has.
 
 ```sh
 ./scripts/build-image.sh zeabur-identity:e2e
-k3d image import zeabur-identity:e2e --cluster zeabur-identity
-ZEABUR_IDENTITY_E2E_IMAGE=zeabur-identity:e2e \
+image=$(source scripts/lib.sh; k3d_push zeabur-identity:e2e zeabur-identity "zeabur-identity:e2e-$(date +%s)")
+ZEABUR_IDENTITY_E2E_IMAGE="$image" \
 ZEABUR_IDENTITY_E2E_AUTHN_DIR="$dir/authn" \
 ZEABUR_IDENTITY_E2E_MEASUREMENTS="$dir/measurements.json" \
   cargo nextest run --locked --run-ignored only -E 'binary(e2e) and not test(keycloak)'

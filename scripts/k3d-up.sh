@@ -9,8 +9,13 @@
 #
 # CLUSTER names the cluster (default zeabur-identity); K3S_IMAGE picks the k3s release.
 # ZEABUR_REGISTRY_MIRRORS (`docker.io=http://mirror:5001,ghcr.io=...`) makes the node pull
-# through those mirrors. Delete the cluster with `k3d cluster delete <name>`.
+# through those mirrors. The cluster has a registry of its own, `<name>-registry`, on a host
+# port that `docker port` reports; `k3d_push` in scripts/lib.sh pushes an image to it and prints
+# the reference the nodes pull it by. Delete the cluster, and its registry, with
+# `k3d cluster delete <name>`.
 set -euo pipefail
+# shellcheck source=scripts/lib.sh
+source "$(dirname "$0")/lib.sh"
 
 dir="${1:?usage: k3d-up.sh <dir> [k3d cluster create arguments...]}"
 shift
@@ -27,8 +32,7 @@ wait_for() {
   echo "error: timed out: $*" >&2
   kubectl -n "$ns" get pods -o wide >&2 || true
   kubectl -n "$ns" get events --sort-by=.lastTimestamp >&2 || true
-  for pod in $(kubectl -n "$ns" get pods --no-headers 2> /dev/null \
-    | awk '{ split($2, ready, "/"); if (ready[1] != ready[2]) print $1 }'); do
+  for pod in $(pods_not_ready "$ns" 2> /dev/null); do
     kubectl -n "$ns" describe pod "$pod" >&2 || true
     kubectl -n "$ns" logs "$pod" --all-containers --prefix --tail=40 >&2 || true
   done
@@ -54,6 +58,7 @@ if [[ -n "${ZEABUR_REGISTRY_MIRRORS:-}" ]]; then
 fi
 
 k3d cluster create "$cluster" --image "${K3S_IMAGE:-rancher/k3s:v1.37.2-k3s1}" --no-lb --wait --timeout 300s \
+  --registry-create "$cluster-registry" \
   --kubeconfig-update-default=false --kubeconfig-switch-context=false "${args[@]}" \
   --volume "$dir/authn:/etc/rancher/k3s/zeabur-identity@server:0" \
   --k3s-arg "--kube-apiserver-arg=authentication-config=/etc/rancher/k3s/zeabur-identity/authn.yaml@server:0" \
