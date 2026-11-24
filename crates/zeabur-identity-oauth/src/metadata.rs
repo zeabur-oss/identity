@@ -118,10 +118,12 @@ fn unavailable() -> Response {
         .into_response()
 }
 
+/// A plain-text `404`, so a browser shows the answer instead of saving it as a file.
 async fn not_found() -> Response {
     (
         StatusCode::NOT_FOUND,
         [(header::X_CONTENT_TYPE_OPTIONS, "nosniff")],
+        "Not found.",
     )
         .into_response()
 }
@@ -265,7 +267,11 @@ mod tests {
     #[tokio::test]
     async fn unknown_paths_and_methods() {
         let app = app(true).await;
-        assert_eq!(fetch(&app, "/nope").await.0, StatusCode::NOT_FOUND);
+        let (status, headers, body) = fetch(&app, "/nope").await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(headers[header::CONTENT_TYPE], "text/plain; charset=utf-8");
+        assert_eq!(headers[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+        assert_eq!(body, "Not found.");
         let post = Request::builder()
             .method(Method::POST)
             .uri(JWKS_PATH)

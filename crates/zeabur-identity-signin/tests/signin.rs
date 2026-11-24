@@ -2052,6 +2052,15 @@ mod tests {
             response.status()
         }
 
+        /// The bare issuer URL leads to the account page.
+        #[tokio::test]
+        async fn the_root_redirects_to_the_account_page() {
+            let h = harness().await;
+            let reply = call(&h.app, Method::GET, "/", None, &[], None).await;
+            assert_eq!(reply.status, StatusCode::SEE_OTHER);
+            assert_eq!(reply.headers[header::LOCATION], "/account");
+        }
+
         /// A cross-site request is refused for being cross-site before its body is read, so a
         /// body that does not parse still gets 403, and the refusal is not cached.
         #[tokio::test]
