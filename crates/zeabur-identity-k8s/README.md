@@ -13,7 +13,8 @@ garbage collection of expired objects, the install manifests, and the kube-apise
   `zeabur-identity-keys` and `zeabur-identity-store` traits implemented on Kubernetes objects.
 - [`gc`](crate::gc): deletes expired grants and invitations, driven by a metadata-only watch.
 - [`rbac`](crate::rbac), [`deployment`](crate::deployment): the install manifests, generated
-  from code; tests check `deploy/chart/identity/crds/crds.yaml` and `deploy/chart/identity/files/rbac.json` against them.
+  from code; tests check `deploy/chart/identity/crds/crds.yaml`, `deploy/chart/identity/files/rbac.json` and
+  `deploy/chart/identity/files/deployment.json` against them.
 - [`kube_config`](crate::kube_config), [`internal_tls`](crate::internal_tls): the
   kube-apiserver configuration and the in-cluster discovery certificate.
 - [`invitations`](crate::invitations), [`setup`](crate::setup), [`clients`](crate::clients): the

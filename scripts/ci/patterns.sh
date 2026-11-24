@@ -44,6 +44,10 @@ rule text-scraping 'scripts/**' '\b(grep|sed|awk|cut)\b' \
   'uname -m | sed -e s/arm64/aarch64/' \
   'scraping text breaks without an error when a column or quoting changes; read structured output with jq, yq or kubectl -o jsonpath, filter with flags such as docker ps --filter, search text with rg, and write a long script with branches as a Rust test or a Bun script'
 
+rule chart-deployment 'deploy/chart/**' '^kind:\s*(Deployment|Service)\b' \
+  'kind: Deployment' \
+  'deployment.rs defines the Service and Deployment; the chart renders files/deployment.json, which a test keeps current'
+
 if ((failures > 0)); then
   exit 1
 fi

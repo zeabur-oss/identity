@@ -307,6 +307,31 @@ pub fn manifests_json(
 mod tests {
     use super::*;
 
+    /// The Helm chart renders its Service and Deployment from this file and sets only what its
+    /// values choose (image, issuer, arguments, resources, scheduling).
+    #[test]
+    fn chart_objects_are_current() {
+        const REGENERATE: &str = "cargo run -q -p zeabur-identityctl -- manifests \
+            --issuer https://identity.example.com --image '' \
+            | jq '.items |= map(select(.kind == \"Service\" or .kind == \"Deployment\"))' \
+            > deploy/chart/identity/files/deployment.json";
+        let committed = include_str!("../../../deploy/chart/identity/files/deployment.json");
+        let issuer = BaseUrl::parse("issuer", "https://identity.example.com").unwrap();
+        let namespace = super::super::rbac::DEFAULT_NAMESPACE;
+        let expected = ManifestList::new(vec![
+            Manifest::Service(Box::new(service(namespace))),
+            Manifest::Deployment(Box::new(deployment(
+                namespace,
+                &issuer,
+                &Options::default(),
+            ))),
+        ]);
+        assert!(
+            serde_json::from_str::<ManifestList>(committed).unwrap() == expected,
+            "deploy/chart/identity/files/deployment.json is stale: run `{REGENERATE}`"
+        );
+    }
+
     #[test]
     fn deployment_is_locked_down() {
         let issuer = BaseUrl::parse("issuer", "https://login.example.com").unwrap();

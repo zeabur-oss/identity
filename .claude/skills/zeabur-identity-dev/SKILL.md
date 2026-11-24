@@ -18,7 +18,9 @@ The interface: `zeabur-identity-ui`.
 
 ## Generated files
 - Regenerate committed outputs in the same commit: `cargo run -q -p zeabur-identityctl -- crds | jq -r '.items[] | "---", tojson' >
-  deploy/chart/identity/crds/crds.yaml`, `… -- rbac > deploy/chart/identity/files/rbac.json` (tests fail when they are stale), and
+  deploy/chart/identity/crds/crds.yaml`, `… -- rbac > deploy/chart/identity/files/rbac.json`,
+  `deploy/chart/identity/files/deployment.json` (the command is in `deployment::tests::chart_objects_are_current`;
+  tests fail when they are stale), and
   `templates/ds.html` (`./scripts/build-ui.sh`, which also builds `ui/dist`, not committed).
 
 ## Scale
