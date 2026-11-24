@@ -27,8 +27,8 @@ wait_for() {
   echo "error: timed out: $*" >&2
   kubectl -n "$ns" get pods -o wide >&2 || true
   kubectl -n "$ns" get events --sort-by=.lastTimestamp >&2 || true
-  for pod in $(kubectl -n "$ns" get pods --no-headers 2> /dev/null \
-    | awk '{ split($2, ready, "/"); if (ready[1] != ready[2]) print $1 }'); do
+  for pod in $(kubectl -n "$ns" get pods -o json 2> /dev/null \
+    | jq -r '.items[] | select((.status.containerStatuses // []) | length == 0 or any(.[]; .ready | not)) | .metadata.name'); do
     kubectl -n "$ns" describe pod "$pod" >&2 || true
     kubectl -n "$ns" logs "$pod" --all-containers --prefix --tail=40 >&2 || true
   done

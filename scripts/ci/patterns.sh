@@ -32,6 +32,10 @@ rule signin-raw-body "$signin" '\w:\s*(axum::(body::|extract::)?)?(Bytes\b|Json<
   'body: Bytes,' \
   'take request::Body<Account or SameOrigin, T>, which refuses a cross-site request before it reads the body'
 
+rule text-scraping 'scripts/**' '\b(grep|sed|awk|cut)\b' \
+  'uname -m | sed -e s/arm64/aarch64/' \
+  'scraping text breaks without an error when a column or quoting changes; read structured output with jq, yq or kubectl -o jsonpath, filter with flags such as docker ps --filter, search text with rg, and write a long script with branches as a Rust test or a Bun script'
+
 if ((failures > 0)); then
   exit 1
 fi
