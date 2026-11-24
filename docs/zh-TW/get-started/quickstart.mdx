@@ -292,7 +292,7 @@ spec:
 EOF
 ```
 
-這裡採用 k3s 的 [Traefik 設定方式](https://docs.k3s.io/helm/#customizing-packaged-components-with-helmchartconfig)。多節點叢集使用 `Local` 時，只有執行 Traefik Pod 的節點會接收流量。
+這裡採用 k3s 的 [Traefik 設定方式](https://docs.k3s.io/add-ons/helm#customizing-packaged-components-with-helmchartconfig)。多節點叢集使用 `Local` 時，只有執行 Traefik Pod 的節點會接收流量。
 
 接著替登入路由加入限流設定：
 
