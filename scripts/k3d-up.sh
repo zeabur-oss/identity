@@ -9,7 +9,10 @@
 #
 # CLUSTER names the cluster (default zeabur-identity); K3S_IMAGE picks the k3s release.
 # ZEABUR_REGISTRY_MIRRORS (`docker.io=http://mirror:5001,ghcr.io=...`) makes the node pull
-# through those mirrors. Delete the cluster with `k3d cluster delete <name>`.
+# through those mirrors. The cluster has a registry of its own, `<name>-registry`, on a host
+# port that `docker port` reports; `k3d_push` in scripts/lib.sh pushes an image to it and prints
+# the reference the nodes pull it by. Delete the cluster, and its registry, with
+# `k3d cluster delete <name>`.
 set -euo pipefail
 # shellcheck source=scripts/lib.sh
 source "$(dirname "$0")/lib.sh"
@@ -55,6 +58,7 @@ if [[ -n "${ZEABUR_REGISTRY_MIRRORS:-}" ]]; then
 fi
 
 k3d cluster create "$cluster" --image "${K3S_IMAGE:-rancher/k3s:v1.37.2-k3s1}" --no-lb --wait --timeout 300s \
+  --registry-create "$cluster-registry" \
   --kubeconfig-update-default=false --kubeconfig-switch-context=false "${args[@]}" \
   --volume "$dir/authn:/etc/rancher/k3s/zeabur-identity@server:0" \
   --k3s-arg "--kube-apiserver-arg=authentication-config=/etc/rancher/k3s/zeabur-identity/authn.yaml@server:0" \

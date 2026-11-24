@@ -50,8 +50,8 @@ cargo nextest run --locked --run-ignored only -E 'binary(kubernetes)'
 # Replaces the Credential CRD, so it runs alone.
 cargo nextest run --locked --run-ignored only -E 'binary(upgrade)'
 ./scripts/build-image.sh zeabur-identity:e2e
-k3d_import "$cluster" zeabur-identity:e2e
-ZEABUR_IDENTITY_E2E_IMAGE=zeabur-identity:e2e \
+image=$(k3d_push zeabur-identity:e2e "$cluster" "zeabur-identity:e2e-${work##*.}")
+ZEABUR_IDENTITY_E2E_IMAGE="$image" \
   ZEABUR_IDENTITY_E2E_AUTHN_DIR="$work/authn" \
   ZEABUR_IDENTITY_E2E_MEASUREMENTS="$work/measurements.json" \
   cargo nextest run --locked --run-ignored only -E 'binary(e2e) and not test(keycloak)'

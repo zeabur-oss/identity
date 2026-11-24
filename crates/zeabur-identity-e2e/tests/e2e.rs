@@ -5,8 +5,8 @@
 //! accepts a new token with the configuration it already has.
 //!
 //! Needs a k3s cluster with cert-manager whose kube-apiserver reads its
-//! `AuthenticationConfiguration` from a directory on this machine, and the image loaded into the
-//! cluster. CI sets this up (see the
+//! `AuthenticationConfiguration` from a directory on this machine, and the image in the
+//! cluster's registry. CI sets this up (see the
 //! `kubernetes` job, `scripts/ci/kubernetes.sh`):
 //!
 //! - `KUBECONFIG`: the cluster admin;

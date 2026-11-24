@@ -34,7 +34,11 @@ rule signin-raw-body "$signin" '\w:\s*(axum::(body::|extract::)?)?(Bytes\b|Json<
 
 rule k3d-image-import '*.sh *.md *.mdx *.yml' 'k3d\s+image\s+import(\s|$)' \
   'k3d image import zeabur-identity:e2e --cluster zeabur-identity' \
-  'k3d 5.9.0 can report success before ctr reads the tarball; use k3d_import (scripts/lib.sh), which pipes docker image save into ctr in each node'
+  'k3d 5.9.0 can report success before ctr reads the tarball; push the image to the cluster registry with k3d_push (scripts/lib.sh) and let the kubelet pull it'
+
+rule ctr-image-import '*.sh *.yml' 'ctr\s+(-\S+\s+)*images?\s+import(\s|$)' \
+  'docker image save zeabur-identity:e2e | docker exec -i node ctr image import -' \
+  'importing into a node by hand skips the kubelet pull and hides a missing image; push the image to the cluster registry with k3d_push (scripts/lib.sh)'
 
 rule text-scraping 'scripts/**' '\b(grep|sed|awk|cut)\b' \
   'uname -m | sed -e s/arm64/aarch64/' \

@@ -98,8 +98,9 @@ jq -e --arg namespace "$namespace" '.apiVersion == "v1" and .kind == "List"
   and any(.items[]; .kind == "Secret" and .metadata.name == "zeabur-identity-signing-keys")' \
   "$work/rbac.json" > /dev/null
 
-# Pin the local snapshot by image ID before importing. Retagging changes no bytes,
-# and imagePullPolicy=Never below prevents a registry from replacing the candidate.
+# Pin the local snapshot by image ID before pushing. Retagging changes no bytes, and the tag
+# pushed to the cluster's own registry is unique to this run, so IfNotPresent below pulls the
+# candidate and nothing else.
 if ! docker image inspect "$image" > /dev/null 2>&1; then
   docker pull "$image"
 fi
@@ -116,15 +117,15 @@ cluster_started=true
 CLUSTER="$cluster" "$(dirname "$0")/k3d-up.sh" "$work" \
   --k3s-arg '--disable=traefik@server:0' --k3s-arg '--disable=servicelb@server:0'
 # A registry pull can retain a multi-platform index with only native content.
-# Export only that platform so containerd does not require absent sibling manifests.
-k3d_import "$cluster" --platform "linux/$arch" "$local_image"
+# Push only that platform so containerd does not require absent sibling manifests.
+cluster_image="$(k3d_push "$local_image" "$cluster" "$local_image" --platform "linux/$arch")"
 kubectl apply -f "$work/crds.json"
 wait_for kube-system kubectl wait --for=condition=Established --timeout=90s -f "$work/crds.json"
 kubectl apply -f "$work/rbac.json"
 # Exercise the archived install command as well as the production hardened Deployment:
 # real service account, namespace RBAC, read-only root, non-root UID and seccomp.
-"$work/zeabur-identityctl" manifests --issuer "$issuer" --namespace "$namespace" --image "$local_image" \
-  | jq '(.items[] | select(.kind == "Deployment") | .spec.template.spec.containers[]).imagePullPolicy = "Never"' \
+"$work/zeabur-identityctl" manifests --issuer "$issuer" --namespace "$namespace" --image "$cluster_image" \
+  | jq '(.items[] | select(.kind == "Deployment") | .spec.template.spec.containers[]).imagePullPolicy = "IfNotPresent"' \
   > "$work/manifests.json"
 # RBAC includes the initially empty signing-key Secret: do not reapply it after startup.
 kubectl apply -f "$work/manifests.json"

@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Signs in to Zeabur Identity through Keycloak, an OpenID provider with its own CA: the scenario in
 # crates/zeabur-identity-e2e/tests/e2e.rs (`keycloak_links_signs_in_and_unlinks`). Creates a k3d
-# cluster, builds and imports the image, and runs Keycloak in Docker on the cluster's network with
-# the realm in crates/zeabur-identity-e2e/keycloak/realm.json. Pods reach it as host.k3d.internal,
-# which k3d puts in the cluster DNS; the test reaches it on 127.0.0.1. The cluster, the container
-# and the temporary directory are deleted at the end; ZEABUR_CI_KEEP=1 keeps them.
+# cluster, builds the image, pushes it to the cluster's registry, and runs Keycloak in Docker on
+# the cluster's network with the realm in crates/zeabur-identity-e2e/keycloak/realm.json. Pods
+# reach it as host.k3d.internal, which k3d puts in the cluster DNS; the test reaches it on
+# 127.0.0.1. The cluster, the container and the temporary directory are deleted at the end;
+# ZEABUR_CI_KEEP=1 keeps them.
 # Run inside `nix develop` on Linux with Docker. Not part of CI: it pulls the Keycloak image.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -51,7 +52,7 @@ chmod 0644 "$certs/tls.key" "$certs/tls.crt"
 CLUSTER="$cluster" ./scripts/k3d-up.sh "$work"
 export KUBECONFIG="$work/kubeconfig"
 ./scripts/build-image.sh zeabur-identity:e2e
-k3d_import "$cluster" zeabur-identity:e2e
+image=$(k3d_push zeabur-identity:e2e "$cluster" "zeabur-identity:e2e-${work##*.}")
 
 docker run -d --name "$container" --network "k3d-$cluster" -p "$port:$port" \
   -v "$certs:/opt/keycloak/conf/certs:ro" \
@@ -70,7 +71,7 @@ done
 curl -fsS --cacert "$work/ca.crt" --resolve "$host:$port:127.0.0.1" \
   "https://$host:$port/realms/zeabur/.well-known/openid-configuration" > /dev/null
 
-ZEABUR_IDENTITY_E2E_IMAGE=zeabur-identity:e2e \
+ZEABUR_IDENTITY_E2E_IMAGE="$image" \
   ZEABUR_IDENTITY_E2E_KEYCLOAK_ISSUER="https://$host:$port/realms/zeabur" \
   ZEABUR_IDENTITY_E2E_KEYCLOAK_ADDRESS="127.0.0.1:$port" \
   ZEABUR_IDENTITY_E2E_KEYCLOAK_CA="$work/ca.crt" \

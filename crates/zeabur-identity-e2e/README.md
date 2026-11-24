@@ -26,7 +26,7 @@ The scenario needs:
 
 - `KUBECONFIG` pointing at the disposable k3s cluster as cluster admin;
 - kube-apiserver reading its `AuthenticationConfiguration` from the mounted host directory;
-- `ZEABUR_IDENTITY_E2E_IMAGE` naming the image already imported into that cluster;
+- `ZEABUR_IDENTITY_E2E_IMAGE` naming the image as the cluster's registry serves it (`k3d_push` in `scripts/lib.sh` prints it);
 - `ZEABUR_IDENTITY_E2E_AUTHN_DIR` naming the same host directory (`scripts/ci/kubernetes.sh` uses `authn` in its temporary directory);
 - optionally, `ZEABUR_IDENTITY_E2E_MEASUREMENTS` naming a file to receive the measured working set.
 
