@@ -40,7 +40,7 @@
         {{ ui::command(invite_command) }}
       </div>
     </div>
-    <form id="setup" class="flex flex-col gap-5" novalidate data-options="/setup/options" data-post="/setup"
+    <form id="setup" method="post" class="flex flex-col gap-5" novalidate data-options="/setup/options" data-post="/setup"
           data-msg-failed="{{ m.passkey_failed }}" data-msg-cancelled="{{ m.passkey_cancelled }}"
           data-msg-working="{{ m.working }}" data-msg-error="{{ m.generic_error }}"
           data-msg-missing="{{ m.setup_missing_token }}">
@@ -53,7 +53,7 @@
         {{ upstream::buttons(providers, m) }}
       </div>
     </div>
-    <form id="setup-password" hidden class="flex flex-col gap-5" novalidate data-post="/setup/password"
+    <form id="setup-password" method="post" hidden class="flex flex-col gap-5" novalidate data-post="/setup/password"
           data-msg-too-short="{{ m.too_short() }}">
       {% call ui::field("new-password", m.setup_password, m.password_hint()) %}
       <input id="new-password" name="password" type="password" minlength="{{ zeabur_identity_core::password::MIN_CHARS }}" maxlength="{{ zeabur_identity_core::password::MAX_BYTES }}" class="{{ ds::input() }}"

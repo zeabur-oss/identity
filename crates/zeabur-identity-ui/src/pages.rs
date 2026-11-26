@@ -544,6 +544,27 @@ pub fn account_page(lang: Lang, view: Option<AccountView<'_>>) -> Response {
 mod tests {
     use super::*;
 
+    /// A form that falls back to the browser's default `GET` would put the password in the URL.
+    #[test]
+    fn script_driven_forms_never_fall_back_to_get() {
+        for (name, template) in [
+            ("login", include_str!("../templates/login.html")),
+            ("account", include_str!("../templates/account.html")),
+            ("setup", include_str!("../templates/setup.html")),
+        ] {
+            let forms: Vec<&str> = template
+                .split("<form")
+                .skip(1)
+                .map(|rest| rest.split('>').next().unwrap_or_default())
+                .filter(|tag| tag.contains("data-post"))
+                .collect();
+            assert!(!forms.is_empty(), "{name} has no script-driven form");
+            for tag in forms {
+                assert!(tag.contains(r#"method="post""#), "{name}: <form{tag}>");
+            }
+        }
+    }
+
     #[test]
     fn dates_are_utc_civil_dates() {
         assert_eq!(Date::new(0).iso, "1970-01-01T00:00:00Z");

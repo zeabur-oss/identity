@@ -41,7 +41,7 @@
       {% call ui::alert(m.passkey_unsupported_title, "default", "Key", live = "") %}{{ m.passkey_unsupported_body }}{% endcall %}
     </div>
     <noscript>{% call ui::alert(m.noscript_title, "default", "Key", live = "") %}{{ m.noscript_body }}{% endcall %}</noscript>
-    <form id="sign-in" data-post="/account/session/password" class="flex flex-col gap-5" novalidate>
+    <form id="sign-in" method="post" data-post="/account/session/password" class="flex flex-col gap-5" novalidate>
       {{ password::steps(m, "") }}
       <button type="submit" class="{{ ds::button("default", "lg") }} w-full">{{ m.login_submit }}</button>
     </form>
