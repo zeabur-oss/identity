@@ -1,267 +1,134 @@
 ---
 title: 规范符合度
-description: 查看 Zeabur Identity 各项规范要求对应的代码、测试和符合状态。
+description: Zeabur Identity 遵循哪些标准、自己增加了哪些保证，以及哪些没有做。
 ---
 
-你可以在这里查看 Zeabur Identity 实现的每项 MUST 和 SHOULD 要求，以及对应的代码和测试。Zeabur Identity 还没有获得 OpenID 认证。
+Zeabur Identity 让 Kubernetes 的用户用通行密钥、密码或上游账号登录，再签发 token 给 kube-apiserver 验证。它遵循 OAuth 2.0 和 OpenID Connect，也遵循 WebAuthn 和 Kubernetes 的 Structured Authentication Configuration。本页说明它做到了什么、没做什么，以及为什么。
 
-规范用语遵循 RFC 2119 和 RFC 8174。各 crate 的文档列出所实现要求的完整引用来源，设计决策则写在[架构](architecture.mdx)中。用以下命令打开 crate 文档：
+Zeabur Identity 还没有取得 OpenID 认证。OpenID Foundation 的 `oidcc-basic-certification-test-plan` 在 v0.3.4 上运行过一次，但结果不能当作认证：这个计划不发送 `code_challenge`，而 Zeabur Identity 一律要求 PKCE，所以测试使用的是把 PKCE 改为可选的版本。其余失败的用例，来自没有单点登录（SSO）会话，包括已登录时的 `prompt=none`、`id_token_hint` 和 `max_age`。
 
-```sh
-cargo doc --workspace --open
-```
+目前每一项要求都有对应的自动化测试，整体流程则用真实的 k3s 集群和 Keycloak 验证。
 
-表格保留来源的要求和状态文字。状态定义如下：
+规范编号放在页尾的脚注。逐条对照代码与测试的清单由维护者在仓库的 `docs/internal/conformance.md` 维护。
 
-- **Met**：已有实现代码和测试。
-- **Partial**：部分符合，限制写在该行。
-- **Not implemented**：尚未实现。
-- **N/A**：不适用，原因写在该行。
+## 让 kube-apiserver 能验证
 
-代码路径以 `crates/` 为基准。单元测试格式为 `crate: module::tests::name`，集成测试格式为 `crate/tests/file.rs: name`。
+kube-apiserver 从 Zeabur Identity 的发现文档找到签名密钥，再用密钥验证每一个 access token。所以这一部分的重点是文档和密钥一定要正确。
 
-标记为 *(cluster)* 的测试使用 k3s `v1.37.2`，运行时使用 `--run-ignored only`。标记为 *(e2e)* 的测试位于 `zeabur-identity-e2e/tests/e2e.rs`，使用 Zeabur Identity 容器镜像运行。标记为 *(e2e, Keycloak)* 的测试还需要 Keycloak 服务器，使用 `scripts/keycloak-e2e.sh` 运行，不在 CI 中运行。
+- 发现文档同时放在 OpenID Connect 和 OAuth 两个标准位置，内容相同，`issuer` 一致[^discovery]。
+- 签名只用 ES256 和 RS256，一个密钥只对应一种算法。头部不接受 `jku`、`x5u` 这类让攻击者指定密钥来源的字段，也不接受 `none`[^jose]。
+- 换密钥时，新密钥会先公开一段时间才开始签名，旧密钥也会保留一段时间，所以 kube-apiserver 的缓存不会因为换密钥而验证失败[^rotation]。
+- access token 使用 `at+jwt` 类型，每个资源有自己的 `aud`[^jwt-at]。
+- 在 k3s 上，每次 CI 都会运行 `kubectl auth whoami`；RKE2 v1.36.5+rke2r1 则由人工验证过[^kep]。
 
-## 各项规范摘要
+## 登录流程
 
-| Specification | Version / status (2026-10) | Status |
-|---|---|---|
-| OpenID Connect Discovery 1.0 | Final (errata set 2) | Met |
-| RFC 8414 OAuth 2.0 Authorization Server Metadata | RFC | Met |
-| RFC 7515 JWS, RFC 7517 JWK, RFC 7518 JWA, RFC 7638 thumbprints | RFC | Met |
-| RFC 7519 JWT, RFC 8725 JWT BCP, RFC 9068 JWT access tokens | RFC | Met |
-| KEP-3331 Structured Authentication Configuration (`apiserver.config.k8s.io/v1`) | GA in Kubernetes 1.34 | Met on k3s in CI; verified manually on RKE2 v1.36.5+rke2r1 |
-| RFC 6749 OAuth 2.0 (authorization code, refresh) | RFC | Met |
-| RFC 7636 PKCE | RFC | Met (S256 only) |
-| RFC 9700 OAuth 2.0 Security BCP | BCP 240 | Partial: sender-constrained tokens (DPoP) not implemented |
-| RFC 6750 Bearer token usage | RFC | Met for UserInfo |
-| RFC 8707 Resource Indicators | RFC | Met (one resource per request) |
-| RFC 7009 Token Revocation | RFC | Met (refresh tokens; access tokens answered with `unsupported_token_type`) |
-| RFC 9126 PAR | RFC | Met |
-| RFC 9207 Authorization server issuer identification | RFC | Met |
-| OpenID Connect Core 1.0 | Final (errata set 2) | Partial: no single sign-on sessions, so every authorization request asks for a sign-in |
-| W3C WebAuthn Level 3 | Recommendation | Met for registration, discoverable sign-in, and conditional mediation |
-| WebAuthn Signal API (`signalAllAcceptedCredentials`, `signalUnknownCredential`) | WebAuthn Level 3 | Met where the browser has it (feature-detected) |
-| W3C A Well-Known URL for Relying Party Passkey Endpoints | Working Draft | Met |
-| NIST SP 800-63B-4 | Final, Jul. 2025 | Partial: user-verified passkeys (AAL2-capable); passwords with a TOTP code as the second factor, which admin passwords need by default; with `admin-sign-in: device-bound-passkey`, admin accounts need a device-bound passkey (BE unset, self-reported: attestation is `none`); refresh sessions end after 1 h idle (15 min for admins with several teams or device-bound passkeys) and 12 h after sign-in; account-page sessions end after one hour and need a fresh verified passkey within five minutes to add or remove one, or to link or unlink an upstream account |
-| Cookies (draft-ietf-httpbis-rfc6265bis) | Draft | Met for the `__Host-` cookies used |
-| RFC 9457 Problem Details | RFC | Met for the sign-in endpoints |
-| RFC 8176 Authentication Method Reference values | RFC | Met (`swk`, `mfa` for passkeys; `pwd` for passwords, with `otp` and `mfa` after a TOTP code, `mfa` after a recovery code) |
-| RFC 6238 TOTP | RFC | Met (SHA-1, 6 digits, 30 s steps, one step of drift) |
-| WCAG 2.2 AA | W3C Recommendation | Partial: contrast computed and met for every color pair used; no automated browser audit or screen-reader pass yet |
-| OpenID Connect RP-Initiated Logout 1.0 | Final | Not implemented (no sessions) |
-| OpenID Connect Back-Channel Logout 1.0 | Final | Not implemented |
-| RFC 9449 DPoP | RFC | Not implemented: kube-apiserver accepts only bearer tokens |
-| RFC 9396 Rich Authorization Requests | RFC | N/A: kube-apiserver cannot evaluate `authorization_details`; not advertised |
-| RFC 9470 Step-up Authentication Challenge | RFC | N/A: kube-apiserver never sends the challenge. Admin rights come from a separate, passkey-only admin account instead |
-| OAuth 2.1 (draft-ietf-oauth-v2-1) | Draft | Followed where it tightens OAuth 2.0 (PKCE always, S256 only) |
-| OpenID Foundation conformance suite, `oidcc-basic-certification-test-plan` | — | Not run yet |
+授权码流程是唯一的登录流程，并增加了多项限制。
 
-## 仓库要求
+- 一律要求 PKCE，而且只接受 S256[^pkce]。
+- redirect URI 必须完全匹配，只有 loopback 地址的端口可以不同。授权请求出错时，不会跳转到不可信的地址，而是显示错误页[^redirect]。
+- 授权码只能用一次。如果同一个授权码被重复使用，它已经签发的 token 会一并撤销[^code]。
+- refresh token 每次使用都会换新。旧的 token 再次出现，就说明它被盗了，整个 refresh 家族会被撤销[^refresh]。
+- 授权响应带有 `iss`，防止混淆攻击[^iss]。
+- 支持 PAR 和 token 撤销[^par]。
+- 每次授权请求都要重新登录，因为没有单点登录（SSO）会话。所以 `max_age` 和 `prompt=login` 本来就会被满足[^core]。
 
-| Requirement | Code | Check | Status |
-|---|---|---|---|
-| `unsafe_code = "forbid"` | `Cargo.toml [workspace.lints.rust]`; `#![forbid(unsafe_code)]` in both binaries | CI `clippy`, `unsafe-report` | Met |
-| Only OSI-approved licenses | `deny.toml [licenses]` | CI `cargo-deny` | Met |
-| Known vulnerabilities rejected | `deny.toml [advisories]` | CI `cargo-deny` | Met |
-| Dependency `unsafe`/native code listed for approval | `zeabur-oss-unsafe-report` (zeabur-oss/.github), `supply-chain/unsafe-allowlist.toml` | CI `unsafe-report` | Met |
-| clippy pedantic + restriction set, rustfmt | `Cargo.toml [workspace.lints]`, `clippy.toml`, `rustfmt.toml` | CI `clippy`, `format`, `docs` | Met |
-| DCO sign-off | `CONTRIBUTING.md`, zeabur-oss/.github `dco.yml` | CI `dco` | Met |
-| One pinned Rust toolchain | `flake.nix`, `flake.lock` | CI `clippy`, `format` in `nix develop` | Met |
-| Image: static binary, non-root, no shell | `Containerfile`, `zeabur-identity-k8s/src/deployment.rs` | `zeabur-identity-k8s: deployment::tests::deployment_is_locked_down`; *(e2e)* | Met |
-| Image size and idle memory measured in CI | `scripts/build-image.sh`, e2e measurement | CI `kubernetes` job summary | Met (the Pod's working set after sign-in stays within the 30 MiB budget; CI reports image size only in the summary, with no size limit) |
-| Image signing (Sigstore) and SBOM | `.github/workflows/release.yml`, `scripts/release-build.sh`, `scripts/release-verify.sh` | Exact-digest signature/SBOM verification and public pull in both native release rehearsal jobs | Partial: pipeline implemented; public OIDC publication evidence requires a successful tag-triggered run ([release procedure](./releases.mdx)) |
-| Versioned CLI archives, checksums, signed provenance, and SBOMs | Same workflow; `scripts/release-smoke.sh` | Signed checksum manifest; downloaded archive execution and Kubernetes-backed container startup on Linux amd64/arm64 while release stays draft; separate maintainer publication after installation acceptance | Partial: pipeline implemented; local smoke is not evidence of a published release |
+## 登录方式
 
-## OpenID Connect Discovery 1.0 和 RFC 8414
+登录页提供通行密钥、密码和上游账号三种方式，普通账号可以任选。
 
-| § | Requirement | Level | Code | Test | Status |
-|---|---|---|---|---|---|
-| Disc. 3 | `issuer`: https, no query or fragment | REQUIRED | `zeabur-identity-core/src/config.rs` `BaseUrl::parse` | `zeabur-identity-core: config::tests::rejects_everything_else` | Met |
-| Disc. 3 | `authorization_endpoint`, `token_endpoint`, `userinfo_endpoint`, `jwks_uri` (https) | REQUIRED | `zeabur-identity-oauth/src/discovery.rs` | `zeabur-identity-oauth: discovery::tests::required_members_are_present` | Met |
-| Disc. 3 | `id_token_signing_alg_values_supported` includes RS256 | MUST | `discovery.rs`, `zeabur-identity-keys` `Algorithm::ALL` | same | Met |
-| Disc. 3 | `scopes_supported` includes `openid` | MUST | `discovery.rs` | same | Met |
-| Disc. 3 | Defaults that would over-claim set explicitly | — | `discovery.rs` | `zeabur-identity-oauth: discovery::tests::does_not_inherit_misleading_defaults` | Met |
-| Disc. 4, 4.3 | Document at `/.well-known/openid-configuration`; `issuer` identical | MUST | `zeabur-identity-oauth/src/metadata.rs` | `zeabur-identity-oauth: metadata::tests::both_metadata_locations_serve_the_same_document` | Met |
-| 8414 §3, §3.3 | Well-known location; identical `issuer`; RFC 9068 §4 consistency | MUST | one document at both paths | same | Met |
-| Disc. 7.1 | TLS for discovery | MUST | TLS at the ingress; the internal listener for kube-apiserver uses a private CA that cert-manager keeps | `zeabur-identity: internal::tests::serves_metadata_with_the_issued_certificate_and_renews_in_place` | Met |
+- 通行密钥使用 WebAuthn，要求可发现的通行密钥和用户验证（指纹、面容或 PIN），并支持浏览器的自动填充[^webauthn]。
+- 密码登录对不存在的用户、错误的密码和被封锁的浏览器给出同一种响应，错误次数按浏览器计算。登录时可以要求身份验证器应用的验证码，验证码和恢复码都只能用一次[^totp]。
+- 第一位管理员只能通过一次性的设置链接创建，不存在“第一个来的人成为管理员”。链接用过就失效，也会过期。
+- 邀请链接只能用一次，只能给被邀请的那位用户，服务账号本身不能创建邀请。
+- 设置链接和邀请都绑定用户的 UID。用户被删除后用同名重建，旧链接、旧授权码和旧 refresh token 都不会套用到新用户。
+- 登录页没有 inline 脚本或样式，并设置了防点击劫持的头部，也不会把 token 放进浏览器存储[^csp]。
 
-## JOSE：RFC 7515、7517、7518、7638、8725
+## 账号、管理员与会话
 
-| § | Requirement | Level | Code | Test | Status |
-|---|---|---|---|---|---|
-| 7515 §4.1.1, §4.1.4 | `alg` present; `kid` identifies the key | MUST | `zeabur-identity-keys/src/jws.rs` | `zeabur-identity-keys: jws::tests::independent_library_verifies_with_published_jwk` | Met |
-| 7515 §4.1.11 | Unknown critical extensions rejected | MUST | `zeabur-identity-keys/src/verify.rs` | `zeabur-identity-keys: verify::tests::rejects_tampering_wrong_keys_and_algorithms` | Met |
-| 7517 §4.5, §4.3, §5 | Distinct `kid`s; not `use` with `key_ops`; set format | SHOULD | `zeabur-identity-keys/src/jwk.rs` | `zeabur-identity-keys: jwk::tests::*`, `rotation::tests::schedule_invariants` | Met |
-| 7518 §3.3, §3.4, §3.6 | RSA ≥ 2048 bits (3072 generated); fixed-width ES256; no `none` | MUST | `zeabur-identity-keys/src/signing.rs`, `verify.rs` | `zeabur-identity-keys: signing::tests::*`, `verify::tests::*` | Met |
-| 7638 §3 | Thumbprint canonical form | MUST | `jwk.rs` | `zeabur-identity-keys: jwk::tests::rfc7638_example_thumbprint` | Met |
-| 8725 §3.1 | One algorithm per key | MUST | `signing.rs`, `verify.rs` | `zeabur-identity-keys: signing::tests::rejects_key_for_the_wrong_algorithm`, `verify::tests::an_rsa_key_never_verifies_an_es256_header` | Met |
-| 8725 §3.10, §3.11 | No `jku`/`x5u`/`jwk` headers; explicit `typ` | — / RECOMMENDED | `jws.rs` (`at+jwt`, `JWT`) | `zeabur-identity-oauth/tests/oauth.rs: code_flow_issues_tokens_kubernetes_can_use` | Met |
-| OIDC Core §10.1.1 | Keep decommissioned keys published for a while | SHOULD | `zeabur-identity-keys/src/rotation.rs` | `zeabur-identity-keys: rotation::tests::*` | Met |
+账号分为管理员和普通账号，管理员的登录方式由 `admin-sign-in` 设置限制。
 
-## kube-apiserver 集成（KEP-3331）
+- `two-factor`（默认）：管理员用通行密钥，或用密码加身份验证器应用的验证码或恢复码，或用标记为 `mfa: Enforced` 的 OpenID 提供方登录。
+- `any`：管理员与普通账号相同，不另外限制。
+- `passkey`：只能用通行密钥。
+- `device-bound-passkey`：只能用设备绑定的通行密钥，同步的通行密钥无法登录，也无法注册。
+- 没有标记 `mfa: Enforced` 的提供方，例如 GitHub 和 Google，管理员无法登录也无法关联。标记是运维者的声明，Zeabur Identity 不读取提供方报告的 `amr`。
+- 这项限制在登录、换授权码和每次 refresh 时都会重新检查，所以资格不符的会话会在下一次 refresh 时结束。
+- 只有管理员的 token 带有 `admins` 组，而且寿命更短（5 分钟，普通账号为 10 分钟）。CRD 不允许把 `admins` 写进 `spec.groups`。
+- refresh 空闲 1 小时就结束，多团队或 `device-bound-passkey` 的管理员则是 15 分钟，无论如何登录 12 小时后都会结束。这些做法对照 NIST SP 800-63B-4 的 AAL2[^nist]。
+- 第一位管理员绑定 `cluster-admin`，不需要再登录一次。refresh 会跟着账号类型走，普通账号不会保留管理权限。
 
-| Source | Requirement | Code | Test | Status |
-|---|---|---|---|---|
-| `oidc.go` | RS/ES/PS algorithms only | ES256 default, RS256 | — | Met |
-| go-oidc v2 key cache | A new key is visible before it signs | `zeabur-identity-keys/src/rotation.rs` publish-ahead; max-age below it | `zeabur-identity-keys: rotation::tests::schedule_invariants`, `zeabur-identity: cli::tests::rejects_bad_issuers_and_inconsistent_timings` | Met |
-| `validation.go` | `discoveryURL` https and different from `url` | internal TLS listener at the Service's ClusterIP | *(e2e)* | Met |
-| `oidc.go` | Internal discovery keeps `issuer`; `jwks_uri` from that document | `zeabur-identity-oauth/src/discovery.rs` | `zeabur-identity-oauth: discovery::tests::internal_variant_changes_only_the_jwks_uri`; *(e2e)* | Met |
-| AuthenticationConfiguration | Prefixed usernames and groups; no `system:`; access tokens only (`has(claims.client_id)`); lifetime bound | `zeabur-identity-k8s/src/kube_config.rs` | `zeabur-identity-k8s: kube_config::tests::*`; *(e2e)* `passkey_sign_in_then_kubectl_auth_whoami` | Met |
-| Distributions | `anonymous` per distribution; install steps for K3s/RKE2 | `kube_config.rs` | `zeabur-identity-k8s: kube_config::tests::*` | Partial: configuration generation tested; CI cluster E2E covers k3s; verified manually on RKE2 v1.36.5+rke2r1 |
-| Project requirement | `kubectl auth whoami` on k3s | — | *(e2e)* | Met |
+## 账号页
 
-## Kubernetes 存储
+用户在 `/account` 管理自己的通行密钥、密码和已关联的上游账号。
 
-| Source | Requirement | Code | Test | Status |
-|---|---|---|---|---|
-| API concepts | Update with `resourceVersion` is compare-and-swap; delete preconditions; create of an existing name fails | `zeabur-identity-k8s/src/objects.rs` | `zeabur-identity-k8s/tests/kubernetes.rs: exactly_one_racer_wins_each_primitive` *(cluster)* | Met |
-| CRD validation | CEL within the cost budget | `zeabur-identity-api/src/*.rs` | `admission_rejects_invalid_objects` *(cluster)* | Met |
-| RBAC | 最小权限：只能按名称访问 Secret，不能对 Secret 使用 `create`，也没有 RBAC 操作权限；账号页面可对核心 `Events` 使用 `create`，对 `credentials/status` 使用 `update`／`patch`；只能读取 `upstreamproviders`，并对唯一的上游 Secret 使用 `get`；不能对 `credentials` 使用 `update` 或 `patch` | `zeabur-identity-k8s/src/rbac.rs` | `service_account_has_least_privilege`, `upstream_providers_admit_only_fitting_fields_and_are_read_only` *(cluster)*, `zeabur-identity-k8s: rbac::tests::*` | Met |
-| RFC 9700 §2.1; RFC 8252 §7.3; RFC 6749 §3.1.2 | Redirect URI 必须是有主机的 `https://`，或带路径的 loopback `http://`；只能用可打印的 ASCII，不能有片段或用户信息。Admission 用 CEL `isURL()`/`url()` 检查；`zeabur-identityctl client create` 还要求合法的 WHATWG URL，写成序列化后的形式，百分号编码也要正确，这样精确匹配时看到的就是浏览器使用的字符串，admission 也会接受 | `zeabur-identity-api/src/client.rs` `REDIRECT_URI_RULE`, `zeabur-identity-k8s/src/clients.rs` `redirect_uri_allowed` | `zeabur-identity-k8s: clients::tests::redirect_uris_are_https_or_loopback_in_the_form_a_browser_uses`, `clients::tests::invalid_registrations_are_rejected_with_the_offending_value`; `tests/redirect_uris.rs` （属性测试：接受的 URI 经过 WHATWG 与 RFC 3986 解析器和授权响应后不变，loopback 端口匹配，浏览器的形式会被接受）; `admission_rejects_invalid_objects`, `admission_and_identityctl_agree_on_generated_redirect_uris` *(cluster)*（生成的候选值；`zeabur-identityctl` 接受的都能通过 admission，而 admission 放行的，对浏览器来说绝不会是既非 HTTPS 也非 loopback、含片段或含凭据的目标） | Met |
-| RFC 6749 §10.10 | Generated client secrets: 256 bits from the CSPRNG (guessing probability at most 2^-128 is a MUST, at most 2^-160 a SHOULD); only the hash is stored | `zeabur-identity-k8s/src/clients.rs` `register` | `zeabur-identity-k8s: clients::tests::confidential_clients_get_a_fresh_random_secret_and_only_its_hash`, `clients::tests::emitted_objects_satisfy_the_schema_rules`; `oauth_flow_on_kubernetes_storage` *(cluster: the printed secret authenticates, a wrong one is `invalid_client`)* | Met |
-| Project requirement | Expired objects are cleaned up | `zeabur-identity-k8s/src/gc.rs` | `garbage_collector_deletes_expired_objects_only` *(cluster)* | Met |
-| Project requirement | Signing keys in a Secret, rotation with overlap | `zeabur-identity-k8s/src/keys.rs` | `signing_keys_persist_and_only_one_writer_wins` *(cluster)* | Met |
-| WebAuthn Level 3 §7.1 | A known credential ID fails registration | `zeabur-identity-store` `passkey_credential_name`, create-once | `zeabur-identity-signin/tests/signin.rs`; `setup_link_is_single_use_and_replaceable` *(cluster)* | Met |
-| RFC 9700 §4.14.2 | Refresh rotation with reuse detection | `zeabur-identity-k8s/src/grants.rs`, `zeabur-identity-store` `classify` | `grant_rotation_is_linearizable` *(cluster: 1 of 64 rotates)* | Met |
-| Project account-recovery policy; RFC 9700 §4.14.2 (security-event revocation, MAY) | Reset deletes pending invitations, then credentials, then refresh-token families before writing a setup link, including zero-credential retries after partial failure | `zeabur-identity-k8s/src/setup.rs` | Account-recovery tests | Met |
+- 所有读写都只限于当前登录的用户，请求里的名称只能在这个范围内选择。
+- 添加或移除通行密钥、关联或解除上游账号之前，必须在五分钟内用自己的通行密钥重新验证一次[^reauth]。
+- 修改或移除密码要输入当前密码，错误次数与登录共用同一组限制。修改或移除之后，用户其他的会话都会结束。
+- 最后一个登录方式永远不能移除，即使同时有多个移除请求也一样。
+- 移除通行密钥时，用它登录过的会话和授权都会撤销。
+- 每项变更都会留下审计日志和 `User` 上的 `Event`，记录操作者、凭据、设备型号、IP 和浏览器。
+- 账号页按 Passkey Endpoints 规范公开 `/.well-known/passkey-endpoints`，让浏览器和密码管理器找到注册与管理入口[^passkey-endpoints]。
 
-### 账号恢复测试
+## 上游登录（GitHub 与 OpenID 提供方）
 
-- `zeabur-identity-k8s/tests/setup_reset.rs`：`reset_revokes_invitations_before_anything_else`、`reset_retries_grant_deletion_after_credentials_are_gone` 和 `reset_revokes_old_grants_without_credentials` 使用模拟的 Kubernetes HTTP API 和实际的 OAuth 路由器，测试部分失败后的恢复流程。
-- `zeabur-identity-k8s/tests/kubernetes.rs`：`setup_link_is_single_use_and_replaceable` 在集群上确认重置只会撤销目标用户的邀请。
-- `zeabur-identity-e2e/tests/e2e.rs`：`passkey_sign_in_then_kubectl_auth_whoami` 在集群上确认刷新令牌在重置前可用，重置后失效。
+上游登录只用来登录已经关联好的账号，不会自动创建用户。
 
-## OAuth 2.0 和 OpenID Connect
+- 关联只能通过设置链接、邀请，或已登录用户的账号页，而且从账号页关联要重新验证通行密钥。
+- 一个上游账号不能同时关联给两位用户。
+- 登录时验证 `state`、PKCE、`iss`，以及 ID token 的签名、`iss`、`aud`、`azp`、`exp` 和 `nonce`[^upstream]。
+- 提供方的新增、修改、删除和 client secret 轮换，下一个请求就生效，不需要重启。删除提供方不会删掉已关联的账号。
+- 用真实的 Keycloak 验证过完整流程：未关联的账号被拒绝、关联后可登录、解除关联后再次被拒绝。
 
-除非另有说明，测试都位于 `zeabur-identity-oauth/tests/oauth.rs`。
+## 存储与权限
 
-| Spec § | Requirement | Level | Code (`zeabur-identity-oauth/src/`) | Test | Status |
-|---|---|---|---|---|---|
-| 6749 §3.1, §3.2 | Parameters not repeated | MUST | `params.rs` | `authorization_endpoint_errors` | Met |
-| 6749 §3.1.2.3; 9700 §2.1 | Exact redirect URI match (loopback port excepted) | MUST | `authorize.rs` | `zeabur-identity-oauth: authorize::tests::redirect_uri_rules` | Met |
-| 6749 §4.1.2.1 | No redirect for an invalid client or redirect URI | MUST NOT | `endpoints.rs` (HTML error page) | `authorization_endpoint_errors`; `zeabur-identity-signin/tests/pages.rs: untrusted_authorization_requests_show_an_error_page` | Met |
-| 6749 §4.1.2 | Codes short-lived and single use; reuse revokes issued tokens | MUST | `code.rs`, `endpoints.rs` | `code_is_single_use_and_reuse_revokes_what_it_issued`, `exactly_one_concurrent_redemption_succeeds` | Met |
-| 6749 §4.1.3 | Code bound to client and `redirect_uri` | MUST | `endpoints.rs` | `pkce_and_code_binding_are_enforced` | Met |
-| 6749 §2.3.1, §5.2 | Client authentication; `WWW-Authenticate` for Basic | MUST | `client_auth.rs` | `confidential_client_gets_rs256_id_tokens_and_must_authenticate` | Met |
-| 6749 §5.1 | `Cache-Control: no-store` | MUST | `error.rs` `no_store` | `code_flow_issues_tokens_kubernetes_can_use` | Met |
-| 6749 §10.10 | Token guessing ≤ 2^-128 | MUST | 256-bit secrets; sealed codes | — | Met |
-| 6749 §10.12 | CSRF protection for the authorization endpoint | MUST | approval is a same-origin JSON sign-in bound to the browser's sealed flow cookie | `zeabur-identity-signin/tests/signin.rs: requests_from_other_sites_are_refused`, `sign_in_needs_a_pending_authorization_request` | Met |
-| 7636 §4.1, §4.4.1, §4.6 | Verifier format; challenge required; S256 compare | MUST | `pkce.rs`, `authorize.rs` | `zeabur-identity-oauth: pkce::tests::*`, `authorize::tests::*` | Met |
-| 9700 §2.1.1, §2.2.2 | PKCE required; public-client refresh tokens rotated | MUST | `authorize.rs`, `endpoints.rs` | `pkce_and_code_binding_are_enforced`, `refresh_rotates_and_reuse_revokes_the_family` | Met |
-| 9700 §4.11.2 | 303, never 307 | MUST NOT | `endpoints.rs` | `code_flow_issues_tokens_kubernetes_can_use` | Met |
-| 9068 §2.1, §2.2, §5 | `at+jwt`; required claims; distinct `aud` per resource | MUST | `tokens.rs`, `authorize.rs` | `code_flow_issues_tokens_kubernetes_can_use`, `authorization_endpoint_errors` | Met |
-| 8707 §2 | `invalid_target` for disallowed resources | — | `authorize.rs` | `zeabur-identity-oauth: authorize::tests::*` | Met |
-| 9126 §2.1, §2.2, §4 | Authenticated PAR; one-time, client-bound, expiring request URI | MUST | `endpoints.rs` | `pushed_authorization_requests` | Met |
-| 7009 §2.1, §2.2 | Revocation by the owning client with constant-time proof of a current or previous refresh secret; 200 for invalid tokens without deleting a grant | MUST | `endpoints.rs`, `refresh.rs` | `revocation`, `guessed_refresh_secrets_cannot_revoke_a_known_grant`, `current_and_previous_refresh_secrets_authorize_family_revocation`; `zeabur-identity-e2e: passkey_sign_in_then_kubectl_auth_whoami` (forged-secret smoke) | Met |
-| 6749 §6 | Validate refresh token and client binding; wrong-client family deletion requires constant-time proof of a current or previous secret, never a grant name alone | MUST; deletion policy | `endpoints.rs`, `refresh.rs` | `guessed_refresh_secrets_cannot_revoke_a_known_grant`, `current_and_previous_refresh_secrets_authorize_family_revocation`; `zeabur-identity-e2e: passkey_sign_in_then_kubectl_auth_whoami` (second public-client forged-secret smoke) | Met |
-| Kubernetes Object Names and IDs | A refresh token renews only for the `User` whose UID the grant recorded; a grant without a recorded UID belongs to no one, and none renews for a new `User` with the same name | Project requirement | `endpoints.rs` `refresh` | `a_session_left_from_a_removed_user_does_not_refresh_as_a_new_user_of_that_name` | Met |
-| Kubernetes Object Names and IDs | An authorization code is redeemed only for the `User` whose UID it sealed at sign-in, never for a new `User` with the same name; no grant is created | Project requirement | `code.rs` `CodeClaims`, `endpoints.rs` `exchange_code` | `a_code_for_a_removed_user_is_not_redeemed_for_a_new_user_of_that_name` | Met |
-| 9207 §2 | `iss` in authorization responses | MUST | `authorize.rs` | `code_flow_issues_tokens_kubernetes_can_use` | Met |
-| OIDC Core §2, §3.1.3.6 | ID token claims; `aud` is the client; `azp` | REQUIRED | `tokens.rs` | `code_flow_issues_tokens_kubernetes_can_use` | Met |
-| OIDC Core §3.1.2.1 | GET and POST; `prompt=none` without a session fails | MUST | `endpoints.rs`, `authorize.rs` | `authorization_endpoint_accepts_post`, `authorization_endpoint_errors` | Met |
-| OIDC Core §3.1.2.1 | `ui_locales` | OPTIONAL | error page | `zeabur-identity-signin/tests/pages.rs: untrusted_authorization_requests_show_an_error_page` | Partial: the sign-in page does not use it |
-| OIDC Core §5.3; RFC 6750 §2.1, §3 | UserInfo with bearer access tokens; challenges with error codes; current claims by scope | MUST | `userinfo.rs` | `userinfo_returns_current_claims_for_access_tokens_only` | Met |
-| OIDC Core §5.3.2 | Always return the grant's `sub`; resolve metadata by UID and verify the directly read user's UID and enabled state | MUST; binding policy | `userinfo.rs`, `zeabur-identity-k8s/src/directory.rs` | `userinfo_returns_current_claims_for_access_tokens_only`, `userinfo_rejects_deleted_and_recreated_users`, `userinfo_rejects_unknown_and_ambiguous_subjects` | Met (client-side ID token subject comparison remains the client's responsibility) |
-| OIDC Core §12.2 | Refreshed ID token keeps `auth_time`, no nonce | MUST | `endpoints.rs` | `refresh_rotates_and_reuse_revokes_the_family` | Met |
-| OIDC Core §15.1 | `max_age`, `prompt=login` | MUST | every sign-in is a fresh ceremony (no sessions) | `zeabur-identity-signin/tests/signin.rs: setup_link_then_passkey_sign_in_issues_tokens`; `auth_time_is_the_sign_in_and_survives_refresh` (a request with `max_age` shows the sign-in page) | Met while there are no sessions |
+数据全部存在 Kubernetes 的自定义资源中，没有另外的数据库。
 
-## 账号类型和会话
+- 所有“只能成功一次”的动作（授权码、设置链接、refresh 轮换）都靠 Kubernetes 的 `resourceVersion` 做比较并交换。集群测试用 64 个并发请求，确认只有一个成功。
+- 服务账号的 RBAC 采用最小权限：Secret 只能按名称读取，不能创建，也没有 RBAC 相关动词。
+- redirect URI 在 CRD 准入检查和 `zeabur-identityctl client create` 两处都会检查，只接受 `https://` 或带路径的 loopback `http://`。
+- 客户端密钥是 256 位的随机值，只保存哈希[^secret]。
+- 过期的对象由后台任务清除。
 
-除非另有说明，OAuth 测试都位于 `zeabur-identity-oauth/tests/oauth.rs`。
+## 没有做的
 
-| Requirement | Code | Test | Status |
-|---|---|---|---|
-| Admin accounts sign in as `admin-sign-in` allows: `any`, every method; `two-factor` (default), a passkey, a password with a TOTP or recovery code, or an upstream provider marked `mfa: Enforced`; `passkey`, a passkey; `device-bound-passkey`, a device-bound passkey (BE unset); regular accounts are unaffected | `zeabur-identity-core/src/account.rs` `allows` | `zeabur-identity-core: account::tests::each_level_allows_admins_what_it_names`, `account::tests::regular_accounts_use_every_method_at_every_level` | Met |
-| The token endpoint applies the same policy at code exchange and at every refresh, so a session that no longer qualifies ends at its next refresh | `zeabur-identity-oauth/src/endpoints.rs` | `admin_accounts_follow_the_admin_sign_in_level` | Met |
-| Unless `admin-sign-in` is `any`, admin accounts neither sign in with nor link a provider that is not marked `mfa: Enforced`, such as GitHub or Google. Under `two-factor`, they sign in with and link a marked OpenID provider; the callback reads the mark as it is then | `zeabur-identity-signin/src/upstream.rs`, `lib.rs`, `account.rs` | `zeabur-identity-signin/tests/upstream.rs: admin_accounts_neither_sign_in_with_nor_link_github_or_google`, `an_admin_signs_in_through_a_provider_marked_as_enforcing_a_second_factor`, `an_admin_is_refused_when_the_mark_is_removed_during_sign_in`, `an_admin_links_only_marked_providers_from_the_account_page` | Met |
-| RFC 8176 §2; OIDC Core §2 | A sign-in through a provider marked `mfa: Enforced` carries `amr = ["mfa"]`, on the operator's statement alone (the provider's own `amr` and `acr` are not read). The token endpoint maps an `amr` with neither `swk` nor `pwd` to an upstream sign-in, with a second factor only if it holds the exact, case-sensitive `mfa`; a missing value counts as none, and a level change ends the session at its next refresh | `zeabur-identity-oauth/src/endpoints.rs` `check_policy`; `zeabur-identity-signin/src/upstream/provider.rs` `Provider::amr` | `zeabur-identity-oauth: an_admin_upstream_sign_in_needs_the_mfa_value_and_the_two_factor_level`; `zeabur-identity-signin/tests/upstream.rs: a_regular_account_through_a_marked_provider_gets_mfa_and_through_others_nothing` | Met |
-| With `admin-sign-in: device-bound-passkey`, a synced passkey can neither sign in to nor be enrolled for an admin account | `zeabur-identity-signin/src/lib.rs`, `account.rs` | `zeabur-identity-signin/tests/signin.rs: with_device_bound_passkeys_an_admin_cannot_sign_in_with_a_synced_passkey`, `with_device_bound_passkeys_an_admin_enrols_only_a_device_bound_passkey` | Met |
-| TOTP codes follow RFC 6238; each step and each recovery code works once; wrong codes count as failed password sign-ins; at `two-factor`, an admin sets a password only with an authenticator that gave a valid code; the secret is sealed at rest and recovery codes are stored as HMACs | `zeabur-identity-core/src/totp.rs`, `zeabur-identity-signin/src/password.rs` | `zeabur-identity-core: totp::tests::codes_match_the_rfc_6238_test_vectors`, `a_code_works_within_one_step_and_only_once`, `recovery_codes_work_once_and_ignore_case_and_dashes`; `zeabur-identity-signin/tests/signin.rs: an_admin_password_needs_an_authenticator`, `an_admin_signs_in_with_a_password_and_a_code_that_works_once`, `a_recovery_code_works_once_in_place_of_a_code`, `wrong_codes_count_as_failed_sign_ins` | Met |
-| Only admin accounts' tokens carry the `admins` group, and their tokens are shorter (5 min vs 10 min); the CRD refuses `admins` in `spec.groups` | `zeabur-identity-oauth/src/tokens.rs`, `zeabur-identity-api/src/user.rs` | `only_admin_accounts_carry_the_admin_group_and_their_tokens_are_shorter` | Met |
-| Refresh idle: 1 h, or 15 min for admins with `teams: multiple` or `admin-sign-in: device-bound-passkey`; every family ends 12 h after sign-in; `refresh_expires_in` in the token response | `zeabur-identity-oauth/src/lib.rs` `Lifetimes::for_account`, `endpoints.rs` | `zeabur-identity-oauth: tests::lifetimes_per_account_type`, `refresh_idle_follows_the_account_type_and_the_settings`; `zeabur-identity-core: account::tests::short_admin_idle_follows_teams_or_device_bound_passkeys` | Met |
-| `auth_time` is the sign-in and survives refresh; the 12 h limit counts from it | `endpoints.rs` | `auth_time_is_the_sign_in_and_survives_refresh` | Met |
-| Settings come from the ConfigMap `zeabur-identity-settings`, read at every sign-in and refresh; missing means default, a value not understood means the stricter setting | `zeabur-identity-core/src/account.rs` `Settings::from_data`, `zeabur-identity-k8s/src/directory.rs` | `zeabur-identity-core: account::tests::settings_from_a_config_map` | Met |
-| First admin: `setup-link` creates an admin account; `zeabur:admins` is bound to `cluster-admin`, so the admin has full rights without a second sign-in; a refresh needs no new sign-in and follows the account type (a regular account loses the rights) | `zeabur-identity-k8s/src/rbac.rs`, `setup.rs` | *(e2e)* `passkey_sign_in_then_kubectl_auth_whoami` | Met |
+- **单点登录会话与登出**：没有 SSO 会话，所以没有 RP-Initiated Logout 和 Back-Channel Logout[^logout]。
+- **DPoP**：kube-apiserver 只接受 bearer token，所以没有意义[^dpop]。
+- **Rich Authorization Requests 与 Step-up 验证**：kube-apiserver 无法处理 `authorization_details`，也不会发出 step-up 的挑战。管理权限改由独立的管理员账号提供，并由 `admin-sign-in` 限制它的登录方式。
+- **`ui_locales`**：登录页按 `Accept-Language` 选择语言，不看这个参数。
+- **无障碍检查**：每组颜色的对比度都已计算并符合 WCAG 2.2 AA，但还没有做自动化的浏览器审计和屏幕阅读器测试[^wcag]。
+- **AAL3 的证明**：`device-bound-passkey` 依据通行密钥的自我报告判断是否为设备绑定，attestation 为 `none`。
 
-## 登录：通行密钥、注册链接和邀请
+## 如何验证
 
-除非另有说明，测试都位于 `zeabur-identity-signin/tests/signin.rs`。
+每一项保证都有对应的测试，维护者清单列出每个测试的名称。测试分为三类：
 
-| Source | Requirement | Level | Code (`zeabur-identity-signin/src/`) | Test | Status |
-|---|---|---|---|---|---|
-| Project requirement | Setup link works once and expires; no first-visitor admin | MUST | `lib.rs` (consume before storing), `zeabur-identity-k8s/src/setup.rs` | `setup_token_is_single_use`, `concurrent_enrolments_with_one_token_add_one_passkey`, `setup_token_expires_and_must_match`, `setup_link_is_single_use_and_replaceable` *(cluster, 64 concurrent)* | Met |
-| Project requirement | Invitations work once, only for the invited user; the service account cannot create them | MUST | `lib.rs`, `zeabur-identity-k8s/src/setup.rs`, `invitations.rs` | `invitation_enrols_the_invited_user_once`, `invitations_are_single_use_and_admin_only` *(cluster)* | Met |
-| WebAuthn §5.4.4, §5.4.6 | Discoverable credential, user verification required | — | `passkeys.rs` | `zeabur-identity-signin: passkeys::tests::registration_requires_resident_keys_and_uv` | Met |
-| WebAuthn §7.1, §7.2 | UV verified; user handle is the owner's; challenge single use | MUST | `passkeys.rs`, `lib.rs` | `passkeys_without_user_verification_are_refused` (registration, client side), `sign_in_without_user_verification_is_refused` (signed assertion with UV clear, refused with no code or tokens; UV-positive control completes), `unknown_passkeys_and_disabled_users_cannot_sign_in`, `assertions_cannot_be_replayed` | Met |
-| WebAuthn conditional mediation | Autofill (`autocomplete="username webauthn"`) | — | `passkeys.rs`, `ui/src/login.ts` | `zeabur-identity-signin/tests/pages.rs: login_offers_passkey_autofill_for_a_pending_request` | Met |
-| RFC 9457 §3 | Problem details | — | `problem.rs` | `requests_from_other_sites_are_refused` | Met |
-| Fetch Metadata | Cross-site state-changing requests refused | — | `request.rs` `check_request` | `requests_from_other_sites_are_refused`, `cross_site_requests_are_refused_before_the_body_is_read`, `zeabur-identity-signin: request::tests::same_origin_checks` | Met |
-| RFC 6265bis | `__Host-` cookies: Secure, `Path=/`, no Domain | MUST | `lib.rs`, `upstream.rs` | `code_flow_issues_tokens_kubernetes_can_use` | Met |
+- 单元和集成测试，在每次 CI 中运行。
+- 集群测试，使用 k3s `v1.37.2`，在每次 CI 中运行。
+- 端到端测试，使用 Zeabur Identity 的容器镜像。含 Keycloak 的测试需要另外的服务器，用 `scripts/keycloak-e2e.sh` 运行，不在 CI 中。
 
-## 账号页面
+供应链和构建方面的要求，例如禁止 `unsafe`、只接受 OSI 许可证、非 root 且没有 shell 的镜像、镜像签名和 SBOM，请见[安全](security.mdx)和[版本发布](releases.mdx)。设计决策见[架构](architecture.mdx)。
 
-用户可以在 `/account` 管理自己的通行密钥、密码和会话。除非另有说明，测试都位于 `zeabur-identity-signin/tests/signin.rs` 的 `tests::account::*`。
-
-| Source | Requirement | Level | Code | Test | Status |
-|---|---|---|---|---|---|
-| Project requirement | Every read and write is filtered to the session's user by name and UID; names in requests only select among those | MUST | `zeabur-identity-signin/src/account.rs`, `zeabur-identity-k8s/src/credentials.rs` `owned_passkeys`, `grants.rs` `list` | `the_page_lists_only_the_session_users_passkeys`, `changes_cannot_reach_another_users_objects`; `zeabur-identity-k8s/tests/account.rs: only_the_users_own_passkeys_are_listed_or_changed`, `grants_are_listed_by_uid_and_reauthenticated_by_secret` | Met |
-| Project requirement; NIST SP 800-63B-4 §2.2.3 | Adding or removing a passkey needs a user-verified assertion from the last 5 minutes, by one of the user's own passkeys, recorded on the session | MUST | `account.rs` `is_fresh`, `reauth` | `adding_and_removing_need_a_recent_verified_passkey`, `changes_cannot_reach_another_users_objects` | Met |
-| Project requirement | The last passkey is never removed, including by concurrent removals | MUST | `zeabur-identity-k8s/src/credentials.rs` `remove` (revision bump on the others, then delete with preconditions) | `the_last_passkey_cannot_be_removed`, `concurrent_removals_keep_one_passkey`; `zeabur-identity-k8s/tests/account.rs: interleaved_removals_keep_a_passkey`, `sequential_removals_stop_at_the_last_passkey` | Met |
-| Project requirement | Removing a passkey revokes every session and grant that signed in or re-authenticated with it | MUST | `account.rs` `revoke_by_credential` | `removing_a_passkey_revokes_what_it_signed_in` | Met |
-| OWASP CSRF Prevention | Changes need the session cookie, same-origin Fetch Metadata (or an `Origin` equal to the issuer), and a JSON body | MUST | `request.rs` `Account`, `SameOrigin`, `Body` | `changes_need_a_same_origin_json_request`, `cross_site_requests_are_refused_before_the_body_is_read` | Met |
-| RFC 6265bis | Session cookie `__Host-`, `HttpOnly`, `SameSite=Lax`; only the secret's hash is stored; one hour, not extended; ends when the user is disabled or recreated | MUST | `account.rs` | `sessions_end_after_an_hour_and_with_the_user`, `sessions_can_be_revoked` | Met |
-| WebAuthn §5.4.3 | `excludeCredentials` lists the user's passkeys; resident key and UV required | SHOULD | `account.rs` `add_options`, `passkeys.rs` | `adding_and_removing_need_a_recent_verified_passkey` | Met |
-| WebAuthn Signal API | `signalAllAcceptedCredentials` only with a complete, non-empty list; `signalUnknownCredential` for an unregistered credential | — | `lib.rs` `accepted`, `Refused`; `ui/src/webauthn.ts` `signal` | `removing_a_passkey_revokes_what_it_signed_in` | Met |
-| Passkey Endpoints well-known URL | `/.well-known/passkey-endpoints` returns `enroll` and `manage`, 200 JSON, no redirect | — | `account.rs` `passkey_endpoints` | `passkey_endpoints_are_published` | Met |
-| Project requirement | Add, rename, remove, and session revocation leave a `zeabur_identity::audit` log line and an `Event` on the `User` (actor, credential, AAGUID, client IP, user agent) | MUST | `account.rs` `record`; `audit.rs` `Record::log`; `zeabur-identity-k8s/src/credentials.rs` `record` | `adding_and_removing_need_a_recent_verified_passkey`, `changes_need_a_same_origin_json_request`; `zeabur-identity-k8s/tests/account.rs: only_the_users_own_passkeys_are_listed_or_changed` | Met |
-| Project requirement | A passkey's label is the one the user typed; without one, the account page names it by its creation date | — | `lib.rs` `new_passkey`; `zeabur-identity-ui/templates/account.html` | `a_passkey_without_a_label_shows_its_creation_date` | Met |
-| Project requirement | Changing or removing a password needs the current password, checked like a sign-in: wrong guesses count per browser and a held browser is refused; a new password follows the setup rules | MUST | `zeabur-identity-signin/src/password.rs` `change`, `remove`, `check_current`, `strong` | `password::a_wrong_current_password_is_refused_and_counted`, `password::a_weak_new_password_is_refused`, `password::a_changed_password_signs_in_and_the_old_one_does_not` | Met |
-| Project requirement | A changed password keeps the authenticator, its last used step, and only the unused recovery codes; a removal deletes the authenticator with the password, never removes the user's last credential (also under a concurrent unlink), and refuses a password that changed since it was read | MUST | `password.rs` `carried`; `zeabur-identity-k8s/src/credentials.rs` `remove_password` | `password::used_codes_stay_used_after_a_change`, `password::removing_the_password_removes_the_authenticator`, `password::the_only_way_in_cannot_be_removed`, `password::concurrent_changes_save_one_and_refuse_the_other`; `zeabur-identity-k8s/tests/account.rs: a_password_is_removed_only_while_the_user_keeps_another_way_in`, `a_password_removal_racing_an_unlink_keeps_a_credential` | Met |
-| Project requirement | A password change or removal ends every other session of the user, keeps the current one, and leaves a `zeabur_identity::audit` log line and an `Event` (`PasswordChanged`, `PasswordRemoved`) | MUST | `account.rs` `revoke_all_but`, `record`; `audit.rs` `Record::log` | `password::a_change_or_removal_signs_out_every_other_session` | Met |
-| Project requirement | A password sign-in to the account page uses the same checks as `/login/password`: the same answer for an unknown user, a wrong password and a held unknown browser, the code step for a user with an authenticator, and the same per-browser counts. Its session is not user-verified, so changes that need a fresh passkey still ask for one | MUST | `password.rs` `authenticate`, `account_session`; `account.rs` `start_session` | `password::a_user_with_only_a_password_signs_in_to_the_account_page_and_changes_it`, `password::an_admin_signs_in_to_the_account_page_with_a_password_and_a_code`, `password::account_sign_ins_count_against_the_sign_in_limits`, `password::an_unknown_user_gets_the_answer_of_a_wrong_password` | Met |
-
-## 上游登录（GitHub、OpenID 提供方）
-
-测试位于 `zeabur-identity-signin/tests/upstream.rs`。
-
-| Source | Requirement | Code (`zeabur-identity-signin/src/`) | Test | Status |
-|---|---|---|---|---|
-| RFC 6749 §10.12; RFC 9700 §2.1 | `state` bound to the browser, compared in constant time, used once | `upstream.rs` | `unlinked_disabled_and_replayed_sign_ins_fail` | Met |
-| RFC 9207 §2.4; RFC 6749 §3.1 | The callback compares `iss` with the issuer sealed in the pending request, by simple string comparison, before the code is sent. A different, empty or repeated `iss` is refused with `issuer_mismatch`. A pending request without the issuer, or for a provider whose issuer has changed, is refused. A response without `iss` is accepted (§2.4 MAY), so a provider that omits it gets no protection from this check | `upstream.rs` `issuer_matches`, `callback` | `a_callback_with_another_empty_or_repeated_iss_is_refused_before_the_code_is_sent`, `a_callback_with_the_matching_or_no_iss_completes`, `a_pending_request_without_its_issuer_or_with_another_is_refused` | Met |
-| RFC 7636 | PKCE toward the provider | `upstream/provider.rs` | `a_linked_github_account_signs_in_and_gets_a_code` (fake provider checks the verifier) | Met |
-| OIDC Discovery §4, §4.3, §3 | An OpenID provider's endpoints come from `<issuer>/.well-known/openid-configuration`. The document's `issuer` is identical to the configured issuer and its endpoints are https, or the sign-in fails with no fixed endpoint to fall back to | `upstream/provider.rs` `metadata` | `the_openid_provider_is_reached_at_the_endpoints_its_discovery_document_names`, `an_unusable_discovery_document_ends_the_sign_in_with_no_other_endpoint_tried` | Met |
-| OIDC Core §3.1.3.7 | ID token: signature from the JWK set that discovery names, `iss` exactly the issuer (Google also `accounts.google.com`, the second form its documentation lists), `aud` exactly the client ID (no other audience trusted), `azp` if present equal to it, `exp`, `iat`, `nonce` | `upstream/provider.rs` | `google_id_tokens_are_validated`, `another_openid_issuer_signs_in_through_the_same_checks` | Met |
-| Project requirement | Only linked accounts sign in; linking only through an enrollment link, once, or from a signed-in account page | `upstream.rs` | `an_invitation_links_an_account_once`, `unlinked_disabled_and_replayed_sign_ins_fail`, `a_signed_in_user_links_an_account_on_the_account_page` | Met |
-| RFC 6749 §10.12 | A link from the account page starts only with a fresh verified passkey and a same-origin JSON request; its sealed state names the session, user, and UID, and the callback links nothing unless that session is still signed in for that user | `upstream.rs` `account_start`, `Bound` | `linking_needs_a_fresh_confirmation_and_a_session` | Met |
-| Project requirement | An upstream account already linked to any user is not linked again; admin accounts link only providers that `admin-sign-in` allows, checked at the start and at the callback | `upstream.rs` `finish_account_link` | `an_account_linked_to_anyone_is_not_linked_again`, `admin_accounts_cannot_link_from_the_account_page` | Met |
-| Project requirement | Unlinking needs a fresh verified passkey, never removes the user's last credential (also under concurrent unlinks), revokes what the account signed in, and records `AccountUnlinked` | `account.rs` `unlink`; `zeabur-identity-k8s/src/credentials.rs` `unlink` | `unlinking_keeps_a_way_to_sign_in_and_ends_what_the_account_signed_in`; `zeabur-identity-k8s/tests/account.rs: the_last_credential_is_never_unlinked`, `interleaved_unlinks_keep_a_credential`, `only_linked_accounts_the_user_owns_are_listed_or_unlinked` | Met |
-| Kubernetes Object Names and IDs | A linked account signs in only as the `User` whose UID its owner reference names, never as a new `User` with the same name | `upstream.rs` `callback`; `zeabur-identity-k8s/src/credentials.rs` `linked_account`, `link` | `a_link_left_from_a_removed_user_does_not_sign_in_as_a_new_user_of_that_name`; `zeabur-identity-k8s/tests/account.rs: a_linked_account_signs_in_only_as_the_user_that_owns_it` | Met |
-| Project requirement | An `UpstreamProvider` has `clientId` and exactly one of `openid` and `github`; `openid` needs `issuer` and may set `mfa` to `Unknown` (default) or `Enforced`; the issuer is https with a host and no user information, query or fragment; the name is a provider ID. The server checks each object again and leaves out one it cannot use | `zeabur-identity-api/src/upstream_provider.rs`; `zeabur-identity/src/providers.rs` `build` | `upstream_providers_admit_only_fitting_fields_and_are_read_only` *(cluster)*; `zeabur-identity: providers::tests::usable_objects_are_published_and_unusable_ones_left_out` | Met |
-| Project requirement | Added, changed and deleted providers and a rotated client secret apply at the next request without a restart; an unchanged provider keeps its caches; a request in flight whose provider was deleted or moved to another issuer ends before the code is sent | `zeabur-identity-k8s/src/upstream.rs`; `zeabur-identity/src/providers.rs`; `upstream/provider.rs` `Providers`, `ClientSecret` | `provider_changes_and_secret_rotation_are_seen_without_a_restart` *(cluster)*; `an_added_provider_starts_at_the_next_request`, `a_provider_deleted_or_changed_during_a_sign_in_ends_it_before_the_code_is_sent`, `the_client_secret_is_read_at_each_exchange`; `zeabur-identity-signin/tests/pages.rs: provider_buttons_follow_the_registry`; `zeabur-identity: providers::tests::an_unchanged_provider_is_kept_and_a_changed_or_deleted_one_is_not` | Met |
-| Project requirement | Deleting a provider deletes no linked account; the account page still lists and unlinks it, and a provider with the same issuer signs it in | `upstream.rs`, `account.rs` `shown_provider` | `a_deleted_provider_keeps_its_linked_accounts` | Met |
-| Project requirement | A `Credential` is a passkey, a linked account or a password by the field it has, `passkey`, `external` or `password`. Credentials stored by v0.1.2 and v0.2.0, with `type` and `provider`, sign in and unlink under this version's CRD without a migration | `zeabur-identity-api/src/credential.rs` `CredentialKind` | `credentials_stored_by_released_versions_sign_in_and_unlink` *(cluster)*; `zeabur-identity-api: credential::tests::*` | Met |
-| Project requirement | `UpstreamProvider` 要有 `clientId`，并在 `openid` 和 `github` 中恰好设置一个；`openid` 必须有 `issuer`。Issuer 必须使用 HTTPS 并包含主机名，不能含有用户信息、查询字符串或片段；对象名称就是提供方 ID。服务器会再次检查每个对象，跳过无法使用的对象 | `zeabur-identity-api/src/upstream_provider.rs`; `zeabur-identity/src/providers.rs` `build` | `upstream_providers_admit_only_fitting_fields_and_are_read_only` *(cluster)*; `zeabur-identity: providers::tests::usable_objects_are_published_and_unusable_ones_left_out` | Met |
-| Project requirement | 添加、修改或删除提供方，以及更换客户端密钥后，下次请求就会生效，无需重启；未更改的提供方会保留缓存；如果正在处理的请求所用的提供方遭到删除，或改用其他 Issuer，请求会在发送授权码前结束 | `zeabur-identity-k8s/src/upstream.rs`; `zeabur-identity/src/providers.rs`; `upstream/provider.rs` `Providers`, `ClientSecret` | `provider_changes_and_secret_rotation_are_seen_without_a_restart` *(cluster)*; `an_added_provider_starts_at_the_next_request`, `a_provider_deleted_or_changed_during_a_sign_in_ends_it_before_the_code_is_sent`, `the_client_secret_is_read_at_each_exchange`; `zeabur-identity-signin/tests/pages.rs: provider_buttons_follow_the_registry`; `zeabur-identity: providers::tests::an_unchanged_provider_is_kept_and_a_changed_or_deleted_one_is_not` | Met |
-| Project requirement | 删除提供方不会删除已关联的账号；账号页面仍会列出这些账号，也能解除关联；使用相同 Issuer 的提供方仍可让这些账号登录 | `upstream.rs`, `account.rs` `shown_provider` | `a_deleted_provider_keeps_its_linked_accounts` | Met |
-| Project requirement | `Credential` 有 `passkey` 就是通行密钥，有 `external` 就是关联的账号，有 `password` 就是密码。v0.1.2 和 v0.2.0 保存的、带有 `type` 和 `provider` 的 `Credential`，应用这个版本的 CRD 后无需迁移，仍可登录和解除关联 | `zeabur-identity-api/src/credential.rs` `CredentialKind` | `credentials_stored_by_released_versions_sign_in_and_unlink` *(cluster)*; `zeabur-identity-api: credential::tests::*` | Met |
-| OIDC Core §3.1; OIDC Discovery §4 | 与真实的 OpenID 提供方 Keycloak 互通。Keycloak 使用私有 CA，Pod 通过 `SSL_CERT_FILE` 与 `SSL_CERT_DIR` 信任它：未关联的账号无法登录；在账号页面关联的两个账号都以所属用户登录；取消关联其中一个后，该账号再次无法登录，另一个仍可登录 | `scripts/keycloak-e2e.sh` | `keycloak_links_signs_in_and_unlinks` *(e2e, Keycloak)* | Met |
-| Kubernetes Object Names and IDs | An invitation or setup link enrolls a passkey or links an account only for the `User` whose UID its owner reference names | `lib.rs` `valid_setup_token`; `zeabur-identity-k8s/src/setup.rs` `load_setup`, `load_invitation` | `signin.rs: a_link_left_from_a_removed_user_does_not_enrol_a_new_user_of_that_name`; `zeabur-identity-k8s/tests/account.rs: an_invitation_enrols_only_the_user_that_owns_it` | Met |
-
-## 登录页面
-
-测试位于 `zeabur-identity-signin/tests/pages.rs`。每个页面测试都会检查响应头，并确认页面标记不需要任何 CSP 禁止的功能。
-
-| Source | Requirement | Level | Code | Test | Status |
-|---|---|---|---|---|---|
-| RFC 9700 §4.16 | Prevent clickjacking (CSP `frame-ancestors`, `X-Frame-Options`) | MUST | `zeabur-identity-ui/src/lib.rs` `harden` | all page tests | Met |
-| CSP Level 3, Trusted Types | No inline script, style, or handlers; no string-to-HTML sinks | — | `zeabur-identity-ui`, `ui/src/*.ts` | all page tests | Met |
-| RFC 9110 §12.5.4, §12.4.2 | `Accept-Language` with quality values | — | `zeabur-identity-ui/src/i18n.rs` | `zeabur-identity-ui: i18n::tests::*`, `language_follows_parameter_then_header` | Met |
-| Project requirement | Assets embedded, no CDN; built from source for every shipped binary; size measured | MUST | `zeabur-identity-ui/src/assets.rs`, `zeabur-identity-ui/build.rs`, `scripts/build-ui.sh`, `scripts/ui-budget.sh` | `assets_are_embedded_versioned_and_immutable`; CI `ui` | Met |
-| Project requirement | No tokens in browser storage; cookies `HttpOnly`, `Secure`, `SameSite` | MUST | `ui/src/*.ts`, `zeabur-identity-signin` | `bun run typecheck` in `ui/`, review | Met |
-| Project requirement | Fallback without passkey support or script; provider buttons only when configured | MUST | templates | `login_offers_passkey_autofill_for_a_pending_request`, `provider_buttons_appear_only_when_configured` | Met |
-| Project requirement | Dark mode; en, zh-TW, zh-CN | MUST | `ui/styles/app.css`, `zeabur-identity-ui/src/i18n.rs` | `language_follows_parameter_then_header` | Met |
-| Escaping | User-influenced text cannot inject markup | — | askama auto-escaping | `user_controlled_text_is_escaped` | Met |
-| WCAG 2.2 1.4.3, 1.4.11 | Text ≥ 4.5:1; boundaries and focus ≥ 3:1 | AA | the design system's tokens, `ui/styles/app.css` | `contrast.py` (CI `ui`), computed table in the `zeabur-identity-ui` docs | Met for every pair used |
-| WCAG 2.2 2.4.7, 2.5.8, 3.1.1, 3.1.2, 3.3.1, 4.1.3 | Focus, target size, language, errors, status messages | A / AA | templates | `language_follows_parameter_then_header`; review | Met by inspection |
-| WCAG 2.2 | Automated audit and assistive-technology pass | — | — | — | Not done |
+[^discovery]: OpenID Connect Discovery 1.0 §3、§4、§4.3、§7.1；RFC 8414 §3、§3.3。
+[^jose]: RFC 7515 §4.1；RFC 7517；RFC 7518 §3.3、§3.4、§3.6；RFC 7638；RFC 8725 §3.1、§3.10、§3.11。
+[^rotation]: OpenID Connect Core §10.1.1；kube-apiserver 使用的 go-oidc 的密钥缓存行为。
+[^jwt-at]: RFC 9068 §2.1、§2.2、§5；RFC 8707 §2。
+[^kep]: KEP-3331 Structured Authentication Configuration（`apiserver.config.k8s.io/v1`），Kubernetes 1.34 起 GA。
+[^pkce]: RFC 7636 §4.1、§4.4.1、§4.6；RFC 9700 §2.1.1；OAuth 2.1 草案同样如此要求。
+[^redirect]: RFC 6749 §3.1.2.3、§4.1.2.1；RFC 9700 §2.1；RFC 8252 §7.3。
+[^code]: RFC 6749 §4.1.2、§4.1.3、§5.1、§10.10、§10.12；RFC 9700 §4.11.2、§4.16。
+[^refresh]: RFC 6749 §6；RFC 9700 §2.2.2、§4.14.2。
+[^iss]: RFC 9207 §2。
+[^par]: RFC 9126 §2、§4；RFC 7009 §2。
+[^core]: OpenID Connect Core 1.0 §2、§3.1.2.1、§3.1.3.6、§5.3、§12.2、§15.1。
+[^webauthn]: W3C WebAuthn Level 3 §5.4.3、§5.4.4、§5.4.6、§7.1、§7.2；另外按 Signal API 通知浏览器当前接受的通行密钥。
+[^totp]: RFC 6238（SHA-1、6 位数字、30 秒一步、容许一步的误差）；RFC 8176 §2 的 `pwd`、`otp`、`mfa`。
+[^csp]: RFC 9700 §4.16；CSP Level 3；Trusted Types；cookie 使用 `__Host-` 前缀（RFC 6265bis）。
+[^nist]: NIST SP 800-63B-4 §2.2.3；NIST 的 AAL3 要求硬件验证器，本项目只做到自我报告的“设备绑定”。
+[^reauth]: NIST SP 800-63B-4 §2.2.3；OWASP CSRF Prevention。
+[^passkey-endpoints]: W3C 草案“A Well-Known URL for Relying Party Passkey Endpoints”。
+[^upstream]: RFC 6749 §10.12；RFC 9700 §2.1；RFC 9207 §2.4；RFC 7636；OpenID Connect Core §3.1.3.7；Discovery §3、§4。
+[^secret]: RFC 6749 §10.10。
+[^logout]: OpenID Connect RP-Initiated Logout 1.0；Back-Channel Logout 1.0。
+[^dpop]: RFC 9449；RFC 9396；RFC 9470。
+[^wcag]: WCAG 2.2 的 1.4.3、1.4.11、2.4.7、2.5.8、3.1.1、3.1.2、3.3.1、4.1.3。
