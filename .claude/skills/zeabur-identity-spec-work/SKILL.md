@@ -12,6 +12,7 @@ also:
    one atomic step (create-once, compare-and-swap, delete with `uid`/`resourceVersion`
    preconditions) before anything is issued.
 2. **Cluster tests** for admission or RBAC: `zeabur-identity-cluster-tests`.
-3. **Record conformance.** Add or update the row in `docs/reference/conformance.mdx`: section,
+3. **Record conformance.** Add or update the row in `docs/internal/conformance.md`: section,
    requirement, level, code path, test name, status. Partial or not implemented is fine when
-   stated plainly.
+   stated plainly. Change the narrative page `docs/reference/conformance.mdx` only when a
+   guarantee a reader relies on, or a "not done" item, changes; put RFC numbers in footnotes.

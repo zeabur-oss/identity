@@ -14,7 +14,8 @@ The interface: `zeabur-identity-ui`.
   `zeabur-identityctl` (admin CLI).
 
 ## Conformance
-- Implementing a MUST/SHOULD updates `docs/reference/conformance.mdx` (`zeabur-identity-spec-work`).
+- Implementing a MUST/SHOULD updates the ledger `docs/internal/conformance.md` (`zeabur-identity-spec-work`); the public
+  `docs/reference/conformance.mdx` is narrative and changes only when a guarantee changes.
 
 ## Generated files
 - Regenerate committed outputs in the same commit: `cargo run -q -p zeabur-identityctl -- crds | jq -r '.items[] | "---", tojson' >
