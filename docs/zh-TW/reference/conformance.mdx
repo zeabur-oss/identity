@@ -5,7 +5,9 @@ description: Zeabur Identity 遵循哪些標準、自己多加了哪些保證，
 
 Zeabur Identity 讓 Kubernetes 的使用者用通行密鑰、密碼或上游帳號登入，再發 token 給 kube-apiserver 驗證。它依循 OAuth 2.0 與 OpenID Connect，也依循 WebAuthn 與 Kubernetes 的 Structured Authentication Configuration。這一頁說明它做到什麼、沒做什麼，以及為什麼。
 
-Zeabur Identity 還沒有取得 OpenID 認證，也還沒有跑過 OpenID Foundation 的測試套件。目前每一項要求都有對應的自動化測試，整體流程則用真實的 k3s 叢集與 Keycloak 驗證。
+Zeabur Identity 還沒有取得 OpenID 認證。OpenID Foundation 的 `oidcc-basic-certification-test-plan` 在 v0.3.4 跑過一次，但結果不能當認證：這個計畫不送 `code_challenge`，而 Zeabur Identity 一律要求 PKCE，所以測試用的是把 PKCE 改成選用的版本。其餘失敗的案例，來自沒有單一登入（SSO）工作階段，包括已登入時的 `prompt=none`、`id_token_hint` 與 `max_age`。
+
+目前每一項要求都有對應的自動化測試，整體流程則用真實的 k3s 叢集與 Keycloak 驗證。
 
 規格編號放在頁尾的註腳。逐條對照程式碼與測試的清單由維護者在儲存庫的 `docs/internal/conformance.md` 維護。
 

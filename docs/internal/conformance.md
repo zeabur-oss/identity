@@ -54,7 +54,7 @@ Tests marked *(cluster)* use k3s `v1.37.2` and run with `--run-ignored only`. Te
 | RFC 9396 Rich Authorization Requests | RFC | N/A: kube-apiserver cannot evaluate `authorization_details`; not advertised |
 | RFC 9470 Step-up Authentication Challenge | RFC | N/A: kube-apiserver never sends the challenge. Admin rights come from a separate, passkey-only admin account instead |
 | OAuth 2.1 (draft-ietf-oauth-v2-1) | Draft | Followed where it tightens OAuth 2.0 (PKCE always, S256 only) |
-| OpenID Foundation conformance suite, `oidcc-basic-certification-test-plan` | — | Not run yet |
+| OpenID Foundation conformance suite, `oidcc-basic-certification-test-plan` | — | Ran once on v0.3.4 (discovery, static clients, sign-in driven by Playwright). Not certified. The plan sends no `code_challenge` and Zeabur Identity requires PKCE, so the run used a build with PKCE optional. The remaining failures come from the missing single sign-on session: `prompt=none` while signed in, `id_token_hint`, and `max_age` |
 
 ## Repository requirements
 
