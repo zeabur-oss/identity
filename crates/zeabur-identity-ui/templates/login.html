@@ -32,7 +32,7 @@
     <div id="status" role="status" aria-live="polite" class="empty:sr-only text-[0.8125rem] leading-5 text-secondary"></div>
     <div id="error" role="alert" class="empty:sr-only text-[0.8125rem] leading-5 text-pretty text-fail-strong"></div>
     <noscript>{% call ui::alert(m.noscript_title, "default", "Key", live = "") %}{{ m.noscript_body }}{% endcall %}</noscript>
-    <form id="sign-in" class="flex flex-col gap-5" novalidate data-post="/login/password"
+    <form id="sign-in" method="post" class="flex flex-col gap-5" novalidate data-post="/login/password"
           data-msg-failed="{{ m.passkey_failed }}" data-msg-cancelled="{{ m.passkey_cancelled }}"
           data-msg-working="{{ m.working }}" data-msg-error="{{ m.generic_error }}"
           data-msg-password-missing="{{ m.password_missing }}"
