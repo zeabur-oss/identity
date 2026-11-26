@@ -52,7 +52,7 @@ Accounts are either admin or regular. The `admin-sign-in` setting limits how adm
 - `any`: admins sign in like regular accounts.
 - `passkey`: a passkey only.
 - `device-bound-passkey`: a device-bound passkey only. A synced passkey can neither sign in nor be enrolled.
-- Admins cannot sign in with or link a provider that is not marked `mfa: Enforced`, such as GitHub or Google. The mark is the operator's statement. Zeabur Identity does not read the `amr` that the provider reports.
+- Unless `admin-sign-in` is `any`, admins cannot sign in with or link a provider that is not marked `mfa: Enforced`, such as GitHub or Google. The mark is the operator's statement. Zeabur Identity does not read the `amr` that the provider reports.
 - The server checks this limit at sign-in, at code exchange and at every refresh. A session that no longer qualifies ends at its next refresh.
 - Only admin tokens carry the `admins` group, and they are shorter (5 minutes, against 10 for a regular account). The CRD does not allow `admins` in `spec.groups`.
 - A refresh session ends after 1 hour idle, or 15 minutes for an admin with several teams or with `device-bound-passkey`. Every session ends 12 hours after sign-in. These limits follow NIST SP 800-63B-4 AAL2[^nist].

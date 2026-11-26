@@ -52,7 +52,7 @@ kube-apiserver 從 Zeabur Identity 的探索文件找到簽章金鑰，再用金
 - `any`：管理員與一般帳號相同，不另外限制。
 - `passkey`：只能用通行密鑰。
 - `device-bound-passkey`：只能用裝置綁定的通行密鑰，同步的通行密鑰無法登入，也無法註冊。
-- 未標示 `mfa: Enforced` 的提供者，例如 GitHub 與 Google，管理員無法登入也無法連結。標示是營運者的聲明，Zeabur Identity 不讀取提供者回報的 `amr`。
+- 除了 `any`，未標示 `mfa: Enforced` 的提供者，例如 GitHub 與 Google，管理員無法登入也無法連結。標示是營運者的聲明，Zeabur Identity 不讀取提供者回報的 `amr`。
 - 這項限制在登入、換授權碼與每次 refresh 都會重新檢查，所以資格不符的工作階段會在下一次 refresh 時結束。
 - 只有管理員的 token 帶有 `admins` 群組，而且壽命較短（5 分鐘，一般帳號為 10 分鐘）。CRD 不允許把 `admins` 寫進 `spec.groups`。
 - refresh 閒置 1 小時就結束，多團隊或 `device-bound-passkey` 的管理員則是 15 分鐘，無論如何登入 12 小時後都會結束。這些做法對照 NIST SP 800-63B-4 的 AAL2[^nist]。
