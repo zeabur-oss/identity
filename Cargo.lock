@@ -4483,7 +4483,7 @@ dependencies = [
 
 [[package]]
 name = "zeabur-identity"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "axum",
  "bytes",
@@ -4513,7 +4513,7 @@ dependencies = [
 
 [[package]]
 name = "zeabur-identity-api"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "aws-lc-rs",
  "k8s-openapi",
@@ -4527,7 +4527,7 @@ dependencies = [
 
 [[package]]
 name = "zeabur-identity-core"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "aws-lc-rs",
  "base64 0.23.1",
@@ -4543,7 +4543,7 @@ dependencies = [
 
 [[package]]
 name = "zeabur-identity-e2e"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "axum",
  "form_urlencoded",
@@ -4569,7 +4569,7 @@ dependencies = [
 
 [[package]]
 name = "zeabur-identity-k8s"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "aws-lc-rs",
  "axum",
@@ -4601,7 +4601,7 @@ dependencies = [
 
 [[package]]
 name = "zeabur-identity-keys"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "aws-lc-rs",
  "base64 0.23.1",
@@ -4619,7 +4619,7 @@ dependencies = [
 
 [[package]]
 name = "zeabur-identity-oauth"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "axum",
  "base64 0.23.1",
@@ -4643,7 +4643,7 @@ dependencies = [
 
 [[package]]
 name = "zeabur-identity-signin"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "async-trait",
  "axum",
@@ -4681,7 +4681,7 @@ dependencies = [
 
 [[package]]
 name = "zeabur-identity-store"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "zeabur-identity-api",
  "zeabur-identity-core",
@@ -4690,7 +4690,7 @@ dependencies = [
 
 [[package]]
 name = "zeabur-identity-test-support"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "async-trait",
  "passkey",
@@ -4704,7 +4704,7 @@ dependencies = [
 
 [[package]]
 name = "zeabur-identity-tls"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "axum",
  "rustls",
@@ -4718,7 +4718,7 @@ dependencies = [
 
 [[package]]
 name = "zeabur-identity-ui"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "askama",
  "axum",
@@ -4736,7 +4736,7 @@ dependencies = [
 
 [[package]]
 name = "zeabur-identityctl"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "clap",
  "jiff",
