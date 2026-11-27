@@ -42,11 +42,21 @@ tests; `zeabur-identity-test-support` provides the software authenticator for th
   `__Host-zeabur-identity-webauthn` cookie (`SameSite=Strict`, five minutes), bound to its purpose; the
   ceremony ID is recorded once it verifies, so a captured response cannot be replayed.
 - **Cross-site requests.** Every JSON endpoint requires `Sec-Fetch-Site: same-origin`
-  ([Fetch Metadata][fetchmeta]) or, failing that header, an `Origin` equal to the issuer, plus an
-  `application/json` body, as the [OWASP CSRF guidance][owasp] recommends. Cookies use the
+  ([Fetch Metadata][fetchmeta]) or, failing that header, an `Origin` equal to the issuer, plus the
+  `application/json` content type, also on a `DELETE` without a body, as the
+  [OWASP CSRF guidance][owasp] recommends. The check does not depend on the method, so it holds
+  for `PATCH`, `PUT` and `DELETE` as for `POST`. Cookies use the
   `__Host-` prefix ([RFC 6265bis][rfc6265bis]) because cookies lack integrity against
   related-domain attackers ([Zheng et al.][zheng], [Squarcina et al.][squarcina]).
-- **Account page.** `/account` signs in with a passkey into a one-hour session stored as a
+- **Account page.** The account routes treat each credential and session as a resource:
+  `PATCH /account/passkeys/{name}` renames a passkey, `DELETE` on
+  `/account/passkeys/{name}`, `/account/links/{name}` and `/account/sessions/{name}` removes one,
+  `DELETE /account/sessions` ends every other session, `DELETE /account/session` signs out,
+  `POST`, `PUT` and `DELETE /account/password` add, change and remove the password, and
+  `PUT /account/authenticator` replaces the authenticator. The `…/options` routes,
+  `/account/reauth` and `/account/recovery-codes` stay `POST`. `src/contract.rs` writes the
+  request and reply types and this route table to `ui/src/contract.ts`, and the pages call the
+  routes only through it. `/account` signs in with a passkey into a one-hour session stored as a
   `Grant` named `s-…` (client `zeabur_identity`, which no OAuth client can have, and a name a
   refresh token cannot use). The `__Host-zeabur-identity-session` cookie is `HttpOnly` and
   `SameSite=Lax`, and changes pass the same-origin check above. Every read and

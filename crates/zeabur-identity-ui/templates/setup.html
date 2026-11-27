@@ -37,7 +37,7 @@
         {{ ui::command(invite_command) }}
       </div>
     </div>
-    <form id="setup" method="post" class="flex flex-col gap-5" novalidate data-options="/setup/options" data-post="/setup"
+    <form id="setup" method="post" class="flex flex-col gap-5" novalidate
           data-msg-failed="{{ m.passkey_failed }}" data-msg-cancelled="{{ m.passkey_cancelled }}"
           data-msg-working="{{ m.working }}" data-msg-error="{{ m.generic_error }}"
           data-msg-missing="{{ m.setup_missing_token }}">
@@ -46,11 +46,11 @@
     <div id="alternatives" class="flex flex-col gap-5">
       {{ ui::field_separator(m.upstream_or) }}
       <div class="flex flex-col gap-3">
-        <button type="button" id="use-password" data-post="/setup/password/options" class="{{ ds::button("secondary", "lg") }} w-full">{{ icons::icon("Key") }}{{ m.setup_password_submit }}</button>
+        <button type="button" id="use-password" class="{{ ds::button("secondary", "lg") }} w-full">{{ icons::icon("Key") }}{{ m.setup_password_submit }}</button>
         {{ upstream::buttons(providers, m) }}
       </div>
     </div>
-    <form id="setup-password" method="post" hidden class="flex flex-col gap-5" novalidate data-post="/setup/password"
+    <form id="setup-password" method="post" hidden class="flex flex-col gap-5" novalidate
           data-msg-too-short="{{ m.too_short() }}">
       {% call ui::field("new-password", m.setup_password, m.password_hint()) %}
       <input id="new-password" name="password" type="password" minlength="{{ zeabur_identity_core::password::MIN_CHARS }}" maxlength="{{ zeabur_identity_core::password::MAX_BYTES }}" class="{{ ds::input() }}"

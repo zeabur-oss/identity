@@ -108,6 +108,24 @@ impl<B: Backend> std::fmt::Debug for SignIn<B> {
 
 pub(crate) type Shared<B> = Arc<SignIn<B>>;
 
+/// A webauthn-rs value in its JSON form, which has no schema: the options the browser's
+/// credential calls take, and the credentials they return. The pages convert them with the
+/// helpers in `ui/src/webauthn.ts`.
+pub(crate) struct WebAuthnJson;
+
+impl JsonSchema for WebAuthnJson {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "WebAuthnJson".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "description": "A webauthn-rs value in its JSON form; `ui/src/webauthn.ts` converts it.",
+            "type": "object",
+        })
+    }
+}
+
 impl<B: Backend> request::State for Shared<B> {
     type Backend = B;
 
@@ -468,21 +486,26 @@ pub(crate) async fn accepted<B: Backend>(service: &SignIn<B>, user: &User) -> Op
     })
 }
 
-#[derive(Deserialize)]
-struct SetupOptionsRequest {
+#[derive(Deserialize, JsonSchema)]
+#[schemars(rename = "PasskeySetupOptionsRequest")]
+pub(crate) struct SetupOptionsRequest {
     token: String,
 }
 
-#[derive(Deserialize)]
-struct SetupRequest {
+#[derive(Deserialize, JsonSchema)]
+#[schemars(rename = "PasskeySetupRequest")]
+pub(crate) struct SetupRequest {
     token: String,
+    /// The new credential, in the webauthn-rs `RegisterPublicKeyCredential` form.
+    #[schemars(with = "WebAuthnJson")]
     credential: RegisterPublicKeyCredential,
     #[serde(default)]
     label: Option<String>,
 }
 
-#[derive(Serialize)]
-struct SetupResponse<'a> {
+#[derive(Serialize, JsonSchema)]
+#[schemars(rename = "PasskeySetUp")]
+pub(crate) struct SetupResponse<'a> {
     username: &'a str,
 }
 
@@ -695,8 +718,11 @@ async fn setup_finish<B: Backend>(
     result.unwrap_or_else(IntoResponse::into_response)
 }
 
-#[derive(Deserialize)]
-struct SignInRequest {
+#[derive(Deserialize, JsonSchema)]
+#[schemars(rename = "PasskeySignInRequest")]
+pub(crate) struct SignInRequest {
+    /// The assertion, in the webauthn-rs `PublicKeyCredential` form.
+    #[schemars(with = "WebAuthnJson")]
     credential: PublicKeyCredential,
 }
 

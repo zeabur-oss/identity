@@ -28,12 +28,6 @@ pub const UPSTREAM_START_ROUTE: &str = "/upstream/{provider}/start";
 /// Route of an upstream provider's callback. `{provider}` is the provider ID.
 pub const UPSTREAM_CALLBACK_ROUTE: &str = "/upstream/{provider}/callback";
 
-/// The path that starts sign-in with the upstream provider `provider`.
-#[must_use]
-pub fn upstream_start_path(provider: &str) -> String {
-    UPSTREAM_START_ROUTE.replace(PROVIDER_PARAMETER, provider)
-}
-
 /// The path the upstream provider `provider` redirects back to.
 #[must_use]
 pub fn upstream_callback_path(provider: &str) -> String {

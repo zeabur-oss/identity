@@ -37,7 +37,6 @@
 {%- block head %}<script type="module" src="{{ crate::assets::url("account.js") }}"></script>{% endblock -%}
 {%- block content %}
 <div id="account" class="flex flex-col gap-5" data-lang="{{ lang.tag() }}"
-     data-reauth-options="/account/reauth/options" data-reauth="/account/reauth"
      data-msg-failed="{{ m.passkey_failed }}" data-msg-cancelled="{{ m.passkey_cancelled }}"
      data-msg-working="{{ m.working }}" data-msg-error="{{ m.generic_error }}" data-msg-confirm="{{ m.confirm_working }}"
      data-msg-linked="{{ m.upstream_linked_title }}" data-msg-password-changed="{{ m.password_changed }}"
@@ -57,13 +56,13 @@
       {% call ui::alert(m.passkey_unsupported_title, "default", "Key", live = "") %}{{ m.passkey_unsupported_body }}{% endcall %}
     </div>
     <noscript>{% call ui::alert(m.noscript_title, "default", "Key", live = "") %}{{ m.noscript_body }}{% endcall %}</noscript>
-    <form id="sign-in" method="post" data-post="/account/session/password" class="flex flex-col gap-5" novalidate>
+    <form id="sign-in" method="post" class="flex flex-col gap-5" novalidate>
       {{ password::steps(m, "") }}
       <button type="submit" class="{{ ds::button("default", "lg") }} w-full">{{ m.login_submit }}</button>
     </form>
     <div id="passkey-sign-in" class="flex flex-col gap-5">
       {{ ui::field_separator(m.upstream_or) }}
-      <button type="button" id="account-sign-in" data-options="/account/session/options" data-post="/account/session" class="{{ ds::button("secondary", "lg") }} w-full">{{ icons::icon("Fingerprint") }}{{ m.login_passkey }}</button>
+      <button type="button" id="account-sign-in" class="{{ ds::button("secondary", "lg") }} w-full">{{ icons::icon("Fingerprint") }}{{ m.login_passkey }}</button>
     </div>
     {% call ui::disclosure(m.lost_passkey_title, center = true) %}
     <p>{{ m.lost_passkey_body }}</p>
@@ -81,7 +80,7 @@
         <h1 class="text-base leading-6 font-semibold text-main">{{ m.account_title }}</h1>
         <p class="text-[0.8125rem] leading-5 break-words text-secondary">{{ (m.signed_in_as)(view.username) }}</p>
       </div>
-      <button type="button" id="sign-out" data-post="/account/sign-out" class="{{ ds::button("secondary", "sm") }}">{{ m.sign_out }}</button>
+      <button type="button" id="sign-out" class="{{ ds::button("secondary", "sm") }}">{{ m.sign_out }}</button>
     </div>
     {#- Present and empty from first paint, so screen readers announce what the script writes. -#}
     <div id="status" role="status" aria-live="polite" class="empty:sr-only text-[0.8125rem] leading-5 text-secondary"></div>
@@ -112,7 +111,7 @@
             </p>
           </div>
           {%- if view.passkey_confirms %}
-          <button type="button" id="add" data-opens="add" data-options="/account/passkeys/options" data-post="/account/passkeys" class="{{ ds::button("secondary", "sm") }}">{{ m.add }}</button>
+          <button type="button" id="add" data-opens="add" class="{{ ds::button("secondary", "sm") }}">{{ m.add }}</button>
           {%- endif %}
         </div>
         <p data-status role="status" aria-live="polite" class="empty:sr-only text-[0.8125rem] leading-5 text-secondary"></p>
@@ -151,9 +150,9 @@
                 </p>
               </div>
               <div class="flex gap-2">
-                <button type="button" data-opens="rename" data-post="/account/passkeys/rename" class="{{ ds::button("secondary", "sm") }}">{{ m.rename }}</button>
+                <button type="button" data-opens="rename" class="{{ ds::button("secondary", "sm") }}">{{ m.rename }}</button>
                 {%- if view.passkeys.len() > 1 %}
-                <button type="button" data-opens="confirm" data-post="/account/passkeys/remove" class="{{ ds::button("secondary-destructive", "sm") }}">{{ m.remove }}</button>
+                <button type="button" data-opens="confirm" class="{{ ds::button("secondary-destructive", "sm") }}">{{ m.remove }}</button>
                 {%- endif %}
               </div>
             </div>
@@ -183,14 +182,14 @@
             <p class="text-[0.8125rem] leading-5 text-secondary">{% if password.authenticator %}{{ m.password_on_authenticator }}{% else %}{{ m.password_on }}{% endif %}</p>
           </div>
           <div class="flex gap-2">
-            <button type="button" data-opens="change" data-post="/account/password" class="{{ ds::button("secondary", "sm") }}">{{ m.change }}</button>
-            <button type="button" data-opens="confirm" data-post="/account/password/remove" class="{{ ds::button("secondary-destructive", "sm") }}">{{ m.remove }}</button>
+            <button type="button" data-opens="change" class="{{ ds::button("secondary", "sm") }}">{{ m.change }}</button>
+            <button type="button" data-opens="confirm" class="{{ ds::button("secondary-destructive", "sm") }}">{{ m.remove }}</button>
           </div>
         </div>
         {%- if password.authenticator %}
         <div class="flex flex-wrap gap-2 pl-11">
-          <button type="button" data-opens="authenticator" data-options="/account/authenticator/options" data-post="/account/authenticator" class="{{ ds::button("secondary", "sm") }}">{{ m.authenticator_replace }}</button>
-          <button type="button" data-opens="recovery" data-post="/account/recovery-codes" class="{{ ds::button("secondary", "sm") }}">{{ m.recovery_regenerate }}</button>
+          <button type="button" data-opens="authenticator" class="{{ ds::button("secondary", "sm") }}">{{ m.authenticator_replace }}</button>
+          <button type="button" data-opens="recovery" class="{{ ds::button("secondary", "sm") }}">{{ m.recovery_regenerate }}</button>
         </div>
         {% call ui::dialog("authenticator", "authenticator-title", m.authenticator_replace_title, m.authenticator_replace, m.cancel) %}
         <div class="flex flex-col gap-4">
@@ -238,7 +237,7 @@
             <h3 class="text-sm leading-5 font-medium text-main">{{ m.password_title }}</h3>
             <p class="text-[0.8125rem] leading-5 text-secondary">{{ m.password_off }}</p>
           </div>
-          <button type="button" data-opens="add-password" data-options="/account/password/options" data-post="/account/password/add" class="{{ ds::button("secondary", "sm") }}">{{ m.add }}</button>
+          <button type="button" data-opens="add-password" class="{{ ds::button("secondary", "sm") }}">{{ m.add }}</button>
         </div>
         {% call ui::dialog("add-password", "password-add-title", m.password_add, m.add, m.cancel, form_id = "password-add") %}
         <div class="flex flex-col gap-4">
@@ -275,7 +274,7 @@
             </p>
           </div>
           {%- if view.passkey_confirms %}
-          <button type="button" data-opens="confirm" data-post="/account/links/remove" class="{{ ds::button("secondary-destructive", "sm") }}">{{ m.remove }}</button>
+          <button type="button" data-opens="confirm" class="{{ ds::button("secondary-destructive", "sm") }}">{{ m.remove }}</button>
           {%- endif %}
         </div>
         {%- if view.passkey_confirms %}
@@ -296,7 +295,7 @@
           <p class="text-[0.8125rem] leading-5 text-secondary">{{ m.not_linked }}</p>
         </div>
         {%- if view.passkey_confirms %}
-        <button type="button" data-link="{{ p.id }}" data-post="/account/links/start" aria-label="{{ (m.link_with)(p.label) }}" class="{{ ds::button("secondary", "sm") }}">{{ m.link }}</button>
+        <button type="button" data-link="{{ p.id }}" aria-label="{{ (m.link_with)(p.label) }}" class="{{ ds::button("secondary", "sm") }}">{{ m.link }}</button>
         {%- endif %}
       </li>
       {%- endfor %}
@@ -317,7 +316,7 @@
         <p class="text-[0.8125rem] leading-5 text-pretty text-secondary">{{ m.sessions_note }}</p>
       </div>
       {%- if !view.other_sessions.is_empty() %}
-      <button type="button" id="sign-out-others" data-post="/account/sessions/revoke-others" class="{{ ds::button("secondary", "sm") }}">{{ m.sign_out_others }}</button>
+      <button type="button" id="sign-out-others" class="{{ ds::button("secondary", "sm") }}">{{ m.sign_out_others }}</button>
       {%- endif %}
     </div>
     {%- if let Some(s) = view.this_session %}
@@ -329,7 +328,7 @@
       {%- for s in view.other_sessions %}
       <li data-session="{{ s.name }}" class="flex flex-wrap items-center gap-x-3 gap-y-2 py-3 first:pt-0 last:pb-0">
         {{ session_row(s, m) }}
-        <button type="button" data-action="revoke" data-post="/account/sessions/revoke" class="{{ ds::button("secondary", "sm") }}">{{ m.sign_out }}</button>
+        <button type="button" data-action="revoke" class="{{ ds::button("secondary", "sm") }}">{{ m.sign_out }}</button>
       </li>
       {%- endfor %}
     </ul>

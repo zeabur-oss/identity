@@ -190,8 +190,9 @@ impl Bound {
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct StartRequest {
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(rename = "UpstreamStartRequest")]
+pub(crate) struct StartRequest {
     #[serde(default)]
     token: Option<String>,
 }
@@ -306,8 +307,9 @@ async fn begin<B: Backend, H: HttpClient>(
     Ok(response)
 }
 
-#[derive(Debug, Deserialize)]
-struct AccountStartRequest {
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(rename = "LinkStartRequest")]
+pub(crate) struct AccountStartRequest {
     provider: String,
 }
 

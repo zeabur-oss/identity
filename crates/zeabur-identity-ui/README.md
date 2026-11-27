@@ -42,8 +42,9 @@ The scripts POST JSON and navigate with `location.assign`; no page submits a for
 can say `form-action 'none'`. They convert WebAuthn JSON by hand rather than with
 `PublicKeyCredential.parse*FromJSON`, which older Safari versions lack. They write only
 `textContent`, never HTML, take their messages from `data-msg-*` attributes in the page language,
-store nothing in the browser and never see a token. They post to the endpoints the page names
-(`data-post`, `data-options`, `data-start`) and act on what a refusal concludes: its `detail` in
+store nothing in the browser and never see a token. They call the server through the route table in
+`ui/src/contract.ts`, which names each route's method and path and is generated from the server's
+types, and act on what a refusal concludes: its `detail` in
 the page language, `refresh` for a list that changed, and `next` for the step that follows.
 
 ## Security headers
