@@ -6,11 +6,10 @@ import {
   assertionJson,
   cancelled,
   creationOptions,
-  endpoint,
   explain,
   messages,
   next,
-  post,
+  call,
   redirect,
   type Reply,
   registrationJson,
@@ -84,11 +83,8 @@ function rowPlace(item: HTMLElement): Place {
   return { status: item.querySelector("[data-status]"), error: item.querySelector("[data-error]") }
 }
 
-async function assertion(
-  path: string,
-  extra: Record<string, unknown>,
-): Promise<PublicKeyCredential> {
-  const started = await post(path, extra)
+async function assertion(route: "sessionOptions" | "reauthOptions"): Promise<PublicKeyCredential> {
+  const started = await call(route, null)
   if (!started.ok) throw started
   const credential = await navigator.credentials.get({ publicKey: requestOptions(started.body) })
   if (!(credential instanceof PublicKeyCredential))
@@ -98,8 +94,8 @@ async function assertion(
 
 async function reauthenticate(place: Place): Promise<Reply> {
   write(place.status, text("msgConfirm"))
-  const credential = await assertion(endpoint(root, "reauthOptions"), {})
-  return post(endpoint(root, "reauth"), { credential: assertionJson(credential) })
+  const credential = await assertion("reauthOptions")
+  return call("reauth", { credential: assertionJson(credential) })
 }
 
 /** Runs `action`; if the server wants a fresh confirmation, gets one and runs it again. */
@@ -152,9 +148,8 @@ function signInWithPassword(event: SubmitEvent): void {
   event.preventDefault()
   const { username, password, code } = entered()
   if (!username || !password) return fail(header, text("msgPasswordMissing"))
-  const path = endpoint(event.currentTarget as Element)
   run(async () => {
-    const reply = await post(path, { username, password, code })
+    const reply = await call("passwordSignIn", { username, password, code })
     if (next(reply) !== "code") return reply
     write(header.status, "")
     codeStep(true)
@@ -162,16 +157,16 @@ function signInWithPassword(event: SubmitEvent): void {
   })
 }
 
-function signIn(button: HTMLElement): void {
+function signIn(): void {
   run(async () => {
-    const credential = await assertion(endpoint(button, "options"), {})
-    return post(endpoint(button), { credential: assertionJson(credential) })
+    const credential = await assertion("sessionOptions")
+    return call("signIn", { credential: assertionJson(credential) })
   })
 }
 
-function addPasskey(button: Element | null, label: string): void {
+function addPasskey(label: string): void {
   run(async () => {
-    const started = await fresh(header, () => post(endpoint(button, "options"), {}))
+    const started = await fresh(header, () => call("addPasskeyOptions", null))
     if (!started.ok) return started
     write(header.status, text("msgWorking"))
     const credential = await navigator.credentials.create({
@@ -179,52 +174,48 @@ function addPasskey(button: Element | null, label: string): void {
     })
     if (!(credential instanceof PublicKeyCredential))
       throw new DOMException("no credential", "NotAllowedError")
-    return post(endpoint(button), {
-      credential: registrationJson(credential),
-      label: label || null,
-    })
+    return call("addPasskey", { credential: registrationJson(credential), label: label || null })
   })
 }
 
 /**
- * Opens a row's dialog (`dialog[data-<name>]`) from its `data-opens` button. `confirmed` runs with
- * the button's endpoint when the dialog closes through its confirm button; cancel, Escape and the
- * backdrop leave things as they were.
+ * Opens a row's dialog (`dialog[data-<name>]`) from its `data-opens` button. `confirmed` runs when
+ * the dialog closes through its confirm button; cancel, Escape and the backdrop leave things as
+ * they were.
  */
 function wireDialog(
   item: HTMLElement,
   name: string,
-  confirmed: (dialog: HTMLDialogElement, path: string) => void,
-  open: (dialog: HTMLDialogElement, opener: Element | null) => void = (dialog) =>
-    dialog.showModal(),
+  confirmed: (dialog: HTMLDialogElement) => void,
+  open: (dialog: HTMLDialogElement) => void = (dialog) => dialog.showModal(),
 ): void {
   const dialog = item.querySelector<HTMLDialogElement>(`dialog[data-${name}]`)
   const opener = item.querySelector(`[data-opens=${name}]`)
   if (!dialog) return
   opener?.addEventListener("click", () => {
     dialog.returnValue = ""
-    open(dialog, opener)
+    open(dialog)
   })
   dialog.querySelector("[data-close]")?.addEventListener("click", () => dialog.close())
   dialog.addEventListener("close", () => {
-    if (dialog.returnValue === "confirm") confirmed(dialog, endpoint(opener))
+    if (dialog.returnValue === "confirm") confirmed(dialog)
   })
 }
 
 /** Wires a row's remove confirmation. `passkey` names the row's passkey, if any. */
-function wireRemove(item: HTMLElement, name: string, passkey: string): void {
-  wireDialog(item, "confirm", (_dialog, path) => {
+function wireRemove(item: HTMLElement, remove: () => Promise<Reply>, passkey: string): void {
+  wireDialog(item, "confirm", () => {
     const place = rowPlace(item)
-    run(() => fresh(place, () => post(path, { name })), place, passkey)
+    run(() => fresh(place, remove), place, passkey)
   })
 }
 
 function wirePasskey(item: HTMLElement): void {
   const name = item.dataset.passkey ?? ""
-  wireRemove(item, name, name)
-  wireDialog(item, "rename", (dialog, path) => {
+  wireRemove(item, () => call("removePasskey", null, { name }), name)
+  wireDialog(item, "rename", (dialog) => {
     const label = dialog.querySelector("input")?.value.trim() ?? ""
-    if (label) run(() => post(path, { name, label }), rowPlace(item), name)
+    if (label) run(() => call("renamePasskey", { label }, { name }), rowPlace(item), name)
   })
 }
 
@@ -232,7 +223,7 @@ function wirePasskey(item: HTMLElement): void {
 function link(button: HTMLElement): void {
   const provider = button.dataset.link ?? ""
   run(async () => {
-    const reply = await fresh(header, () => post(endpoint(button), { provider }))
+    const reply = await fresh(header, () => call("link", { provider }))
     const to = redirect(reply)
     if (!to) return reply
     window.location.assign(to)
@@ -241,12 +232,8 @@ function link(button: HTMLElement): void {
 }
 
 /** Sends a password change or removal; on success, the reload shows `notice`. */
-async function password(
-  path: string,
-  body: Record<string, string>,
-  notice: string,
-): Promise<Reply> {
-  const reply = await post(path, body)
+async function password(send: () => Promise<Reply>, notice: string): Promise<Reply> {
+  const reply = await send()
   if (reply.ok) window.location.hash = `notice=${notice}`
   return reply
 }
@@ -267,13 +254,8 @@ function keepCodes(reply: Reply, notice: string, place: Place): Reply | null {
 }
 
 /** Sends a change that may make recovery codes, confirmed with a passkey when the server asks. */
-function sendForCodes(
-  place: Place,
-  path: string,
-  body: Record<string, unknown>,
-  notice: string,
-): void {
-  run(async () => keepCodes(await fresh(place, () => post(path, body)), notice, place), place)
+function sendForCodes(place: Place, send: () => Promise<Reply>, notice: string): void {
+  run(async () => keepCodes(await fresh(place, send), notice, place), place)
 }
 
 /** Runs `options` and opens `dialog` with what it answers, or explains at `place` why not. */
@@ -307,17 +289,17 @@ function wireAdd(section: HTMLElement): void {
   wireDialog(
     section,
     "add-password",
-    (dialog, path) => {
+    (dialog) => {
       const chosen = dialog.querySelector<HTMLInputElement>("[name=new]")
       if (!longEnough(chosen)) return fail(place, text("msgTooShort"))
       const body = { password: chosen.value, totp: totpAnswer(sealed) }
-      sendForCodes(place, path, body, "password-added")
+      sendForCodes(place, () => call("addPassword", body), "password-added")
     },
-    (dialog, opener) =>
+    (dialog) =>
       openWith(
         dialog,
         place,
-        () => fresh(place, () => post(endpoint(opener, "options"), {})),
+        () => fresh(place, () => call("addPasswordOptions", null)),
         (body) => {
           const { totp } = body as PasswordSetupOptions
           sealed = totp ? showEnrolment(totp) : null
@@ -333,23 +315,25 @@ function wireAuthenticator(section: HTMLElement): void {
   wireDialog(
     section,
     "authenticator",
-    (dialog, path) => {
-      const body = { ...confirmation(dialog), totp: totpAnswer(sealed) }
-      sendForCodes(place, path, body, "authenticator-replaced")
+    (dialog) => {
+      const totp = totpAnswer(sealed)
+      if (!totp) return
+      const body = { ...confirmation(dialog), totp }
+      sendForCodes(place, () => call("replaceAuthenticator", body), "authenticator-replaced")
     },
-    (dialog, opener) =>
+    (dialog) =>
       openWith(
         dialog,
         place,
-        () => post(endpoint(opener, "options"), {}),
+        () => call("authenticatorOptions", null),
         (body) => {
           sealed = showEnrolment(body as TotpEnrolment)
         },
       ),
   )
-  wireDialog(section, "recovery", (dialog, path) => {
+  wireDialog(section, "recovery", (dialog) => {
     const body = confirmation(dialog)
-    sendForCodes(place, path, body, "recovery-regenerated")
+    sendForCodes(place, () => call("regenerateRecoveryCodes", body), "recovery-regenerated")
   })
 }
 
@@ -357,16 +341,18 @@ function wirePassword(section: HTMLElement): void {
   wireAdd(section)
   wireAuthenticator(section)
   const place = rowPlace(section)
-  wireDialog(section, "change", (dialog, path) => {
+  wireDialog(section, "change", (dialog) => {
     const current = dialog.querySelector<HTMLInputElement>("[name=current]")?.value
     const chosen = dialog.querySelector<HTMLInputElement>("[name=new]")
     if (!current) return
     if (!longEnough(chosen)) return fail(place, text("msgTooShort"))
-    run(() => password(path, { current, new: chosen.value }, "password-changed"), place)
+    const body = { current, new: chosen.value }
+    run(() => password(() => call("changePassword", body), "password-changed"), place)
   })
-  wireDialog(section, "confirm", (dialog, path) => {
+  wireDialog(section, "confirm", (dialog) => {
     const current = dialog.querySelector("input")?.value ?? ""
-    if (current) run(() => password(path, { current }, "password-removed"), place)
+    if (current)
+      run(() => password(() => call("removePassword", { current }), "password-removed"), place)
   })
 }
 
@@ -380,10 +366,12 @@ function localizeDates(): void {
 
 if (root) {
   localizeDates()
-  for (const id of ["sign-out", "sign-out-others"]) {
-    const button = document.getElementById(id)
-    button?.addEventListener("click", () => run(() => post(endpoint(button), {})))
-  }
+  document
+    .getElementById("sign-out")
+    ?.addEventListener("click", () => run(() => call("signOut", null)))
+  document
+    .getElementById("sign-out-others")
+    ?.addEventListener("click", () => run(() => call("revokeOtherSessions", null)))
   const passwordSection = document.getElementById("password")
   if (passwordSection) wirePassword(passwordSection)
   document
@@ -392,7 +380,7 @@ if (root) {
   for (const item of document.querySelectorAll<HTMLElement>("[data-session]")) {
     const button = item.querySelector("[data-action=revoke]")
     button?.addEventListener("click", () => {
-      run(() => post(endpoint(button), { name: item.dataset.session ?? "" }))
+      run(() => call("revokeSession", null, { name: item.dataset.session ?? "" }))
     })
   }
   document.getElementById("sign-in")?.addEventListener("submit", signInWithPassword)
@@ -407,17 +395,14 @@ if (root) {
     document.getElementById("passkey-sign-in")?.setAttribute("hidden", "")
     document.getElementById("add")?.setAttribute("hidden", "")
   } else {
-    signInButton?.addEventListener("click", () => signIn(signInButton))
+    signInButton?.addEventListener("click", signIn)
     if (passkeys)
       wireDialog(passkeys, "add", (dialog) => {
-        addPasskey(
-          document.getElementById("add"),
-          dialog.querySelector("input")?.value.trim() ?? "",
-        )
+        addPasskey(dialog.querySelector("input")?.value.trim() ?? "")
       })
     for (const item of document.querySelectorAll<HTMLElement>("[data-passkey]")) wirePasskey(item)
     for (const item of document.querySelectorAll<HTMLElement>("[data-linked]"))
-      wireRemove(item, item.dataset.linked ?? "", "")
+      wireRemove(item, () => call("unlink", null, { name: item.dataset.linked ?? "" }), "")
     for (const button of document.querySelectorAll<HTMLButtonElement>("button[data-link]"))
       button.addEventListener("click", () => link(button))
     if (window.location.hash === "#add") document.getElementById("add")?.click()

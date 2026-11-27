@@ -476,7 +476,8 @@ async fn update_state<K: CredentialStore>(
     })
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, JsonSchema)]
+#[schemars(rename = "PasswordSignInRequest")]
 pub(crate) struct SignInRequest {
     username: String,
     password: String,
@@ -715,7 +716,8 @@ async fn check_second_factor<B: Backend>(
     Ok(second)
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, JsonSchema)]
+#[schemars(rename = "PasswordSetupRequest")]
 pub(crate) struct SetupRequest {
     token: String,
     password: String,
@@ -724,8 +726,9 @@ pub(crate) struct SetupRequest {
     totp: Option<TotpRequest>,
 }
 
-#[derive(Deserialize)]
-struct TotpRequest {
+#[derive(Deserialize, JsonSchema)]
+#[schemars(rename = "TotpRequest")]
+pub(crate) struct TotpRequest {
     /// `sealed` from the options.
     sealed: String,
     /// The current code from the authenticator app.
@@ -741,7 +744,8 @@ pub(crate) struct SetUp<'a> {
     recovery_codes: Option<Vec<String>>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, JsonSchema)]
+#[schemars(rename = "PasswordSetupOptionsRequest")]
 pub(crate) struct OptionsRequest {
     token: String,
 }
@@ -1033,13 +1037,15 @@ async fn set_up_with<B: Backend>(
     Ok(response)
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, JsonSchema)]
+#[schemars(rename = "ChangePasswordRequest")]
 pub(crate) struct ChangeRequest {
     current: String,
     new: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, JsonSchema)]
+#[schemars(rename = "RemovePasswordRequest")]
 pub(crate) struct RemoveRequest {
     current: String,
 }
@@ -1152,7 +1158,7 @@ fn codes<B: Backend>(
     response
 }
 
-/// `POST /account/password`: replaces the signed-in user's password.
+/// `PUT /account/password`: replaces the signed-in user's password.
 pub(crate) async fn change<B: Backend>(
     State(service): State<Shared<B>>,
     requester: Requester,
@@ -1228,7 +1234,8 @@ pub(crate) async fn add_options<B: Backend>(
     result.unwrap_or_else(IntoResponse::into_response)
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, JsonSchema)]
+#[schemars(rename = "AddPasswordRequest")]
 pub(crate) struct AddRequest {
     password: String,
     /// The authenticator, when the options asked for one.
@@ -1236,7 +1243,7 @@ pub(crate) struct AddRequest {
     totp: Option<TotpRequest>,
 }
 
-/// `POST /account/password/add`: adds a password, and an authenticator when the settings need
+/// `POST /account/password`: adds a password, and an authenticator when the settings need
 /// one, for a signed-in user without a password. Needs a recent passkey confirmation.
 pub(crate) async fn add<B: Backend>(
     State(service): State<Shared<B>>,
@@ -1287,7 +1294,8 @@ pub(crate) async fn add<B: Backend>(
     result.unwrap_or_else(Failure::respond)
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, JsonSchema)]
+#[schemars(rename = "ConfirmRequest")]
 pub(crate) struct ConfirmRequest {
     /// The current password. Without it, the change needs a recent passkey confirmation.
     #[serde(default)]
@@ -1297,7 +1305,8 @@ pub(crate) struct ConfirmRequest {
     code: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, JsonSchema)]
+#[schemars(rename = "ReplaceAuthenticatorRequest")]
 pub(crate) struct ReplaceRequest {
     #[serde(flatten)]
     confirm: ConfirmRequest,
@@ -1377,7 +1386,7 @@ pub(crate) async fn authenticator_options<B: Backend>(
     result.unwrap_or_else(IntoResponse::into_response)
 }
 
-/// `POST /account/authenticator`: replaces the signed-in user's authenticator and its recovery
+/// `PUT /account/authenticator`: replaces the signed-in user's authenticator and its recovery
 /// codes. The old secret and codes stop working.
 pub(crate) async fn replace_authenticator<B: Backend>(
     State(service): State<Shared<B>>,
@@ -1468,7 +1477,7 @@ pub(crate) async fn regenerate<B: Backend>(
     result.unwrap_or_else(Failure::respond)
 }
 
-/// `POST /account/password/remove`: deletes the signed-in user's password and authenticator.
+/// `DELETE /account/password`: deletes the signed-in user's password and authenticator.
 pub(crate) async fn remove<B: Backend>(
     State(service): State<Shared<B>>,
     requester: Requester,

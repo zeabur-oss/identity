@@ -231,13 +231,7 @@ mod tests {
     }
 
     #[derive(Serialize)]
-    struct Name<'a> {
-        name: &'a str,
-    }
-
-    #[derive(Serialize)]
     struct Rename<'a> {
-        name: &'a str,
         label: &'a str,
     }
 
@@ -701,6 +695,82 @@ mod tests {
             Some(ISSUER),
         )
         .await
+    }
+
+    /// Sends `body` with `method`, as the pages do for a route that changes a resource.
+    async fn send(
+        app: &Router,
+        method: Method,
+        path: &str,
+        body: &(impl Serialize + Sync),
+        cookies: &[(&str, &str)],
+    ) -> Reply {
+        call(
+            app,
+            method,
+            path,
+            Some(json_text(body)),
+            cookies,
+            Some(ISSUER),
+        )
+        .await
+    }
+
+    /// Sends a `DELETE` without a body. It still names the JSON content type, as every account
+    /// route asks for.
+    async fn delete(app: &Router, path: &str, cookies: &[(&str, &str)]) -> Reply {
+        call(
+            app,
+            Method::DELETE,
+            path,
+            Some(String::new()),
+            cookies,
+            Some(ISSUER),
+        )
+        .await
+    }
+
+    /// The method and path of each route in the committed `ui/src/contract.ts`, the table the
+    /// pages call through, with each `{parameter}` filled in as `x`.
+    pub(super) fn contract_routes() -> Vec<(Method, String)> {
+        let contract = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../ui/src/contract.ts"
+        ))
+        .unwrap();
+        let table = contract
+            .split_once("export const routes = {")
+            .unwrap()
+            .1
+            .split_once("} as const")
+            .unwrap()
+            .0;
+        let quoted = |line: &str, key: &str| {
+            let rest = line
+                .split_once(&format!("{key}: \""))
+                .map(|(_, rest)| rest)?;
+            rest.split_once('"').map(|(value, _)| value.to_owned())
+        };
+        let routes: Vec<(Method, String)> = table
+            .lines()
+            .filter_map(|line| {
+                let method = Method::from_bytes(quoted(line, "method")?.as_bytes()).unwrap();
+                let path = quoted(line, "path")?
+                    .split('/')
+                    .map(|segment| {
+                        if segment.starts_with('{') {
+                            "x"
+                        } else {
+                            segment
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("/");
+                Some((method, path))
+            })
+            .collect();
+        assert!(routes.len() > 20, "{table}");
+        routes
     }
 
     fn origin() -> Url {
@@ -1773,13 +1843,8 @@ mod tests {
         }
 
         async fn remove(h: &Harness, session: &Session, name: &str) -> Reply {
-            post(
-                &h.app,
-                "/account/passkeys/remove",
-                &Name { name },
-                &session.cookies(),
-            )
-            .await
+            let path = format!("/account/passkeys/{name}");
+            delete(&h.app, &path, &session.cookies()).await
         }
 
         pub(super) fn advance(h: &Harness, by: std::time::Duration) {
@@ -1811,60 +1876,32 @@ mod tests {
             assert!(grant.spec.credential.is_some());
         }
 
-        /// Every endpoint a page names is a route: a rename on either side would leave a
-        /// control that posts nowhere.
+        /// Every route in the table the pages call through is served with the method the table
+        /// names: a change on either side would leave a control that calls nowhere.
         #[tokio::test]
-        async fn each_endpoint_a_page_names_is_a_route() {
+        async fn each_route_the_contract_names_is_served() {
             let (h, _device, session) = signed_in().await;
-            let signed_in = page(&h, Some(&session.cookie)).await;
-            let pages = zeabur_identity_signin::pages::router(
-                Arc::clone(&h.service.oauth),
-                Arc::clone(&h.service.providers),
-            );
-            let app = h.app.clone().merge(pages);
-            let setup = app
-                .clone()
-                .oneshot(Request::get("/setup").body(Body::empty()).unwrap())
-                .await
-                .unwrap();
-            let setup = setup.into_body().collect().await.unwrap().to_bytes();
-            for html in [
-                String::from_utf8(setup.to_vec()).unwrap(),
-                page(&h, None).await,
-                signed_in,
-            ] {
-                let endpoints = named_endpoints(&html);
-                assert_ne!(endpoints, Vec::<String>::new());
-                for endpoint in endpoints {
-                    let request = Request::post(&endpoint)
-                        .header(header::ORIGIN, ISSUER)
-                        .header(header::CONTENT_TYPE, "application/json")
-                        .body(Body::from("{}"))
-                        .unwrap();
-                    let response = app.clone().oneshot(request).await.unwrap();
-                    let routed = !matches!(
-                        response.status(),
-                        StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED
-                    ) || response.headers()[header::CONTENT_TYPE]
-                        == "application/problem+json";
-                    assert!(routed, "{endpoint} answered {}", response.status());
+            for (method, path) in contract_routes() {
+                if path.starts_with("/upstream/") || path == "/account/links/start" {
+                    // The upstream router is not part of this harness; `tests/upstream.rs`
+                    // calls these two routes.
+                    continue;
                 }
+                let reply = call(
+                    &h.app,
+                    method.clone(),
+                    &path,
+                    Some("{}".to_owned()),
+                    &session.cookies(),
+                    Some(ISSUER),
+                )
+                .await;
+                let routed = !matches!(
+                    reply.status,
+                    StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED
+                ) || reply.headers[header::CONTENT_TYPE] == "application/problem+json";
+                assert!(routed, "{method} {path} answered {}", reply.status);
             }
-        }
-
-        /// The `data-post`, `data-options`, `data-start` and `data-reauth*` values of `html`.
-        fn named_endpoints(html: &str) -> Vec<String> {
-            html.split(" data-")
-                .skip(1)
-                .filter_map(|attribute| {
-                    let (name, rest) = attribute.split_once("=\"")?;
-                    matches!(
-                        name,
-                        "post" | "options" | "start" | "reauth" | "reauth-options"
-                    )
-                    .then(|| rest.get(..rest.find('"')?).map(str::to_owned))?
-                })
-                .collect()
         }
 
         pub(super) async fn enrol_dana(h: &Harness) -> Device {
@@ -1926,28 +1963,19 @@ mod tests {
             let [admin_passkey] = <[String; 1]>::try_from(passkeys(&h, "admin").await).unwrap();
             let admin_session = admin.cookie.split_once('.').unwrap().0.to_owned();
 
-            let reply = post(
+            let reply = send(
                 &h.app,
-                "/account/passkeys/rename",
-                &Rename {
-                    name: &admin_passkey,
-                    label: "Mine",
-                },
+                Method::PATCH,
+                &format!("/account/passkeys/{admin_passkey}"),
+                &Rename { label: "Mine" },
                 &dana.cookies(),
             )
             .await;
             assert_eq!(reply.status, StatusCode::NOT_FOUND);
             let reply = remove(&h, &dana, &admin_passkey).await;
             assert_eq!(reply.status, StatusCode::NOT_FOUND);
-            let reply = post(
-                &h.app,
-                "/account/sessions/revoke",
-                &Name {
-                    name: &admin_session,
-                },
-                &dana.cookies(),
-            )
-            .await;
+            let path = format!("/account/sessions/{admin_session}");
+            let reply = delete(&h.app, &path, &dana.cookies()).await;
             assert_eq!(reply.status, StatusCode::NOT_FOUND);
             assert_eq!(passkeys(&h, "admin").await, [admin_passkey]);
             assert!(
@@ -2029,8 +2057,8 @@ mod tests {
             content_type: &str,
         ) -> StatusCode {
             let mut request = Request::builder()
-                .method(Method::POST)
-                .uri("/account/passkeys/rename")
+                .method(Method::PATCH)
+                .uri(format!("/account/passkeys/{name}"))
                 .header(header::CONTENT_TYPE, content_type)
                 .header(
                     header::COOKIE,
@@ -2039,10 +2067,7 @@ mod tests {
             for (key, value) in headers {
                 request = request.header(*key, *value);
             }
-            let body = json_text(&Rename {
-                name,
-                label: "Phone",
-            });
+            let body = json_text(&Rename { label: "Phone" });
             let response = h
                 .app
                 .clone()
@@ -2062,51 +2087,118 @@ mod tests {
         }
 
         /// A cross-site request is refused for being cross-site before its body is read, so a
-        /// body that does not parse still gets 403, and the refusal is not cached.
+        /// body that does not parse still gets 403, and the refusal is not cached. This holds for
+        /// every method the route table names, `PATCH` and `DELETE` as well as `POST`.
         #[tokio::test]
         async fn cross_site_requests_are_refused_before_the_body_is_read() {
             let (h, _first, session) = signed_in().await;
-            let routes = [
-                "/setup/options",
-                "/setup",
-                "/setup/password/options",
-                "/setup/password",
-                "/login/options",
-                "/login",
-                "/login/password",
-                "/account/session/options",
-                "/account/session",
-                "/account/session/password",
-                "/account/sign-out",
-                "/account/reauth/options",
-                "/account/reauth",
-                "/account/passkeys/options",
-                "/account/passkeys",
-                "/account/passkeys/rename",
-                "/account/passkeys/remove",
-                "/account/sessions/revoke",
-                "/account/sessions/revoke-others",
-                "/account/links/remove",
-                "/account/password",
-                "/account/password/remove",
-            ];
-            for path in routes {
+            let routes = contract_routes();
+            for method in [Method::PATCH, Method::PUT, Method::DELETE] {
+                assert!(routes.iter().any(|(m, _)| *m == method), "{method}");
+            }
+            for (method, path) in routes {
+                if path.starts_with("/upstream/") || path == "/account/links/start" {
+                    // `cross_site_starts_are_refused_before_the_body_is_read` in
+                    // `tests/upstream.rs` covers the upstream routes.
+                    continue;
+                }
                 let reply = call(
                     &h.app,
-                    Method::POST,
-                    path,
+                    method.clone(),
+                    &path,
                     Some("not json".to_owned()),
                     &session.cookies(),
                     Some("https://evil.example"),
                 )
                 .await;
-                assert_eq!(reply.status, StatusCode::FORBIDDEN, "{path}");
+                assert_eq!(reply.status, StatusCode::FORBIDDEN, "{method} {path}");
                 assert_eq!(
                     reply.kind(),
                     "urn:zeabur-identity:problem:cross-site",
-                    "{path}"
+                    "{method} {path}"
                 );
-                assert_eq!(reply.headers[header::CACHE_CONTROL], "no-store", "{path}");
+                assert_eq!(
+                    reply.headers[header::CACHE_CONTROL],
+                    "no-store",
+                    "{method} {path}"
+                );
+            }
+        }
+
+        /// A `PATCH` or `DELETE` that `Sec-Fetch-Site` marks cross-site changes nothing, even
+        /// with a valid session cookie and the JSON content type.
+        #[tokio::test]
+        async fn cross_site_patch_and_delete_change_nothing() {
+            let (h, _first, session) = signed_in().await;
+            let [name] = <[String; 1]>::try_from(passkeys(&h, "admin").await).unwrap();
+            let path = format!("/account/passkeys/{name}");
+            for (method, body) in [
+                (Method::PATCH, json_text(&Rename { label: "Evil" })),
+                (Method::DELETE, String::new()),
+            ] {
+                let request = Request::builder()
+                    .method(method.clone())
+                    .uri(&path)
+                    .header("sec-fetch-site", "cross-site")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(
+                        header::COOKIE,
+                        format!("{SESSION_COOKIE}={}", session.cookie),
+                    )
+                    .body(Body::from(body))
+                    .unwrap();
+                let response = h.app.clone().oneshot(request).await.unwrap();
+                assert_eq!(response.status(), StatusCode::FORBIDDEN, "{method}");
+            }
+            assert_eq!(passkeys(&h, "admin").await, [name]);
+            assert!(!page(&h, Some(&session.cookie)).await.contains("Evil"));
+        }
+
+        /// The routes the account page called before they became resources are gone: no
+        /// handler answers them.
+        #[tokio::test]
+        async fn the_old_account_routes_are_gone() {
+            let (h, _first, session) = signed_in().await;
+            for path in [
+                "/account/sign-out",
+                "/account/passkeys/rename",
+                "/account/passkeys/remove",
+                "/account/sessions/revoke",
+                "/account/sessions/revoke-others",
+                "/account/links/remove",
+                "/account/password/add",
+                "/account/password/remove",
+            ] {
+                let reply = post(&h.app, path, &Empty {}, &session.cookies()).await;
+                // A path that now matches a resource route answers 405 for `POST`.
+                assert!(
+                    matches!(
+                        reply.status,
+                        StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED
+                    ),
+                    "{path} answered {}",
+                    reply.status
+                );
+                let problem = reply
+                    .headers
+                    .get(header::CONTENT_TYPE)
+                    .is_some_and(|v| v == "application/problem+json");
+                assert!(!problem, "{path} reached a handler");
+            }
+            for (method, path) in [
+                (Method::POST, "/account/authenticator"),
+                (Method::POST, "/account/sessions"),
+            ] {
+                let reply = call(
+                    &h.app,
+                    method,
+                    path,
+                    Some("{}".to_owned()),
+                    &session.cookies(),
+                    Some(ISSUER),
+                )
+                .await;
+                assert_eq!(reply.status, StatusCode::METHOD_NOT_ALLOWED, "{path}");
             }
         }
 
@@ -2159,13 +2251,11 @@ mod tests {
 
             // Rename needs no recent passkey confirmation.
             advance(&h, REAUTH_WINDOW);
-            let reply = post(
+            let reply = send(
                 &h.app,
-                "/account/passkeys/rename",
-                &Rename {
-                    name: &name,
-                    label: "  Phone  ",
-                },
+                Method::PATCH,
+                &format!("/account/passkeys/{name}"),
+                &Rename { label: "  Phone  " },
                 &session.cookies(),
             )
             .await;
@@ -2311,15 +2401,9 @@ mod tests {
             let admin = user(&h, "admin").await;
             assert_eq!(h.service.oauth.grants.list(&admin).await.unwrap().len(), 3);
 
-            let reply = post(
-                &h.app,
-                "/account/sessions/revoke",
-                &Name {
-                    name: other.cookie.split_once('.').unwrap().0,
-                },
-                &this.cookies(),
-            )
-            .await;
+            let other_name = other.cookie.split_once('.').unwrap().0;
+            let path = format!("/account/sessions/{other_name}");
+            let reply = delete(&h.app, &path, &this.cookies()).await;
             assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
             assert!(
                 page(&h, Some(&other.cookie))
@@ -2331,13 +2415,7 @@ mod tests {
                 "SessionRevoked"
             );
 
-            let reply = post(
-                &h.app,
-                "/account/sessions/revoke-others",
-                &Empty {},
-                &this.cookies(),
-            )
-            .await;
+            let reply = delete(&h.app, "/account/sessions", &this.cookies()).await;
             assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
             let left: Vec<String> = h
                 .service
@@ -2352,7 +2430,7 @@ mod tests {
             assert_eq!(left, [this.cookie.split_once('.').unwrap().0]);
             assert!(!page(&h, Some(&this.cookie)).await.contains(SIGNED_OUT_MARK));
 
-            let reply = post(&h.app, "/account/sign-out", &Empty {}, &this.cookies()).await;
+            let reply = delete(&h.app, "/account/session", &this.cookies()).await;
             assert_eq!(reply.status, StatusCode::OK);
             let left = h.service.oauth.grants.list(&admin).await.unwrap();
             assert_eq!(left.len(), 0);
@@ -2367,13 +2445,7 @@ mod tests {
                     .await
                     .contains(SIGNED_OUT_MARK)
             );
-            let reply = post(
-                &h.app,
-                "/account/sessions/revoke-others",
-                &Empty {},
-                &session.cookies(),
-            )
-            .await;
+            let reply = delete(&h.app, "/account/sessions", &session.cookies()).await;
             assert_eq!(reply.status, StatusCode::UNAUTHORIZED);
             assert_eq!(reply.kind(), "urn:zeabur-identity:problem:signed-out");
 
@@ -2836,8 +2908,9 @@ mod tests {
             current: &str,
             new: &str,
         ) -> Reply {
-            post(
+            send(
                 &h.app,
+                Method::PUT,
                 "/account/password",
                 &PasswordChange { current, new },
                 &[(SESSION_COOKIE, &session.cookie), (DEVICE_COOKIE, device)],
@@ -2846,9 +2919,10 @@ mod tests {
         }
 
         async fn remove(h: &Harness, session: &Session, device: &str, current: &str) -> Reply {
-            post(
+            send(
                 &h.app,
-                "/account/password/remove",
+                Method::DELETE,
+                "/account/password",
                 &Current { current },
                 &[(SESSION_COOKIE, &session.cookie), (DEVICE_COOKIE, device)],
             )
@@ -3228,7 +3302,7 @@ mod tests {
         }
 
         /// Only a user who can add a password sees the button for it.
-        const ADD_PASSWORD: &str = "data-post=\"/account/password/add\"";
+        const ADD_PASSWORD: &str = "data-opens=\"add-password\"";
 
         async fn add_options(h: &Harness, session: &Session) -> Reply {
             post(
@@ -3247,12 +3321,12 @@ mod tests {
             totp: Option<TotpSetup<'_>>,
         ) -> Reply {
             let body = &PasswordAdd { password, totp };
-            post(&h.app, "/account/password/add", body, &session.cookies()).await
+            post(&h.app, "/account/password", body, &session.cookies()).await
         }
 
         async fn confirmed(
             h: &Harness,
-            path: &str,
+            (method, path): &(Method, &str),
             session: &Session,
             device: &str,
             body: &Confirm<'_>,
@@ -3261,7 +3335,7 @@ mod tests {
                 (SESSION_COOKIE, session.cookie.as_str()),
                 (DEVICE_COOKIE, device),
             ];
-            post(&h.app, path, body, &cookies).await
+            send(&h.app, method.clone(), path, body, &cookies).await
         }
 
         fn shown_codes(reply: &Reply) -> Vec<String> {
@@ -3383,8 +3457,8 @@ mod tests {
             let (h, mut passkey, session, old, old_codes, device) = account_with_password().await;
             let other = sign_in_to_account(&h, &mut passkey).await;
             let html = page(&h, Some(&session.cookie)).await;
-            assert!(html.contains("data-post=\"/account/authenticator\""));
-            assert!(html.contains("data-post=\"/account/recovery-codes\""));
+            assert!(html.contains("data-opens=\"authenticator\""));
+            assert!(html.contains("data-opens=\"recovery\""));
             let reply = post(
                 &h.app,
                 "/account/authenticator/options",
@@ -3405,7 +3479,14 @@ mod tests {
                     code: &code,
                 }),
             };
-            let reply = confirmed(&h, "/account/authenticator", &session, &device, &body).await;
+            let reply = confirmed(
+                &h,
+                &(Method::PUT, "/account/authenticator"),
+                &session,
+                &device,
+                &body,
+            )
+            .await;
             let codes = shown_codes(&reply);
             assert_eq!(
                 reply.audit().fields["event"],
@@ -3440,7 +3521,7 @@ mod tests {
         async fn new_recovery_codes_retire_the_old_ones_and_keep_the_app() {
             let (h, mut passkey, session, secret, old_codes, device) =
                 account_with_password().await;
-            let path = "/account/recovery-codes";
+            let path = &(Method::POST, "/account/recovery-codes");
             // Without the current password, the change needs a passkey confirmation.
             account::advance(&h, REAUTH_WINDOW);
             let reply = confirmed(&h, path, &session, &device, &Confirm::default()).await;
@@ -3476,7 +3557,7 @@ mod tests {
         #[tokio::test]
         async fn a_wrong_password_or_code_is_refused_and_counted() {
             let (h, mut passkey, session, secret, codes, device) = account_with_password().await;
-            let path = "/account/recovery-codes";
+            let path = &(Method::POST, "/account/recovery-codes");
             let wrong = Confirm {
                 current: Some("not my password at all"),
                 code: Some(&codes[0]),

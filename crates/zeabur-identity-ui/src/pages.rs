@@ -560,7 +560,7 @@ mod tests {
                 .split("<form")
                 .skip(1)
                 .map(|rest| rest.split('>').next().unwrap_or_default())
-                .filter(|tag| tag.contains("data-post"))
+                .filter(|tag| !tag.contains(r#"method="dialog""#))
                 .collect();
             assert!(!forms.is_empty(), "{name} has no script-driven form");
             for tag in forms {

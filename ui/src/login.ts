@@ -3,11 +3,10 @@
 import {
   assertionJson,
   cancelled,
-  endpoint,
   explain,
   messages,
   next,
-  post,
+  call,
   type Reply,
   redirect,
   requestOptions,
@@ -51,7 +50,7 @@ async function finish(credential: Credential | null): Promise<void> {
 
 /** Sends the assertion; true when the page is on its way to the app. */
 async function send(credential: PublicKeyCredential): Promise<boolean> {
-  const reply = await post(endpoint(passkey), { credential: assertionJson(credential) })
+  const reply = await call("login", { credential: assertionJson(credential) })
   await signal(reply.body)
   say("status", "")
   const to = redirect(reply)
@@ -79,7 +78,7 @@ function askForCode(): void {
 function secondStep(shown: boolean): void {
   codeStep(shown)
   document.getElementById("lost-passkey")?.toggleAttribute("hidden", shown)
-  for (const button of document.querySelectorAll("[data-start]"))
+  for (const button of document.querySelectorAll("[data-provider]"))
     button.toggleAttribute("hidden", shown)
   alternatives()
 }
@@ -92,7 +91,7 @@ function alternatives(): void {
 }
 
 async function options(): Promise<PublicKeyCredentialRequestOptions | null> {
-  const reply = await post(endpoint(passkey, "options"), {})
+  const reply = await call("loginOptions", null)
   if (!reply.ok) {
     say("error", text("msgError"))
     return null
@@ -136,7 +135,7 @@ async function sendPassword(
   code: string | null,
 ): Promise<void> {
   try {
-    const reply = await post(endpoint(form), { username, password, code })
+    const reply = await call("passwordLogin", { username, password, code })
     finishing = leave(reply)
     if (!finishing) failed(reply)
   } catch {

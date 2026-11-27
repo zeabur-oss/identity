@@ -8,7 +8,7 @@ use axum::Router;
 use axum::extract::{Path, RawQuery};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use serde::Deserialize;
 use serde_json::json;
 use zeabur_identity_ui::pages::{
@@ -545,8 +545,13 @@ async fn main() -> std::io::Result<()> {
             "/account/authenticator/options",
             post(|| async { ok(&enrolment()) }),
         )
-        .route("/account/password/add", post(account_codes))
-        .route("/account/authenticator", post(account_codes))
+        // `POST /account/password` adds a password; `GET` is the page state that has one.
+        .route(
+            "/account/password",
+            get(|q: RawQuery, h: HeaderMap| account(Path("password".to_owned()), q, h))
+                .post(account_codes),
+        )
+        .route("/account/authenticator", put(account_codes))
         .route("/account/recovery-codes", post(account_codes))
         .route(
             "/linked",

@@ -3,12 +3,12 @@
 import {
   cancelled,
   creationOptions,
-  endpoint,
   explain,
   messages,
   next,
-  post,
+  call,
   type Reply,
+  type Route,
   registrationJson,
   say,
   supported,
@@ -76,21 +76,19 @@ function register(event: SubmitEvent): void {
 }
 
 /** `reply` if the server accepted the request; otherwise throws what it refused. */
-function accepted(reply: Reply): Reply {
+function accepted<K extends Route>(reply: Reply<K>): Reply<K> {
   if (!reply.ok) throw new Refused(reply)
   return reply
 }
 
 async function enrol(token: string): Promise<void> {
-  const started = accepted(await post(endpoint(form, "options"), { token }))
+  const started = accepted(await call("setupOptions", { token }))
   const credential = await navigator.credentials.create({
     publicKey: creationOptions(started.body),
   })
   if (!(credential instanceof PublicKeyCredential))
     throw new DOMException("no credential", "NotAllowedError")
-  accepted(
-    await post(endpoint(form), { token, credential: registrationJson(credential), label: null }),
-  )
+  accepted(await call("setup", { token, credential: registrationJson(credential), label: null }))
 }
 
 /** The password typed, if it is long enough to send; otherwise says why not. */
@@ -106,7 +104,7 @@ let sealed: string | null = null
 
 /** Asks what a password needs; shows the authenticator step when it needs one. */
 async function passwordOptions(token: string): Promise<boolean> {
-  const reply = await post(endpoint(document.getElementById("use-password")), { token })
+  const reply = await call("passwordSetupOptions", { token })
   if (!reply.ok) {
     refused(reply)
     return false
@@ -124,7 +122,7 @@ function setPassword(event: SubmitEvent): void {
   if (password === null) return
   registering = true
   say("error", "")
-  post(endpoint(passwordForm), { token, password, totp: totpAnswer(sealed) })
+  call("passwordSetup", { token, password, totp: totpAnswer(sealed) })
     .then(answered)
     .catch(() => say("error", text("msgError")))
     .finally(() => {

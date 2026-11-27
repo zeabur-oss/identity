@@ -164,11 +164,6 @@ mod tests {
         provider: &'a str,
     }
 
-    #[derive(Serialize)]
-    struct NameBody<'a> {
-        name: &'a str,
-    }
-
     #[derive(Debug, Deserialize)]
     struct Tokens {
         #[serde(rename = "access_token")]
@@ -1665,8 +1660,7 @@ mod tests {
                 let address = address.clone();
                 async move {
                     let page = http(&address, Method::GET, "/setup", &[], None).await;
-                    String::from_utf8_lossy(&page.body)
-                        .contains("data-start=\"/upstream/keycloak/start\"")
+                    String::from_utf8_lossy(&page.body).contains("data-provider=\"keycloak\"")
                 }
             },
         )
@@ -1754,11 +1748,12 @@ mod tests {
             .find(|c| subject_of(c).as_deref() == Some(KC_BOB.2))
             .unwrap()
             .name_any();
-        let reply = post_json(
+        let reply = http(
             &address,
-            "/account/links/remove",
-            &NameBody { name: &bob },
-            &session,
+            Method::DELETE,
+            &format!("/account/links/{bob}"),
+            &[("origin", ISSUER), ("cookie", &session)],
+            Some(("application/json", String::new())),
         )
         .await;
         assert!(reply.status.is_success(), "{:?}", reply.body);

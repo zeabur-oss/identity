@@ -1,16 +1,21 @@
 // Shared helpers for the sign-in pages: WebAuthn JSON conversion (webauthn-rs wire format), JSON
-// requests, and accessible status messages. No HTML is ever written (Trusted Types: 'none').
+// requests through the contract's route table, and accessible status messages. No HTML is ever
+// written (Trusted Types: 'none').
 
-import type {
-  Accepted,
-  AccountChanged,
-  AccountSignedIn,
-  PasskeySignedIn,
-  PasswordSignedIn,
-  Problem,
-  Step,
-  UnknownCredential,
-  UpstreamStarted,
+import {
+  type Accepted,
+  type AccountChanged,
+  type AccountSignedIn,
+  type PasskeySignedIn,
+  type PasswordSignedIn,
+  type Problem,
+  type Replies,
+  type Requests,
+  routes,
+  type Step,
+  type UnknownCredential,
+  type UpstreamStarted,
+  type WebAuthnJson,
 } from "./contract"
 
 type Json = Record<string, unknown>
@@ -68,7 +73,7 @@ function descriptors(
 }
 
 /** `CreationChallengeResponse` JSON → options for `navigator.credentials.create`. */
-export function creationOptions(json: Json): PublicKeyCredentialCreationOptions {
+export function creationOptions(json: WebAuthnJson): PublicKeyCredentialCreationOptions {
   const { publicKey: o } = json as { publicKey: WireCreation }
   return {
     ...o,
@@ -79,7 +84,7 @@ export function creationOptions(json: Json): PublicKeyCredentialCreationOptions 
 }
 
 /** `RequestChallengeResponse` JSON → options for `navigator.credentials.get`. */
-export function requestOptions(json: Json): PublicKeyCredentialRequestOptions {
+export function requestOptions(json: WebAuthnJson): PublicKeyCredentialRequestOptions {
   const { publicKey: o } = json as { publicKey: WireRequest }
   return {
     ...o,
@@ -89,7 +94,7 @@ export function requestOptions(json: Json): PublicKeyCredentialRequestOptions {
 }
 
 /** A new credential → webauthn-rs `RegisterPublicKeyCredential`. */
-export function registrationJson(credential: PublicKeyCredential): Json {
+export function registrationJson(credential: PublicKeyCredential): WebAuthnJson {
   const response = credential.response as AuthenticatorAttestationResponse
   return {
     id: credential.id,
@@ -106,7 +111,7 @@ export function registrationJson(credential: PublicKeyCredential): Json {
 }
 
 /** An assertion → webauthn-rs `PublicKeyCredential`. */
-export function assertionJson(credential: PublicKeyCredential): Json {
+export function assertionJson(credential: PublicKeyCredential): WebAuthnJson {
   const response = credential.response as AuthenticatorAssertionResponse
   return {
     id: credential.id,
@@ -122,33 +127,59 @@ export function assertionJson(credential: PublicKeyCredential): Json {
   }
 }
 
-export type Reply = { ok: boolean; status: number; body: Json }
+/** A route the pages call, by its name in the contract's table. */
+export type Route = keyof typeof routes
 
-/** The endpoint a control posts to, from its `data-<name>` attribute. */
-export function endpoint(element: Element | null | undefined, name = "post"): string {
-  return element instanceof HTMLElement ? (element.dataset[name] ?? "") : ""
+/** The `{name}` parameters of a route's path. */
+type Params<P extends string> = P extends `${string}{${infer Name}}${infer Rest}`
+  ? Record<Name, string> & Params<Rest>
+  : Record<never, string>
+
+type ParamsOf<K extends Route> = Params<(typeof routes)[K]["path"]>
+
+/** A route's answer: its reply when `ok`, else a problem. */
+export type Reply<K extends Route = Route> = {
+  ok: boolean
+  status: number
+  body: Json & Partial<Replies[K]>
+}
+
+/** `path` with each `{name}` in it replaced by the encoded value `params` gives it. */
+function fill(path: string, params: Record<string, string> = {}): string {
+  return path.replace(/\{(\w+)\}/g, (_, name: string) => encodeURIComponent(params[name] ?? ""))
+}
+
+/** The JSON body of `response`, or an empty object when it has none. */
+async function read(response: Response): Promise<Json> {
+  try {
+    return (await response.json()) as Json
+  } catch {
+    return {}
+  }
 }
 
 /**
- * POSTs JSON to the issuer. Same-origin only; the server also checks Fetch Metadata. A refusal
+ * Calls `route` with the method and path the route table names, filling in the path's `{name}`
+ * parameters from `params`. Same-origin only; the server also checks Fetch Metadata. A refusal
  * comes back in the page's language.
  */
-export async function post(path: string, body: Json): Promise<Reply> {
-  const response = await fetch(path, {
-    method: "POST",
+export async function call<K extends Route>(
+  route: K,
+  body: Requests[K],
+  ...[params]: keyof ParamsOf<K> extends never ? [] : [ParamsOf<K>]
+): Promise<Reply<K>> {
+  const { method, path } = routes[route]
+  const response = await fetch(fill(path, params), {
+    method,
     credentials: "same-origin",
     headers: {
       "content-type": "application/json",
       "accept-language": document.documentElement.lang || "en",
     },
-    body: JSON.stringify(body),
+    body: body === null ? undefined : JSON.stringify(body),
   })
-  let json: Json = {}
-  try {
-    json = (await response.json()) as Json
-  } catch {
-    // Empty or non-JSON body.
-  }
+  // The server's word for what it sent: the route's reply when ok, else a problem.
+  const json = (await read(response)) as Reply<K>["body"]
   return { ok: response.ok, status: response.status, body: json }
 }
 
@@ -195,29 +226,29 @@ export function redirect(reply: Reply): string | null {
 
 /**
  * Wires the "Continue with <provider>" buttons: each starts an upstream sign-in (or, with a
- * token, linking) at its `data-start` endpoint and follows the provider URL the server returns.
+ * token, linking) for its `data-provider` and follows the provider URL the server returns.
  * `steps` take over the steps the server names; otherwise its message shows.
  */
 export function upstreamButtons(
-  body: () => Json,
+  body: () => Requests["upstreamStart"],
   text: Text,
   steps: Partial<Record<Step, (reply: Reply) => void>> = {},
 ): void {
-  for (const button of document.querySelectorAll<HTMLButtonElement>("button[data-start]")) {
-    const start = endpoint(button, "start")
-    button.addEventListener("click", () => void startUpstream(start, body(), text, steps))
+  for (const button of document.querySelectorAll<HTMLButtonElement>("button[data-provider]")) {
+    const provider = button.dataset.provider ?? ""
+    button.addEventListener("click", () => void startUpstream(provider, body(), text, steps))
   }
 }
 
 async function startUpstream(
-  start: string,
-  body: Json,
+  provider: string,
+  body: Requests["upstreamStart"],
   text: Text,
   steps: Partial<Record<Step, (reply: Reply) => void>>,
 ): Promise<void> {
   say("error", "")
   say("status", text("msgWorking"))
-  const reply = await post(start, body).catch(unreachable)
+  const reply = await call("upstreamStart", body, { provider }).catch(unreachable)
   const to = redirect(reply)
   if (to) return window.location.assign(to)
   say("status", "")

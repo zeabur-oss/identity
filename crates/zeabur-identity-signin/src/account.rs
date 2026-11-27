@@ -28,10 +28,10 @@
 use std::time::Duration;
 
 use axum::Router;
-use axum::extract::{RawQuery, State};
+use axum::extract::{Path, RawQuery, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Redirect, Response};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, patch, post, put};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use schemars::JsonSchema;
@@ -142,47 +142,53 @@ pub(crate) fn passkey_endpoints<B: Backend>() -> Router<Shared<B>> {
 }
 
 /// The account routes. `/` leads to the account page, which offers sign-in without a session.
+/// A credential or session is a resource: `PATCH` changes it and `DELETE` removes it. The
+/// `…/options` routes and `/account/reauth` stay `POST`, as they start or finish a ceremony.
 pub(crate) fn routes<B: Backend>() -> Router<Shared<B>> {
     Router::new()
         .route("/", get(|| async { Redirect::to(ACCOUNT_PATH) }))
         .route(ACCOUNT_PATH, get(page::<B>))
         .route("/account/session/options", post(session_options::<B>))
-        .route("/account/session", post(session_create::<B>))
+        .route(
+            "/account/session",
+            post(session_create::<B>).delete(sign_out::<B>),
+        )
         .route(
             "/account/session/password",
             post(crate::password::account_session::<B>),
         )
-        .route("/account/sign-out", post(sign_out::<B>))
         .route("/account/reauth/options", post(reauth_options::<B>))
         .route("/account/reauth", post(reauth::<B>))
         .route("/account/passkeys/options", post(add_options::<B>))
         .route("/account/passkeys", post(add::<B>))
-        .route("/account/passkeys/rename", post(rename::<B>))
-        .route("/account/passkeys/remove", post(remove::<B>))
-        .route("/account/sessions/revoke", post(revoke::<B>))
-        .route("/account/sessions/revoke-others", post(revoke_others::<B>))
-        .route("/account/links/remove", post(unlink::<B>))
-        .route("/account/password", post(crate::password::change::<B>))
+        .route(
+            "/account/passkeys/{name}",
+            patch(rename::<B>).delete(remove::<B>),
+        )
+        .route("/account/sessions", delete(revoke_others::<B>))
+        .route("/account/sessions/{name}", delete(revoke::<B>))
+        .route("/account/links/{name}", delete(unlink::<B>))
+        .route(
+            "/account/password",
+            post(crate::password::add::<B>)
+                .put(crate::password::change::<B>)
+                .delete(crate::password::remove::<B>),
+        )
         .route(
             "/account/password/options",
             post(crate::password::add_options::<B>),
         )
-        .route("/account/password/add", post(crate::password::add::<B>))
         .route(
             "/account/authenticator/options",
             post(crate::password::authenticator_options::<B>),
         )
         .route(
             "/account/authenticator",
-            post(crate::password::replace_authenticator::<B>),
+            put(crate::password::replace_authenticator::<B>),
         )
         .route(
             "/account/recovery-codes",
             post(crate::password::regenerate::<B>),
-        )
-        .route(
-            "/account/password/remove",
-            post(crate::password::remove::<B>),
         )
 }
 
@@ -399,26 +405,27 @@ pub(crate) fn done(signed_out: bool, accepted: Option<Accepted>) -> Response {
     response
 }
 
-#[derive(Deserialize)]
-struct AssertionRequest {
+#[derive(Deserialize, JsonSchema)]
+#[schemars(rename = "PasskeyAssertionRequest")]
+pub(crate) struct AssertionRequest {
+    /// The assertion, in the webauthn-rs `PublicKeyCredential` form.
+    #[schemars(with = "crate::WebAuthnJson")]
     credential: PublicKeyCredential,
 }
 
-#[derive(Deserialize)]
-struct AddRequest {
+#[derive(Deserialize, JsonSchema)]
+#[schemars(rename = "AddPasskeyRequest")]
+pub(crate) struct AddRequest {
+    /// The new credential, in the webauthn-rs `RegisterPublicKeyCredential` form.
+    #[schemars(with = "crate::WebAuthnJson")]
     credential: RegisterPublicKeyCredential,
     #[serde(default)]
     label: Option<String>,
 }
 
-#[derive(Deserialize)]
-struct NameRequest {
-    name: String,
-}
-
-#[derive(Deserialize)]
-struct RenameRequest {
-    name: String,
+#[derive(Deserialize, JsonSchema)]
+#[schemars(rename = "RenamePasskeyRequest")]
+pub(crate) struct RenameRequest {
     label: String,
 }
 
@@ -1024,6 +1031,7 @@ async fn add<B: Backend>(
 async fn rename<B: Backend>(
     State(service): State<Shared<B>>,
     requester: Requester,
+    Path(name): Path<String>,
     request: Result<Body<Account, RenameRequest>, Problem>,
 ) -> Response {
     let now = service.oauth.now();
@@ -1041,10 +1049,7 @@ async fn rename<B: Backend>(
             .passkeys(&account.user)
             .await
             .map_err(Problem::internal)?;
-        let target = passkeys
-            .iter()
-            .find(|p| p.name == request.name)
-            .ok_or(NOT_FOUND)?;
+        let target = passkeys.iter().find(|p| p.name == name).ok_or(NOT_FOUND)?;
         audit.credential = Some(target.name.clone());
         audit.aaguid.clone_from(&target.aaguid);
         match service
@@ -1105,7 +1110,8 @@ pub(crate) async fn revoke_by_credential<B: Backend>(
 async fn remove<B: Backend>(
     State(service): State<Shared<B>>,
     requester: Requester,
-    request: Result<Body<Account, NameRequest>, Problem>,
+    Path(name): Path<String>,
+    account: Result<Account, Problem>,
 ) -> Response {
     let now = service.oauth.now();
     let mut user = None;
@@ -1114,7 +1120,7 @@ async fn remove<B: Backend>(
         ..Audit::default()
     };
     let result: Result<Response, Problem> = async {
-        let Body(account, request) = request?;
+        let account = account?;
         audit.session = Some(account.token.name.clone());
         require_fresh(&account, now)?;
         let passkeys = service
@@ -1122,10 +1128,7 @@ async fn remove<B: Backend>(
             .passkeys(&account.user)
             .await
             .map_err(Problem::internal)?;
-        let target = passkeys
-            .iter()
-            .find(|p| p.name == request.name)
-            .ok_or(NOT_FOUND)?;
+        let target = passkeys.iter().find(|p| p.name == name).ok_or(NOT_FOUND)?;
         audit.credential = Some(target.name.clone());
         audit.aaguid.clone_from(&target.aaguid);
         match service
@@ -1157,7 +1160,8 @@ async fn remove<B: Backend>(
 async fn unlink<B: Backend>(
     State(service): State<Shared<B>>,
     requester: Requester,
-    request: Result<Body<Account, NameRequest>, Problem>,
+    Path(name): Path<String>,
+    account: Result<Account, Problem>,
 ) -> Response {
     let now = service.oauth.now();
     let mut user = None;
@@ -1166,7 +1170,7 @@ async fn unlink<B: Backend>(
         ..Audit::default()
     };
     let result: Result<Response, Problem> = async {
-        let Body(account, request) = request?;
+        let account = account?;
         audit.session = Some(account.token.name.clone());
         require_fresh(&account, now)?;
         let linked = service
@@ -1174,10 +1178,7 @@ async fn unlink<B: Backend>(
             .linked_accounts(&account.user)
             .await
             .map_err(Problem::internal)?;
-        let target = linked
-            .iter()
-            .find(|l| l.name == request.name)
-            .ok_or(NOT_FOUND)?;
+        let target = linked.iter().find(|l| l.name == name).ok_or(NOT_FOUND)?;
         audit.credential = Some(target.name.clone());
         match service
             .credentials
@@ -1207,7 +1208,8 @@ async fn unlink<B: Backend>(
 async fn revoke<B: Backend>(
     State(service): State<Shared<B>>,
     requester: Requester,
-    request: Result<Body<Account, NameRequest>, Problem>,
+    Path(name): Path<String>,
+    account: Result<Account, Problem>,
 ) -> Response {
     let now = service.oauth.now();
     let mut user = None;
@@ -1216,7 +1218,7 @@ async fn revoke<B: Backend>(
         ..Audit::default()
     };
     let result: Result<Response, Problem> = async {
-        let Body(account, request) = request?;
+        let account = account?;
         let grants = service
             .oauth
             .grants
@@ -1225,7 +1227,7 @@ async fn revoke<B: Backend>(
             .map_err(Problem::internal)?;
         let target = grants
             .iter()
-            .find(|g| g.spec.name == request.name)
+            .find(|g| g.spec.name == name)
             .ok_or(NOT_FOUND)?;
         audit.session = Some(target.spec.name.clone());
         audit.credential.clone_from(&target.spec.credential);

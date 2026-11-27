@@ -115,11 +115,6 @@ mod tests {
     }
 
     /// A request body that names a credential.
-    #[derive(Serialize)]
-    struct Name<'a> {
-        name: &'a str,
-    }
-
     /// An OAuth token response (RFC 6749 section 5.1) of a fake provider.
     #[derive(Serialize)]
     struct ProviderToken<'a> {
@@ -1685,21 +1680,27 @@ mod tests {
         body: &(impl Serialize + Sync),
         cookies: &str,
     ) -> Reply {
+        let body = serde_json::to_string(body).unwrap();
+        account_call(h, Method::POST, path, body, cookies).await
+    }
+
+    /// An account page request with `method` and the JSON `body`, which may be empty.
+    async fn account_call(
+        h: &Harness,
+        method: Method,
+        path: &str,
+        body: String,
+        cookies: &str,
+    ) -> Reply {
         let mut request = Request::builder()
-            .method(Method::POST)
+            .method(method)
             .uri(path)
             .header(header::ORIGIN, ISSUER)
             .header(header::CONTENT_TYPE, "application/json");
         if !cookies.is_empty() {
             request = request.header(header::COOKIE, cookies);
         }
-        call(
-            &h.app,
-            request
-                .body(Body::from(serde_json::to_string(body).unwrap()))
-                .unwrap(),
-        )
-        .await
+        call(&h.app, request.body(Body::from(body)).unwrap()).await
     }
 
     /// Starts linking `provider` from `session` and plays the provider. Returns the callback
@@ -2089,8 +2090,8 @@ mod tests {
             let cookie = session.cookie.clone();
             let h = &h;
             async move {
-                let body = Name { name: &name };
-                account_post(h, "/account/links/remove", &body, &cookie).await
+                let path = format!("/account/links/{name}");
+                account_call(h, Method::DELETE, &path, String::new(), &cookie).await
             }
         };
         let reply = unlink(&stale, &github).await;

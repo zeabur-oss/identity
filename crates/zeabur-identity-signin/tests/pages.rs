@@ -69,18 +69,15 @@ mod tests {
         )
     }
 
-    /// The upstream buttons of `html` in page order: the provider ID each starts (the script
-    /// posts to its `data-start`, `/upstream/{id}/start`) and its text, with markup removed and
-    /// entities decoded.
+    /// The upstream buttons of `html` in page order: the provider ID each starts (its
+    /// `data-provider`, which the script fills into `/upstream/{provider}/start`) and its text,
+    /// with markup removed and entities decoded.
     fn provider_buttons(html: &str) -> Vec<(String, String)> {
         let mut buttons = Vec::new();
         let mut rest = html;
-        while let Some(at) = rest.find("data-start=\"/upstream/") {
-            rest = rest.get(at + "data-start=\"/upstream/".len()..).unwrap();
-            let id = rest
-                .get(..rest.find("/start\"").unwrap())
-                .unwrap()
-                .to_owned();
+        while let Some(at) = rest.find("data-provider=\"") {
+            rest = rest.get(at + "data-provider=\"".len()..).unwrap();
+            let id = rest.get(..rest.find('"').unwrap()).unwrap().to_owned();
             let inner = rest.get(rest.find('>').unwrap() + 1..rest.find("</button>").unwrap());
             let mut text = String::new();
             let mut in_tag = false;
@@ -115,7 +112,7 @@ mod tests {
             .body
             .find(passkey)
             .unwrap_or_else(|| panic!("no {passkey}"));
-        if let Some(first) = page.body.find("data-start=") {
+        if let Some(first) = page.body.find("data-provider=") {
             assert!(passkey_at < first, "a provider comes before the passkey");
         }
     }
@@ -621,12 +618,12 @@ mod tests {
     async fn provider_buttons_appear_only_when_configured() {
         let plain = app().await;
         let page = get(&plain, "/setup", &[]).await;
-        assert!(!page.body.contains("data-start"));
+        assert!(!page.body.contains("data-provider"));
 
         let app = app_with(registry(&["github", "google"])).await;
         let page = get(&app, "/setup", &[]).await;
         assert_hardened(&page);
-        assert!(page.body.contains(r#"data-start="/upstream/github/start""#));
+        assert!(page.body.contains(r#"data-provider="github""#));
         assert!(page.body.contains("Continue with Google"));
 
         let reply = get(
@@ -646,7 +643,7 @@ mod tests {
             .unwrap()
             .to_owned();
         let page = get(&app, "/login", &[("cookie", &cookie)]).await;
-        assert!(page.body.contains("data-start"));
+        assert!(page.body.contains("data-provider"));
     }
 
     /// The login and setup pages offer exactly the configured providers, by display name, in
