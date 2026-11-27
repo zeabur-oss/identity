@@ -3,6 +3,7 @@
 {%- import "icons.html" as icons -%}
 {%- import "ds.html" as ds -%}
 {%- import "password.html" as password -%}
+{%- import "totp.html" as totp -%}
 {%- macro method_icon(name) -%}
 <div class="flex size-8 shrink-0 items-center justify-center rounded-md border border-v2-border bg-v2-surface-hover text-secondary">{{ icons::icon(name, "size-4") }}</div>
 {%- endmacro -%}
@@ -18,6 +19,20 @@
     {%- if let Some(credential) = s.credential %} · {{ (m.session_passkey)(credential) }}{% endif %}</p>
 </div>
 {%- endmacro -%}
+{#- What confirms a change to the authenticator: the current password and a code, or else a passkey. -#}
+{%- macro confirm_fields(m, prefix, username, passkey) -%}
+<p data-slot="dialog-description" class="{{ ds::dialog_description() }} text-pretty">{{ m.authenticator_confirm }}
+  {%- if passkey %} {{ m.authenticator_confirm_passkey }}{% endif %}</p>
+<input type="text" name="username" autocomplete="username" value="{{ username }}" hidden>
+{% call ui::field(prefix ~ "-current", m.password_current) %}
+<input id="{{ prefix }}-current" name="current" type="password" maxlength="{{ zeabur_identity_core::password::MAX_BYTES }}"{% if !passkey %} required{% endif %} class="{{ ds::input() }}" autocomplete="current-password">
+{% endcall %}
+{% call ui::field(prefix ~ "-code", m.login_code, m.login_code_hint) %}
+<input id="{{ prefix }}-code" name="code" type="text" maxlength="32"{% if !passkey %} required{% endif %} class="{{ ds::input() }}"
+       autocomplete="one-time-code" autocapitalize="none" spellcheck="false"
+       {{- ui::field_describedby(prefix ~ "-code", m.login_code_hint) }}>
+{% endcall %}
+{%- endmacro -%}
 {%- block title %}{{ m.account_title }}{% endblock -%}
 {%- block head %}<script type="module" src="{{ crate::assets::url("account.js") }}"></script>{% endblock -%}
 {%- block content %}
@@ -27,7 +42,8 @@
      data-msg-working="{{ m.working }}" data-msg-error="{{ m.generic_error }}" data-msg-confirm="{{ m.confirm_working }}"
      data-msg-linked="{{ m.upstream_linked_title }}" data-msg-password-changed="{{ m.password_changed }}"
      data-msg-password-removed="{{ m.password_removed }}" data-msg-too-short="{{ m.too_short() }}"
-     data-msg-password-missing="{{ m.password_missing }}">
+     data-msg-password-missing="{{ m.password_missing }}" data-msg-password-added="{{ m.password_added }}"
+     data-msg-authenticator-replaced="{{ m.authenticator_replaced }}" data-msg-recovery-regenerated="{{ m.recovery_regenerated }}">
 {%- match view %}
 {%- when None %}
 {% call ui::card() %}
@@ -71,6 +87,9 @@
     <div id="status" role="status" aria-live="polite" class="empty:sr-only text-[0.8125rem] leading-5 text-secondary"></div>
     <div id="error" role="alert" class="empty:sr-only text-[0.8125rem] leading-5 text-pretty text-fail-strong"></div>
     <noscript>{% call ui::alert(m.noscript_title, "default", "Key", live = "") %}{{ m.noscript_body }}{% endcall %}</noscript>
+    {% call totp::recovery(m) %}
+    <button type="button" id="recovery-saved" class="{{ ds::button("default", "sm") }} self-start">{{ m.recovery_saved }}</button>
+    {% endcall %}
   </div>
 {% endcall %}{% endcall %}
 
@@ -168,6 +187,25 @@
             <button type="button" data-opens="confirm" data-post="/account/password/remove" class="{{ ds::button("secondary-destructive", "sm") }}">{{ m.remove }}</button>
           </div>
         </div>
+        {%- if password.authenticator %}
+        <div class="flex flex-wrap gap-2 pl-11">
+          <button type="button" data-opens="authenticator" data-options="/account/authenticator/options" data-post="/account/authenticator" class="{{ ds::button("secondary", "sm") }}">{{ m.authenticator_replace }}</button>
+          <button type="button" data-opens="recovery" data-post="/account/recovery-codes" class="{{ ds::button("secondary", "sm") }}">{{ m.recovery_regenerate }}</button>
+        </div>
+        {% call ui::dialog("authenticator", "authenticator-title", m.authenticator_replace_title, m.authenticator_replace, m.cancel) %}
+        <div class="flex flex-col gap-4">
+        <p data-slot="dialog-description" class="{{ ds::dialog_description() }} text-pretty">{{ m.authenticator_replace_body }}</p>
+        <div id="totp" class="flex flex-col gap-4">{{ totp::enrol(m, m.authenticator_new_code) }}</div>
+        {{ confirm_fields(m, "authenticator", view.username, view.passkey_confirms) }}
+        </div>
+        {%- endcall %}
+        {% call ui::dialog("recovery", "recovery-title", m.recovery_regenerate_title, m.recovery_regenerate, m.cancel) %}
+        <div class="flex flex-col gap-4">
+        <p data-slot="dialog-description" class="{{ ds::dialog_description() }} text-pretty">{{ m.recovery_regenerate_body }}</p>
+        {{ confirm_fields(m, "recovery", view.username, view.passkey_confirms) }}
+        </div>
+        {%- endcall %}
+        {%- endif %}
         {% call ui::dialog("change", "password-change-title", m.password_change, m.save, m.cancel, form_id = "password-change") %}
         <div class="flex flex-col gap-4">
         <p data-slot="dialog-description" class="{{ ds::dialog_description() }} text-pretty">{{ m.password_note }}
@@ -188,6 +226,37 @@
         <label class="sr-only" for="remove-current">{{ m.password_current }}</label>
         <input id="remove-current" name="current" type="password" maxlength="{{ zeabur_identity_core::password::MAX_BYTES }}" required autofocus autocomplete="current-password"
                placeholder="{{ m.password_current }}" class="{{ ds::input() }}">
+        {%- endcall %}
+        <p data-status role="status" aria-live="polite" class="empty:sr-only text-[0.8125rem] leading-5 text-secondary"></p>
+        <p data-error role="alert" class="empty:sr-only text-[0.8125rem] leading-5 text-pretty text-fail-strong"></p>
+      </li>
+      {%- else if view.password_addable && view.passkey_confirms %}
+      <li id="password" class="flex flex-col gap-1 py-3 first:pt-0 last:pb-0">
+        <div class="flex flex-wrap items-start gap-x-3 gap-y-2">
+          {{ method_icon("Password") }}
+          <div class="flex min-w-0 flex-1 basis-32 flex-col gap-0.5">
+            <h3 class="text-sm leading-5 font-medium text-main">{{ m.password_title }}</h3>
+            <p class="text-[0.8125rem] leading-5 text-secondary">{{ m.password_off }}</p>
+          </div>
+          <button type="button" data-opens="add-password" data-options="/account/password/options" data-post="/account/password/add" class="{{ ds::button("secondary", "sm") }}">{{ m.add }}</button>
+        </div>
+        {% call ui::dialog("add-password", "password-add-title", m.password_add, m.add, m.cancel, form_id = "password-add") %}
+        <div class="flex flex-col gap-4">
+        <p data-slot="dialog-description" class="{{ ds::dialog_description() }} text-pretty">{{ m.password_add_note }}</p>
+        <input type="text" name="username" autocomplete="username" value="{{ view.username }}" hidden>
+        {% call ui::field("new-password", m.setup_password, m.password_hint()) %}
+        <input id="new-password" name="new" type="password" minlength="{{ zeabur_identity_core::password::MIN_CHARS }}" maxlength="{{ zeabur_identity_core::password::MAX_BYTES }}" required class="{{ ds::input() }}" autocomplete="new-password"
+               {{- ui::field_describedby("new-password", m.password_hint()) }}>
+        {% endcall %}
+        {#- Filled by the script when the account needs a second factor. -#}
+        <div id="totp" hidden class="flex flex-col gap-4">
+          <div class="flex flex-col gap-1.5 text-[0.8125rem] leading-5 text-pretty text-secondary">
+            <p class="text-sm leading-5 font-medium text-main">{{ m.setup_totp_title }}</p>
+            <p>{{ m.setup_totp_body }}</p>
+          </div>
+          {{ totp::enrol(m, m.setup_totp_code) }}
+        </div>
+        </div>
         {%- endcall %}
         <p data-status role="status" aria-live="polite" class="empty:sr-only text-[0.8125rem] leading-5 text-secondary"></p>
         <p data-error role="alert" class="empty:sr-only text-[0.8125rem] leading-5 text-pretty text-fail-strong"></p>

@@ -15,6 +15,7 @@ import {
   upstreamButtons,
 } from "./webauthn"
 import { longEnough } from "./password"
+import { showEnrolment, showRecovery, totpAnswer } from "./totp"
 import type { PasswordSetUp, PasswordSetupOptions } from "./contract"
 
 const form = document.getElementById("setup") as HTMLFormElement | null
@@ -111,26 +112,8 @@ async function passwordOptions(token: string): Promise<boolean> {
     return false
   }
   const { totp } = reply.body as PasswordSetupOptions
-  if (totp) {
-    sealed = totp.sealed
-    drawQr(totp.qr.size, totp.qr.path)
-    const secret = document.getElementById("totp-secret")
-    if (secret) secret.textContent = totp.secret_display
-    document.getElementById("totp")?.removeAttribute("hidden")
-  }
+  if (totp) sealed = showEnrolment(totp)
   return true
-}
-
-/** Draws the QR code as one SVG path; the page's CSP allows no image from elsewhere. */
-function drawQr(size: number, d: string): void {
-  const svg = document.getElementById("totp-qr")
-  if (!svg) return
-  const ns = "http://www.w3.org/2000/svg"
-  svg.setAttribute("viewBox", `0 0 ${size} ${size}`)
-  const path = document.createElementNS(ns, "path")
-  path.setAttribute("d", d)
-  path.setAttribute("fill", "currentColor")
-  svg.replaceChildren(path)
 }
 
 function setPassword(event: SubmitEvent): void {
@@ -141,19 +124,12 @@ function setPassword(event: SubmitEvent): void {
   if (password === null) return
   registering = true
   say("error", "")
-  post(endpoint(passwordForm), { token, password, totp: totpAnswer() })
+  post(endpoint(passwordForm), { token, password, totp: totpAnswer(sealed) })
     .then(answered)
     .catch(() => say("error", text("msgError")))
     .finally(() => {
       registering = false
     })
-}
-
-/** The sealed secret with the code typed for it, when the account needs an authenticator. */
-function totpAnswer(): { sealed: string; code: string } | null {
-  if (!sealed) return null
-  const code = document.querySelector<HTMLInputElement>("#totp-code")?.value.trim() ?? ""
-  return { sealed, code }
 }
 
 function answered(reply: Reply): void {
@@ -165,19 +141,6 @@ function succeeded(reply: Reply): void {
   const codes = (reply.body as PasswordSetUp).recovery_codes
   if (codes) showRecovery(codes)
   done(true)
-}
-
-function showRecovery(codes: string[]): void {
-  const list = document.getElementById("recovery-codes")
-  if (!list) return
-  list.replaceChildren(
-    ...codes.map((code) => {
-      const line = document.createElement("span")
-      line.textContent = code
-      return line
-    }),
-  )
-  document.getElementById("recovery")?.removeAttribute("hidden")
 }
 
 // Done: forget the token in the address bar and history, show the result. The backup advice is

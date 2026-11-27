@@ -10,18 +10,21 @@
     "scripts/manifest.ts",
     "lint/no-unsound-cast.js"
   ],
-  // A page imports only webauthn.ts, password.ts and the generated contract.ts, never another page.
+  // A page imports only webauthn.ts, password.ts, totp.ts and the generated contract.ts, never
+  // another page.
   "boundaries": {
     "zones": [
       { "name": "pages", "patterns": ["src/login.ts", "src/setup.ts", "src/account.ts"] },
       { "name": "webauthn", "patterns": ["src/webauthn.ts"] },
       { "name": "password", "patterns": ["src/password.ts"] },
+      { "name": "totp", "patterns": ["src/totp.ts"] },
       { "name": "contract", "patterns": ["src/contract.ts"] }
     ],
     "rules": [
-      { "from": "pages", "allow": ["webauthn", "password", "contract"] },
+      { "from": "pages", "allow": ["webauthn", "password", "totp", "contract"] },
       { "from": "webauthn", "allow": ["contract"] },
       { "from": "password", "allow": [] },
+      { "from": "totp", "allow": ["contract"] },
       { "from": "contract", "allow": [] }
     ],
     "coverage": {
