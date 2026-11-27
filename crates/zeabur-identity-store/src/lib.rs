@@ -1303,21 +1303,20 @@ impl CredentialStore for MemoryCredentialStore {
             PasswordWrite::Replace(read) => current.as_deref() == Some(read.version.as_str()),
             PasswordWrite::Overwrite => true,
         };
-        let outcome = match allowed {
-            false => Saved::Conflict,
-            true => {
-                passwords.insert(
-                    name.clone(),
-                    StoredPassword {
-                        name,
-                        hash: hash.to_owned(),
-                        totp: totp.cloned(),
-                        state: PasswordState::default(),
-                        version: self.next_version(),
-                    },
-                );
-                Saved::Saved
-            }
+        let outcome = if allowed {
+            passwords.insert(
+                name.clone(),
+                StoredPassword {
+                    name,
+                    hash: hash.to_owned(),
+                    totp: totp.cloned(),
+                    state: PasswordState::default(),
+                    version: self.next_version(),
+                },
+            );
+            Saved::Saved
+        } else {
+            Saved::Conflict
         };
         drop(passwords);
         future::ready(Ok(outcome))

@@ -25,9 +25,9 @@ use zeabur_identity_core::clock::UnixTime;
 use zeabur_identity_core::guessing::{Count, Counts, Known};
 use zeabur_identity_store::{
     AccountEvent, CreateCredential, CredentialStore, LinkedAccount, LinkedSummary, NewExternal,
-    NewPasskey, PasskeySummary, PasswordRemoval, PasswordState, PasswordWrite, Removal, Rename, Saved, StoreError,
-    StoredPasskey, StoredPassword, StoredTotp, Unlink, User, password_credential_name,
-    retry_on_conflict,
+    NewPasskey, PasskeySummary, PasswordRemoval, PasswordState, PasswordWrite, Removal, Rename,
+    Saved, StoreError, StoredPasskey, StoredPassword, StoredTotp, Unlink, User,
+    password_credential_name, retry_on_conflict,
 };
 
 use super::MANAGED_BY;

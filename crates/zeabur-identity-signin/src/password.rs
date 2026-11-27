@@ -1180,7 +1180,16 @@ pub(crate) async fn change<B: Backend>(
         let totp = stored.totp.as_ref().map(|t| carried(t, &stored.state));
         let write = PasswordWrite::Replace(&stored);
         let reason = "PasswordChanged";
-        save(&service, &account, &hash, totp.as_ref(), write, reason, &mut audit).await?;
+        save(
+            &service,
+            &account,
+            &hash,
+            totp.as_ref(),
+            write,
+            reason,
+            &mut audit,
+        )
+        .await?;
         let mut response = done(false, None);
         service
             .passwords
@@ -1248,11 +1257,27 @@ pub(crate) async fn add<B: Backend>(
         require_fresh(&account, now)?;
         let offered = Offer::Session(account.token.name());
         let totp = request.totp.as_ref();
-        let new = new_password(&service, &account.user, &request.password, totp, offered, now)
-            .await?;
+        let new = new_password(
+            &service,
+            &account.user,
+            &request.password,
+            totp,
+            offered,
+            now,
+        )
+        .await?;
         let write = PasswordWrite::Add;
         let reason = "PasswordAdded";
-        save(&service, &account, &new.hash, new.totp.as_ref(), write, reason, &mut audit).await?;
+        save(
+            &service,
+            &account,
+            &new.hash,
+            new.totp.as_ref(),
+            write,
+            reason,
+            &mut audit,
+        )
+        .await?;
         let subject = &account.user.subject;
         Ok(codes(&service, &headers, subject, new.recovery_codes))
     }
@@ -1379,7 +1404,16 @@ pub(crate) async fn replace_authenticator<B: Backend>(
         let (totp, shown) = service.passwords.store(subject, &secret, step)?;
         let write = PasswordWrite::Replace(&stored);
         let reason = "AuthenticatorReplaced";
-        save(&service, &account, &stored.hash, Some(&totp), write, reason, &mut audit).await?;
+        save(
+            &service,
+            &account,
+            &stored.hash,
+            Some(&totp),
+            write,
+            reason,
+            &mut audit,
+        )
+        .await?;
         Ok(codes(&service, &headers, subject, Some(shown)))
     }
     .await;
@@ -1415,7 +1449,16 @@ pub(crate) async fn regenerate<B: Backend>(
         };
         let write = PasswordWrite::Replace(&stored);
         let reason = "RecoveryCodesRegenerated";
-        save(&service, &account, &stored.hash, Some(&totp), write, reason, &mut audit).await?;
+        save(
+            &service,
+            &account,
+            &stored.hash,
+            Some(&totp),
+            write,
+            reason,
+            &mut audit,
+        )
+        .await?;
         let subject = &account.user.subject;
         Ok(codes(&service, &headers, subject, Some(shown)))
     }

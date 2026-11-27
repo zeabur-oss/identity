@@ -41,7 +41,7 @@ use webauthn_rs::prelude::{
     RegisterPublicKeyCredential, Uuid,
 };
 use zeabur_identity_api::token_hash;
-use zeabur_identity_core::account::{Method, allows};
+use zeabur_identity_core::account::{Method, Settings, allows};
 use zeabur_identity_core::clock::UnixTime;
 use zeabur_identity_core::crypto::{CryptoError, hex, random};
 use zeabur_identity_core::protocol::ACCOUNT_PATH;
@@ -532,6 +532,14 @@ async fn live_sessions<B: Backend>(
     Ok((sessions, apps))
 }
 
+/// Whether the settings let the signed-in user sign in with a password and a code.
+const fn password_allowed(account: &Account, settings: Settings) -> bool {
+    let method = Method::Password {
+        second_factor: true,
+    };
+    allows(account.user.account_type, settings, method).is_ok()
+}
+
 async fn page<B: Backend>(
     State(service): State<Shared<B>>,
     RawQuery(query): RawQuery,
@@ -608,10 +616,6 @@ async fn page<B: Backend>(
                 .iter()
                 .filter(|d| !linked.iter().any(|account| account.issuer == d.issuer))
                 .collect();
-            let with_code = Method::Password {
-                second_factor: true,
-            };
-            let password_allowed = allows(account.user.account_type, settings, with_code).is_ok();
             let providers: Vec<ProviderButton<'_>> = unlinked
                 .iter()
                 .filter(|d| allows(account.user.account_type, settings, d.method).is_ok())
@@ -628,7 +632,7 @@ async fn page<B: Backend>(
                     password: password.as_ref().map(|p| PasswordView {
                         authenticator: p.totp.is_some(),
                     }),
-                    password_addable: password.is_none() && password_allowed,
+                    password_addable: password.is_none() && password_allowed(&account, settings),
                     passkey_confirms: !passkeys.is_empty() || is_fresh(&account.session, now),
                     sessions: &session_rows,
                 }),

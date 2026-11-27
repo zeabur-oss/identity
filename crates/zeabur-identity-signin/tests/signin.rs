@@ -1709,7 +1709,7 @@ mod tests {
             Session { cookie }
         }
 
-        async fn reauth(h: &Harness, session: &Session, device: &mut Device) -> Reply {
+        pub(super) async fn reauth(h: &Harness, session: &Session, device: &mut Device) -> Reply {
             let reply = post(
                 &h.app,
                 "/account/reauth/options",
@@ -1782,7 +1782,7 @@ mod tests {
             .await
         }
 
-        fn advance(h: &Harness, by: std::time::Duration) {
+        pub(super) fn advance(h: &Harness, by: std::time::Duration) {
             h.clock.0.fetch_add(by.as_secs(), Ordering::SeqCst);
         }
 
@@ -1867,7 +1867,7 @@ mod tests {
                 .collect()
         }
 
-        async fn enrol_dana(h: &Harness) -> Device {
+        pub(super) async fn enrol_dana(h: &Harness) -> Device {
             let mut dana = device();
             let (credential, ceremony) = start_enrolment(h, &mut dana, INVITATION).await;
             let reply = post(
@@ -2412,7 +2412,7 @@ mod tests {
     mod password {
         use zeabur_identity_core::guessing::{HOLD, LIMIT};
         use zeabur_identity_core::totp::{RECOVERY_CODES, STEP, Secret};
-        use zeabur_identity_signin::account::SESSION_COOKIE;
+        use zeabur_identity_signin::account::{REAUTH_WINDOW, SESSION_COOKIE};
         use zeabur_identity_signin::password::DEVICE_COOKIE;
         use zeabur_identity_store::GrantStore as _;
 
@@ -3201,6 +3201,335 @@ mod tests {
                 assert_eq!(reply.body, wrong.body, "{username}");
                 assert!(reply.cookie(SESSION_COOKIE).is_none());
             }
+        }
+
+        #[derive(Serialize)]
+        struct PasswordAdd<'a> {
+            password: &'a str,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            totp: Option<TotpSetup<'a>>,
+        }
+
+        /// The body of `/account/authenticator` and `/account/recovery-codes`.
+        #[derive(Serialize, Default)]
+        struct Confirm<'a> {
+            #[serde(skip_serializing_if = "Option::is_none")]
+            current: Option<&'a str>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            code: Option<&'a str>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            totp: Option<TotpSetup<'a>>,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct RecoveryCodes {
+            recovery_codes: Option<Vec<String>>,
+        }
+
+        /// Only a user who can add a password sees the button for it.
+        const ADD_PASSWORD: &str = "data-post=\"/account/password/add\"";
+
+        async fn add_options(h: &Harness, session: &Session) -> Reply {
+            post(
+                &h.app,
+                "/account/password/options",
+                &Empty {},
+                &session.cookies(),
+            )
+            .await
+        }
+
+        async fn add_password(
+            h: &Harness,
+            session: &Session,
+            password: &str,
+            totp: Option<TotpSetup<'_>>,
+        ) -> Reply {
+            let body = &PasswordAdd { password, totp };
+            post(&h.app, "/account/password/add", body, &session.cookies()).await
+        }
+
+        async fn confirmed(
+            h: &Harness,
+            path: &str,
+            session: &Session,
+            device: &str,
+            body: &Confirm<'_>,
+        ) -> Reply {
+            let cookies = [
+                (SESSION_COOKIE, session.cookie.as_str()),
+                (DEVICE_COOKIE, device),
+            ];
+            post(&h.app, path, body, &cookies).await
+        }
+
+        fn shown_codes(reply: &Reply) -> Vec<String> {
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+            let codes = reply.parse::<RecoveryCodes>().recovery_codes.unwrap();
+            assert_eq!(codes.len(), RECOVERY_CODES);
+            codes
+        }
+
+        fn secret_of(enrolment: &Enrolment) -> Secret {
+            Secret::from_bytes(&base32(&enrolment.secret)).unwrap()
+        }
+
+        #[tokio::test]
+        async fn a_password_is_added_after_a_passkey_confirmation() {
+            let h = harness().await;
+            let mut dana = account::enrol_dana(&h).await;
+            let session = sign_in_to_account(&h, &mut dana).await;
+            let other = sign_in_to_account(&h, &mut dana).await;
+            assert!(page(&h, Some(&session.cookie)).await.contains(ADD_PASSWORD));
+
+            account::advance(&h, REAUTH_WINDOW);
+            for reply in [
+                add_options(&h, &session).await,
+                add_password(&h, &session, GOOD, None).await,
+            ] {
+                assert_eq!(reply.status, StatusCode::FORBIDDEN, "{}", reply.body);
+                assert!(reply.kind().ends_with(":reauth-required"));
+            }
+            assert!(
+                sign_in(&h, "dana", GOOD, None)
+                    .await
+                    .kind()
+                    .ends_with(":password-failed")
+            );
+
+            let reply = account::reauth(&h, &session, &mut dana).await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+            let reply = add_options(&h, &session).await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+            assert!(reply.parse::<PasswordOptions>().totp.is_none());
+            let reply = add_password(&h, &session, "too short", None).await;
+            assert_eq!(reply.problem().weakness.as_deref(), Some("too-short"));
+            let reply = add_password(&h, &session, GOOD, None).await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+            assert!(reply.parse::<RecoveryCodes>().recovery_codes.is_none());
+            assert!(reply.cookie(DEVICE_COOKIE).is_some());
+            let audit = &reply.audit().fields;
+            assert_eq!(audit["event"], "account.password_added");
+            assert_eq!(audit["revoked"], FieldValue::Count(1));
+            assert_eq!(
+                h.service.credentials.events().pop().unwrap().reason,
+                "PasswordAdded"
+            );
+            assert!(
+                page(&h, Some(&other.cookie))
+                    .await
+                    .contains(SIGNED_OUT_MARK)
+            );
+
+            let reply = sign_in(&h, "dana", GOOD, None).await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+            let html = page(&h, Some(&session.cookie)).await;
+            assert!(!html.contains(ADD_PASSWORD));
+            for reply in [
+                add_options(&h, &session).await,
+                add_password(&h, &session, "amber window over the old mill", None).await,
+            ] {
+                assert_eq!(reply.status, StatusCode::CONFLICT, "{}", reply.body);
+                assert!(reply.kind().ends_with(":password-exists"));
+            }
+        }
+
+        #[tokio::test]
+        async fn an_admin_adds_a_password_only_with_an_authenticator() {
+            let (h, mut passkey, session) = signed_in().await;
+            let reply = add_options(&h, &session).await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+            let enrolment = reply.parse::<PasswordOptions>().totp.unwrap();
+            let secret = secret_of(&enrolment);
+            let totp = |code| {
+                Some(TotpSetup {
+                    sealed: &enrolment.sealed,
+                    code,
+                })
+            };
+
+            let reply = add_password(&h, &session, GOOD, None).await;
+            assert_eq!(reply.status, StatusCode::FORBIDDEN, "{}", reply.body);
+            assert!(reply.kind().ends_with(":admin-needs-two-factor"));
+            let reply = add_password(&h, &session, GOOD, totp("000000")).await;
+            assert!(reply.kind().ends_with(":code-failed"), "{}", reply.body);
+            // An authenticator offered to another session does not work here.
+            let elsewhere = sign_in_to_account(&h, &mut passkey).await;
+            let code = secret.code_at(now(&h));
+            let reply = add_password(&h, &elsewhere, GOOD, totp(&code)).await;
+            assert!(reply.kind().ends_with(":no-request"), "{}", reply.body);
+            let admin = account::user(&h, "admin").await;
+            assert!(
+                h.service
+                    .credentials
+                    .password(&admin)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+
+            let reply = add_password(&h, &session, GOOD, totp(&code)).await;
+            let codes = shown_codes(&reply);
+            next_step(&h);
+            let reply = sign_in_with_code(&h, Some(&secret.code_at(now(&h))), None).await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+            let reply = sign_in_with_code(&h, Some(&codes[0]), None).await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        }
+
+        #[tokio::test]
+        async fn a_new_authenticator_retires_the_old_secret_and_codes() {
+            let (h, mut passkey, session, old, old_codes, device) = account_with_password().await;
+            let other = sign_in_to_account(&h, &mut passkey).await;
+            let html = page(&h, Some(&session.cookie)).await;
+            assert!(html.contains("data-post=\"/account/authenticator\""));
+            assert!(html.contains("data-post=\"/account/recovery-codes\""));
+            let reply = post(
+                &h.app,
+                "/account/authenticator/options",
+                &Empty {},
+                &session.cookies(),
+            )
+            .await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+            let enrolment: Enrolment = reply.parse();
+            let new = secret_of(&enrolment);
+            next_step(&h);
+            let (confirm, code) = (old.code_at(now(&h)), new.code_at(now(&h)));
+            let body = Confirm {
+                current: Some(GOOD),
+                code: Some(&confirm),
+                totp: Some(TotpSetup {
+                    sealed: &enrolment.sealed,
+                    code: &code,
+                }),
+            };
+            let reply = confirmed(&h, "/account/authenticator", &session, &device, &body).await;
+            let codes = shown_codes(&reply);
+            assert_eq!(
+                reply.audit().fields["event"],
+                "account.authenticator_replaced"
+            );
+            let event = h.service.credentials.events().pop().unwrap();
+            assert_eq!(event.reason, "AuthenticatorReplaced");
+            assert!(
+                page(&h, Some(&other.cookie))
+                    .await
+                    .contains(SIGNED_OUT_MARK)
+            );
+            assert!(
+                !page(&h, Some(&session.cookie))
+                    .await
+                    .contains(SIGNED_OUT_MARK)
+            );
+
+            next_step(&h);
+            let known = Some(device.as_str());
+            let reply = sign_in_with_code(&h, Some(&old.code_at(now(&h))), known).await;
+            assert!(reply.kind().ends_with(":code-failed"), "old secret");
+            let reply = sign_in_with_code(&h, Some(&old_codes[5]), known).await;
+            assert!(reply.kind().ends_with(":code-failed"), "old recovery code");
+            let reply = sign_in_with_code(&h, Some(&new.code_at(now(&h))), known).await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+            let reply = sign_in_with_code(&h, Some(&codes[0]), known).await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        }
+
+        #[tokio::test]
+        async fn new_recovery_codes_retire_the_old_ones_and_keep_the_app() {
+            let (h, mut passkey, session, secret, old_codes, device) =
+                account_with_password().await;
+            let path = "/account/recovery-codes";
+            // Without the current password, the change needs a passkey confirmation.
+            account::advance(&h, REAUTH_WINDOW);
+            let reply = confirmed(&h, path, &session, &device, &Confirm::default()).await;
+            assert!(reply.kind().ends_with(":reauth-required"), "{}", reply.body);
+            let other = sign_in_to_account(&h, &mut passkey).await;
+            let reply = account::reauth(&h, &session, &mut passkey).await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+            let reply = confirmed(&h, path, &session, &device, &Confirm::default()).await;
+            let codes = shown_codes(&reply);
+            assert_ne!(codes, old_codes);
+            assert_eq!(
+                reply.audit().fields["event"],
+                "account.recovery_codes_regenerated"
+            );
+            let event = h.service.credentials.events().pop().unwrap();
+            assert_eq!(event.reason, "RecoveryCodesRegenerated");
+            assert!(
+                page(&h, Some(&other.cookie))
+                    .await
+                    .contains(SIGNED_OUT_MARK)
+            );
+
+            let known = Some(device.as_str());
+            let reply = sign_in_with_code(&h, Some(&old_codes[0]), known).await;
+            assert!(reply.kind().ends_with(":code-failed"), "old recovery code");
+            let reply = sign_in_with_code(&h, Some(&codes[0]), known).await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+            next_step(&h);
+            let reply = sign_in_with_code(&h, Some(&secret.code_at(now(&h))), known).await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        }
+
+        #[tokio::test]
+        async fn a_wrong_password_or_code_is_refused_and_counted() {
+            let (h, mut passkey, session, secret, codes, device) = account_with_password().await;
+            let path = "/account/recovery-codes";
+            let wrong = Confirm {
+                current: Some("not my password at all"),
+                code: Some(&codes[0]),
+                ..Confirm::default()
+            };
+            let reply = confirmed(&h, path, &session, &device, &wrong).await;
+            assert_eq!(reply.status, StatusCode::FORBIDDEN, "{}", reply.body);
+            assert!(reply.kind().ends_with(":current-password-wrong"));
+            for code in [None, Some(""), Some("000000")] {
+                let body = Confirm {
+                    current: Some(GOOD),
+                    code,
+                    ..Confirm::default()
+                };
+                let reply = confirmed(&h, path, &session, &device, &body).await;
+                assert!(
+                    reply.kind().ends_with(":code-failed"),
+                    "{code:?}: {}",
+                    reply.body
+                );
+            }
+            for _ in 0..LIMIT {
+                let body = Confirm {
+                    current: Some(GOOD),
+                    code: Some("123456"),
+                    ..Confirm::default()
+                };
+                confirmed(&h, path, &session, &device, &body).await;
+            }
+            // This browser is held back, even with the right password and code.
+            next_step(&h);
+            let code = secret.code_at(now(&h));
+            let right = Confirm {
+                current: Some(GOOD),
+                code: Some(&code),
+                ..Confirm::default()
+            };
+            let reply = confirmed(&h, path, &session, &device, &right).await;
+            assert_eq!(
+                reply.status,
+                StatusCode::TOO_MANY_REQUESTS,
+                "{}",
+                reply.body
+            );
+            assert!(reply.kind().ends_with(":password-held"));
+            h.clock.0.fetch_add(HOLD.as_secs(), Ordering::SeqCst);
+            let session = sign_in_to_account(&h, &mut passkey).await;
+            let code = secret.code_at(now(&h));
+            let right = Confirm {
+                code: Some(&code),
+                ..right
+            };
+            shown_codes(&confirmed(&h, path, &session, &device, &right).await);
         }
     }
 }

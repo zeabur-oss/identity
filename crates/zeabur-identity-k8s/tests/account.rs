@@ -36,8 +36,8 @@ mod tests {
     use zeabur_identity_k8s::setup::KubeSetupStore;
     use zeabur_identity_store::{
         AccountEvent, CredentialStore as _, GrantStore as _, NewExternal, PasswordRemoval,
-        PasswordState, PasswordWrite, Removal, Rename, Saved, SetupStore as _, Unlink, User, Verification,
-        password_credential_name,
+        PasswordState, PasswordWrite, Removal, Rename, Saved, SetupStore as _, Unlink, User,
+        Verification, password_credential_name,
     };
 
     const ALICE_UID: &str = "uid-alice";
