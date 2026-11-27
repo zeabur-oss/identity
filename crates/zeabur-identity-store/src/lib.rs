@@ -820,6 +820,17 @@ pub enum Saved {
     Conflict,
 }
 
+/// What [`CredentialStore::set_password`] may write over.
+#[derive(Debug, Clone, Copy)]
+pub enum PasswordWrite<'a> {
+    /// Adds a password; [`Saved::Conflict`] if the user has one.
+    Add,
+    /// Replaces this stored password; [`Saved::Conflict`] if it changed since it was read.
+    Replace(&'a StoredPassword),
+    /// Adds a password, or replaces any the user has.
+    Overwrite,
+}
+
 /// Outcome of [`CredentialStore::create`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CreateCredential {
@@ -909,15 +920,14 @@ pub trait CredentialStore: Send + Sync + 'static {
         user: &User,
     ) -> impl Future<Output = Result<Option<StoredPassword>, StoreError>> + Send;
 
-    /// Stores `hash`, and `totp` if given, as the password of `user`. With `replacing`, replaces
-    /// that stored password unless it changed since it was read; without, adds one, or replaces
-    /// any it finds. The new password starts with an empty [`PasswordState`].
+    /// Stores `hash`, and `totp` if given, as the password of `user`, over what `write` allows.
+    /// The new password starts with an empty [`PasswordState`].
     fn set_password(
         &self,
         user: &User,
         hash: &str,
         totp: Option<&StoredTotp>,
-        replacing: Option<&StoredPassword>,
+        write: PasswordWrite<'_>,
     ) -> impl Future<Output = Result<Saved, StoreError>> + Send;
 
     /// Saves a new state for a stored password unless it changed since it was read.
@@ -1280,7 +1290,7 @@ impl CredentialStore for MemoryCredentialStore {
         user: &User,
         hash: &str,
         totp: Option<&StoredTotp>,
-        replacing: Option<&StoredPassword>,
+        write: PasswordWrite<'_>,
     ) -> impl Future<Output = Result<Saved, StoreError>> + Send {
         let name = password_credential_name(&user.subject);
         let mut passwords = self
@@ -1288,9 +1298,14 @@ impl CredentialStore for MemoryCredentialStore {
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         let current = passwords.get(&name).map(|p| p.version.clone());
-        let outcome = match replacing {
-            Some(read) if current.as_deref() != Some(read.version.as_str()) => Saved::Conflict,
-            _ => {
+        let allowed = match write {
+            PasswordWrite::Add => current.is_none(),
+            PasswordWrite::Replace(read) => current.as_deref() == Some(read.version.as_str()),
+            PasswordWrite::Overwrite => true,
+        };
+        let outcome = match allowed {
+            false => Saved::Conflict,
+            true => {
                 passwords.insert(
                     name.clone(),
                     StoredPassword {

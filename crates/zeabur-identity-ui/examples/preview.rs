@@ -289,6 +289,7 @@ async fn account(Path(state): Path<String>, RawQuery(q): RawQuery, h: HeaderMap)
         password: admin.then_some(PasswordView {
             authenticator: true,
         }),
+        password_addable: !admin,
         passkey_confirms: true,
         sessions: &SESSIONS,
     };
@@ -302,6 +303,7 @@ async fn account(Path(state): Path<String>, RawQuery(q): RawQuery, h: HeaderMap)
             view.password = Some(PasswordView {
                 authenticator: false,
             });
+            view.password_addable = false;
             account_page(lang, Some(view))
         }
         "password-only" => {
@@ -309,6 +311,7 @@ async fn account(Path(state): Path<String>, RawQuery(q): RawQuery, h: HeaderMap)
             view.password = Some(PasswordView {
                 authenticator: false,
             });
+            view.password_addable = false;
             view.passkey_confirms = false;
             view.sessions = &PASSWORD_SESSIONS;
             account_page(lang, Some(view))

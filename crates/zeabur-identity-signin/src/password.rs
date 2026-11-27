@@ -1,4 +1,5 @@
-//! Password sign-in, and setting a password with a setup link.
+//! Password sign-in, and adding a password and an authenticator with a setup link or on the
+//! account page.
 //!
 //! Every failed sign-in gives the same answer, and a username without a password spends the same
 //! hashing time, so answers do not tell which usernames exist. Failures are limited per browser
@@ -9,9 +10,17 @@
 //! (see [`zeabur_identity_core::totp`]). A wrong code counts as a failed sign-in. The setup link
 //! asks for an authenticator when the account settings need a second factor for the user.
 //!
+//! The setup page and the account page add a password with the same code: [`offer`] gives the
+//! authenticator for a user who needs one, and [`new_password`] checks the password and the code.
+//! The account page adds a password after a recent passkey confirmation, and only when the user has
+//! none.
+//!
 //! On the account page, a signed-in user changes or removes their password with the current one,
 //! checked and counted as at sign-in. A change keeps the authenticator, and the codes already used
-//! stay used. A removal deletes the authenticator with the password.
+//! stay used. A removal deletes the authenticator with the password. Replacing the authenticator
+//! or its recovery codes needs the current password and a code, checked, counted and spent as at
+//! sign-in, or a recent passkey confirmation. Every change on the account page ends the user's
+//! other sessions.
 
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -31,12 +40,14 @@ use zeabur_identity_core::totp::{RecoveryKey, Secret};
 use zeabur_identity_oauth::authorize::Authentication;
 use zeabur_identity_oauth::endpoints::FLOW_COOKIE;
 use zeabur_identity_store::{
-    Consume, CredentialStore, Directory, PasswordRemoval, PasswordState, Saved, SetupStore,
-    StoreError, StoredPassword, StoredTotp, User, retry_on_conflict,
+    Consume, CredentialStore, Directory, PasswordRemoval, PasswordState, PasswordWrite, Saved,
+    SetupStore, StoreError, StoredPassword, StoredTotp, User, password_credential_name,
+    retry_on_conflict,
 };
 
 use crate::account::{
-    Account, Audit, LAST_CREDENTIAL, done, record, revoke_all_but, start_session, with_cookie,
+    Account, Audit, LAST_CREDENTIAL, done, record, require_fresh, revoke_all_but, start_session,
+    with_cookie,
 };
 use crate::audit::Record;
 use crate::device::Requester;
@@ -114,6 +125,20 @@ const PASSWORD_CONFLICT: Problem = Problem::new(
 )
 .detail(|m| m.password_conflict)
 .refresh();
+const PASSWORD_EXISTS: Problem = Problem::new(
+    StatusCode::CONFLICT,
+    "password-exists",
+    "You already have a password.",
+)
+.detail(|m| m.password_exists)
+.refresh();
+const NO_AUTHENTICATOR: Problem = Problem::new(
+    StatusCode::NOT_FOUND,
+    "not-found",
+    "You have no authenticator app.",
+)
+.detail(|m| m.authenticator_gone)
+.refresh();
 const BUSY: Problem = Problem::new(
     StatusCode::SERVICE_UNAVAILABLE,
     "busy",
@@ -169,16 +194,16 @@ impl Passwords {
         })
     }
 
-    /// The secret offered for setup token `token`, and the step of its code, if the code is right.
+    /// The secret offered with `offer`, and the step of its code, if the code is right.
     fn enrol(
         &self,
-        token: &str,
+        offer: Offer<'_>,
         request: &TotpRequest,
         now: UnixTime,
     ) -> Result<(Secret, u64), Problem> {
         let secret = self
             .totp
-            .open(&enrol_purpose(token), &request.sealed)
+            .open(&offer.purpose(), &request.sealed)
             .and_then(|bytes| Secret::from_bytes(&bytes))
             .ok_or(NO_REQUEST)?;
         let step = secret
@@ -194,7 +219,7 @@ impl Passwords {
         secret: &Secret,
         enrolled_step: u64,
     ) -> Result<(StoredTotp, Vec<String>), Problem> {
-        let (shown, recovery) = self.recovery.generate().map_err(Problem::internal)?;
+        let (shown, recovery) = self.recovery_codes()?;
         let secret = self
             .totp
             .seal(&stored_purpose(subject), secret.as_bytes())
@@ -207,6 +232,11 @@ impl Passwords {
             },
             shown,
         ))
+    }
+
+    /// New recovery codes: the codes to show, and their hashes to store.
+    fn recovery_codes(&self) -> Result<(Vec<String>, Vec<String>), Problem> {
+        self.recovery.generate().map_err(Problem::internal)
     }
 
     /// Which second factor `code` is for `subject`, if it is one that was not used before.
@@ -299,9 +329,22 @@ fn stored_purpose(subject: &str) -> String {
     format!("totp\0{subject}")
 }
 
-/// The purpose of a TOTP secret offered during setup: the setup token it was offered for.
-fn enrol_purpose(token: &str) -> String {
-    format!("totp-enrol\0{token}")
+/// What a TOTP secret offered for enrolment is sealed to, so it is accepted only there.
+#[derive(Clone, Copy)]
+enum Offer<'a> {
+    /// The setup token it was offered with.
+    Setup(&'a str),
+    /// The name of the account session it was offered to.
+    Session(&'a str),
+}
+
+impl Offer<'_> {
+    fn purpose(self) -> String {
+        match self {
+            Self::Setup(token) => format!("totp-enrol\0{token}"),
+            Self::Session(session) => format!("totp-enrol-session\0{session}"),
+        }
+    }
 }
 
 /// A second factor that was accepted.
@@ -617,7 +660,7 @@ async fn record_success<B: Backend>(
         && stored.totp.is_none()
         && let Err(error) = service
             .credentials
-            .set_password(user, &hash, None, Some(&stored))
+            .set_password(user, &hash, None, PasswordWrite::Replace(&stored))
             .await
     {
         tracing::warn!(reason = "rehash_failed", %error, "storing a stronger password hash failed");
@@ -712,7 +755,7 @@ pub(crate) struct SetupOptions {
 
 #[derive(Serialize, JsonSchema)]
 #[schemars(rename = "TotpEnrolment")]
-struct Enrolment {
+pub(crate) struct Enrolment {
     /// The secret in base32, for typing into the app.
     secret: String,
     /// The same secret in groups of four, as the page shows it.
@@ -801,49 +844,104 @@ fn strong(entered: &str, owner: &User, issuer: &str) -> Result<Normalized, Failu
     Ok(entered)
 }
 
-/// `POST /setup/password/options`: what setting a password with this setup link asks for.
-pub(crate) async fn set_up_options<B: Backend>(
-    State(service): State<Shared<B>>,
-    request: Result<Body<SameOrigin, OptionsRequest>, Problem>,
-) -> Response {
-    options_with(&service, request)
-        .await
-        .unwrap_or_else(IntoResponse::into_response)
+/// The authenticator a new password of `owner` needs, if the settings need a second factor for
+/// them, sealed to `offer`.
+async fn offer<B: Backend>(
+    service: &SignIn<B>,
+    owner: &User,
+    offer: Offer<'_>,
+) -> Result<SetupOptions, Problem> {
+    if !needs_second_factor(&service.oauth.directory, owner).await? {
+        return Ok(SetupOptions { totp: None });
+    }
+    Ok(SetupOptions {
+        totp: Some(enrolment(service, owner, offer)?),
+    })
 }
 
-async fn options_with<B: Backend>(
+/// A new TOTP secret for `owner`, sealed to `offer`.
+fn enrolment<B: Backend>(
     service: &SignIn<B>,
-    request: Result<Body<SameOrigin, OptionsRequest>, Problem>,
-) -> Result<Response, Problem> {
-    let Body(SameOrigin, request) = request?;
-    let now = service.oauth.now();
-    let directory = &service.oauth.directory;
-    let (_, owner) = valid_setup_token(&service.setup, directory, &request.token, now).await?;
-    if !needs_second_factor(directory, &owner).await? {
-        return Ok(json(StatusCode::OK, &SetupOptions { totp: None }));
-    }
+    owner: &User,
+    offer: Offer<'_>,
+) -> Result<Enrolment, Problem> {
     let secret = Secret::generate().map_err(Problem::internal)?;
     let host = issuer_host(service.oauth.issuer.as_str());
     let uri = secret.uri(&host, &owner.username);
     let sealed = service
         .passwords
         .totp
-        .seal(&enrol_purpose(&request.token), secret.as_bytes())
+        .seal(&offer.purpose(), secret.as_bytes())
         .map_err(Problem::internal)?;
-    let enrolment = Enrolment {
+    Ok(Enrolment {
         secret: secret.base32(),
         secret_display: secret.grouped(),
         qr: qr(&uri)?,
         uri,
         sealed,
+    })
+}
+
+/// A password, and an authenticator, ready to store.
+struct NewPassword {
+    hash: String,
+    totp: Option<StoredTotp>,
+    /// The recovery codes of `totp`, to show once.
+    recovery_codes: Option<Vec<String>>,
+}
+
+/// Checks a new password of `owner`, and the code of the authenticator offered with `offer`, then
+/// hashes the password. The account settings decide whether an authenticator is needed.
+async fn new_password<B: Backend>(
+    service: &SignIn<B>,
+    owner: &User,
+    password: &str,
+    totp: Option<&TotpRequest>,
+    offer: Offer<'_>,
+    now: UnixTime,
+) -> Result<NewPassword, Failure> {
+    let passwords = &service.passwords;
+    let enrolled = totp
+        .map(|totp| passwords.enrol(offer, totp, now))
+        .transpose()?;
+    let method = Method::Password {
+        second_factor: enrolled.is_some(),
     };
-    let response = json(
-        StatusCode::OK,
-        &SetupOptions {
-            totp: Some(enrolment),
-        },
-    );
-    Ok(response)
+    check_account(&service.oauth.directory, owner, method).await?;
+    let entered = strong(password, owner, service.oauth.issuer.as_str())?;
+    let hash = passwords
+        .run(move |hasher| hasher.hash(&entered))
+        .await?
+        .map_err(Problem::internal)?;
+    let (totp, recovery_codes) = match &enrolled {
+        Some((secret, step)) => {
+            let (totp, shown) = passwords.store(&owner.subject, secret, *step)?;
+            (Some(totp), Some(shown))
+        }
+        None => (None, None),
+    };
+    Ok(NewPassword {
+        hash,
+        totp,
+        recovery_codes,
+    })
+}
+
+/// `POST /setup/password/options`: what setting a password with this setup link asks for.
+pub(crate) async fn set_up_options<B: Backend>(
+    State(service): State<Shared<B>>,
+    request: Result<Body<SameOrigin, OptionsRequest>, Problem>,
+) -> Response {
+    let result: Result<Response, Problem> = async {
+        let Body(SameOrigin, request) = request?;
+        let now = service.oauth.now();
+        let directory = &service.oauth.directory;
+        let (_, owner) = valid_setup_token(&service.setup, directory, &request.token, now).await?;
+        let options = offer(&service, &owner, Offer::Setup(&request.token)).await?;
+        Ok(json(StatusCode::OK, &options))
+    }
+    .await;
+    result.unwrap_or_else(IntoResponse::into_response)
 }
 
 /// `POST /setup/password`: sets the password of the user a setup link is for.
@@ -883,27 +981,16 @@ async fn set_up_with<B: Backend>(
     )
     .await?;
     *user = Some(token.user.clone());
-    let passwords = &service.passwords;
-    let enrolled = match &request.totp {
-        Some(totp) => Some(passwords.enrol(&request.token, totp, now)?),
-        None => None,
-    };
-    let method = Method::Password {
-        second_factor: enrolled.is_some(),
-    };
-    check_account(&service.oauth.directory, &owner, method).await?;
-    let entered = strong(&request.password, &owner, service.oauth.issuer.as_str())?;
-    let hash = passwords
-        .run(move |hasher| hasher.hash(&entered))
-        .await?
-        .map_err(Problem::internal)?;
-    let (totp, recovery_codes) = match &enrolled {
-        Some((secret, step)) => {
-            let (totp, shown) = passwords.store(&owner.subject, secret, *step)?;
-            (Some(totp), Some(shown))
-        }
-        None => (None, None),
-    };
+    let offered = Offer::Setup(&request.token);
+    let new = new_password(
+        service,
+        &owner,
+        &request.password,
+        request.totp.as_ref(),
+        offered,
+        now,
+    )
+    .await?;
     // Consume the token before storing the password, as for a passkey.
     if service
         .setup
@@ -916,11 +1003,11 @@ async fn set_up_with<B: Backend>(
     }
     // Another setup of this user can write between the read and the write; the later one wins.
     {
-        let (owner, hash, totp) = (&owner, &hash, totp.as_ref());
+        let (owner, hash, totp) = (&owner, &new.hash, new.totp.as_ref());
         retry_on_conflict(|| async move {
             let saved = service
                 .credentials
-                .set_password(owner, hash, totp, None)
+                .set_password(owner, hash, totp, PasswordWrite::Overwrite)
                 .await?;
             Ok::<_, StoreError>((saved == Saved::Saved).then_some(()))
         })
@@ -928,9 +1015,7 @@ async fn set_up_with<B: Backend>(
         .map_err(Problem::internal)?;
     }
     let audit = Audit {
-        credential: Some(zeabur_identity_store::password_credential_name(
-            &owner.subject,
-        )),
+        credential: Some(password_credential_name(&owner.subject)),
         requester: Some(requester),
         ..Audit::default()
     };
@@ -939,10 +1024,12 @@ async fn set_up_with<B: Backend>(
         StatusCode::CREATED,
         &SetUp {
             username: &token.user,
-            recovery_codes,
+            recovery_codes: new.recovery_codes,
         },
     );
-    passwords.remember(&mut response, headers, &owner.subject);
+    service
+        .passwords
+        .remember(&mut response, headers, &owner.subject);
     Ok(response)
 }
 
@@ -1013,6 +1100,58 @@ fn carried(totp: &StoredTotp, state: &PasswordState) -> StoredTotp {
     }
 }
 
+/// Stores `hash` and `totp` as the signed-in user's password, over what `write` allows, then ends
+/// the user's other sessions and records `reason`. Every change on the account page that stores a
+/// password ends here.
+async fn save<B: Backend>(
+    service: &SignIn<B>,
+    account: &Account,
+    hash: &str,
+    totp: Option<&StoredTotp>,
+    write: PasswordWrite<'_>,
+    reason: &'static str,
+    audit: &mut Audit<'_>,
+) -> Result<(), Failure> {
+    let owner = &account.user;
+    audit.credential = Some(password_credential_name(&owner.subject));
+    let saved = service
+        .credentials
+        .set_password(owner, hash, totp, write)
+        .await
+        .map_err(Problem::internal)?;
+    if saved == Saved::Conflict {
+        let problem = match write {
+            PasswordWrite::Add => PASSWORD_EXISTS,
+            PasswordWrite::Replace(_) | PasswordWrite::Overwrite => PASSWORD_CONFLICT,
+        };
+        return Err(problem.into());
+    }
+    audit.revoked = revoke_all_but(service, owner, account.token.name()).await?;
+    record(service, owner, reason, audit, service.oauth.now()).await;
+    Ok(())
+}
+
+/// The reply to a change on the account page that makes recovery codes.
+#[derive(Serialize, JsonSchema)]
+#[schemars(rename = "AccountRecoveryCodes")]
+pub(crate) struct Codes {
+    /// Shown once; only their hashes are stored.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recovery_codes: Option<Vec<String>>,
+}
+
+/// `json` of the recovery codes, with the browser's device cookie for `subject`.
+fn codes<B: Backend>(
+    service: &SignIn<B>,
+    headers: &HeaderMap,
+    subject: &str,
+    recovery_codes: Option<Vec<String>>,
+) -> Response {
+    let mut response = json(StatusCode::OK, &Codes { recovery_codes });
+    service.passwords.remember(&mut response, headers, subject);
+    response
+}
+
 /// `POST /account/password`: replaces the signed-in user's password.
 pub(crate) async fn change<B: Backend>(
     State(service): State<Shared<B>>,
@@ -1029,7 +1168,7 @@ pub(crate) async fn change<B: Backend>(
     let result: Result<Response, Failure> = async {
         let Body(account, request) = request?;
         audit.session = Some(account.token.name().to_owned());
-        let owner = user.insert(account.user);
+        let owner = user.insert(account.user.clone());
         let stored = check_current(&service, &headers, owner, &request.current, now).await?;
         audit.credential = Some(stored.name.clone());
         let entered = strong(&request.new, owner, service.oauth.issuer.as_str())?;
@@ -1039,17 +1178,9 @@ pub(crate) async fn change<B: Backend>(
             .await?
             .map_err(Problem::internal)?;
         let totp = stored.totp.as_ref().map(|t| carried(t, &stored.state));
-        match service
-            .credentials
-            .set_password(owner, &hash, totp.as_ref(), Some(&stored))
-            .await
-            .map_err(Problem::internal)?
-        {
-            Saved::Saved => {}
-            Saved::Conflict => return Err(PASSWORD_CONFLICT.into()),
-        }
-        audit.revoked = revoke_all_but(&service, owner, account.token.name()).await?;
-        record(&service, owner, "PasswordChanged", &audit, now).await;
+        let write = PasswordWrite::Replace(&stored);
+        let reason = "PasswordChanged";
+        save(&service, &account, &hash, totp.as_ref(), write, reason, &mut audit).await?;
         let mut response = done(false, None);
         service
             .passwords
@@ -1058,6 +1189,238 @@ pub(crate) async fn change<B: Backend>(
     }
     .await;
     let record = Record::account("account.password_changed", user.as_ref(), &audit);
+    record.log(result.as_ref().err().map(Failure::kind));
+    result.unwrap_or_else(Failure::respond)
+}
+
+/// `POST /account/password/options`: what adding a password asks for. Needs a recent passkey
+/// confirmation.
+pub(crate) async fn add_options<B: Backend>(
+    State(service): State<Shared<B>>,
+    account: Result<Account, Problem>,
+) -> Response {
+    let now = service.oauth.now();
+    let result: Result<Response, Problem> = async {
+        let account = account?;
+        require_fresh(&account, now)?;
+        let owner = &account.user;
+        let stored = service
+            .credentials
+            .password(owner)
+            .await
+            .map_err(Problem::internal)?;
+        if stored.is_some() {
+            return Err(PASSWORD_EXISTS);
+        }
+        let options = offer(&service, owner, Offer::Session(account.token.name())).await?;
+        Ok(json(StatusCode::OK, &options))
+    }
+    .await;
+    result.unwrap_or_else(IntoResponse::into_response)
+}
+
+#[derive(Deserialize)]
+pub(crate) struct AddRequest {
+    password: String,
+    /// The authenticator, when the options asked for one.
+    #[serde(default)]
+    totp: Option<TotpRequest>,
+}
+
+/// `POST /account/password/add`: adds a password, and an authenticator when the settings need
+/// one, for a signed-in user without a password. Needs a recent passkey confirmation.
+pub(crate) async fn add<B: Backend>(
+    State(service): State<Shared<B>>,
+    requester: Requester,
+    headers: HeaderMap,
+    request: Result<Body<Account, AddRequest>, Problem>,
+) -> Response {
+    let now = service.oauth.now();
+    let mut user = None;
+    let mut audit = Audit {
+        requester: Some(&requester),
+        ..Audit::default()
+    };
+    let result: Result<Response, Failure> = async {
+        let Body(account, request) = request?;
+        audit.session = Some(account.token.name().to_owned());
+        user = Some(account.user.clone());
+        require_fresh(&account, now)?;
+        let offered = Offer::Session(account.token.name());
+        let totp = request.totp.as_ref();
+        let new = new_password(&service, &account.user, &request.password, totp, offered, now)
+            .await?;
+        let write = PasswordWrite::Add;
+        let reason = "PasswordAdded";
+        save(&service, &account, &new.hash, new.totp.as_ref(), write, reason, &mut audit).await?;
+        let subject = &account.user.subject;
+        Ok(codes(&service, &headers, subject, new.recovery_codes))
+    }
+    .await;
+    let record = Record::account("account.password_added", user.as_ref(), &audit);
+    record.log(result.as_ref().err().map(Failure::kind));
+    result.unwrap_or_else(Failure::respond)
+}
+
+#[derive(Deserialize)]
+pub(crate) struct ConfirmRequest {
+    /// The current password. Without it, the change needs a recent passkey confirmation.
+    #[serde(default)]
+    current: Option<String>,
+    /// A code from the current authenticator, or a recovery code, with `current`.
+    #[serde(default)]
+    code: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct ReplaceRequest {
+    #[serde(flatten)]
+    confirm: ConfirmRequest,
+    /// The new authenticator: `sealed` from its options, and its current code.
+    totp: TotpRequest,
+}
+
+/// The signed-in user's password, once a change to its authenticator is confirmed: with the
+/// current password and a code, checked, counted and spent as at sign-in, or, without a password,
+/// with a recent passkey confirmation.
+async fn confirm_authenticator<B: Backend>(
+    service: &SignIn<B>,
+    headers: &HeaderMap,
+    account: &Account,
+    request: &ConfirmRequest,
+    now: UnixTime,
+) -> Result<StoredPassword, Failure> {
+    let owner = &account.user;
+    let Some(current) = request.current.as_deref().filter(|c| !c.is_empty()) else {
+        require_fresh(account, now)?;
+        let stored = service
+            .credentials
+            .password(owner)
+            .await
+            .map_err(Problem::internal)?
+            .ok_or(NO_PASSWORD)?;
+        return match stored.totp {
+            Some(_) => Ok(stored),
+            None => Err(NO_AUTHENTICATOR.into()),
+        };
+    };
+    let code = request
+        .code
+        .as_deref()
+        .filter(|code| !code.trim().is_empty())
+        .ok_or(CODE_FAILED)?;
+    let stored = check_current(service, headers, owner, current, now).await?;
+    if stored.totp.is_none() {
+        return Err(NO_AUTHENTICATOR.into());
+    }
+    let device = service.passwords.device(headers, &owner.subject);
+    let device = device.as_deref();
+    let second = check_second_factor(service, owner, &stored, Some(code), device, now).await?;
+    let (hash, totp) = (stored.hash.clone(), stored.totp.clone());
+    record_success(service, owner, stored, None, device, second).await?;
+    // Spending the code stored a new version, which the change replaces.
+    let again = service
+        .credentials
+        .password(owner)
+        .await
+        .map_err(Problem::internal)?;
+    again
+        .filter(|again| again.hash == hash && again.totp == totp)
+        .ok_or_else(|| PASSWORD_CONFLICT.into())
+}
+
+/// `POST /account/authenticator/options`: a new authenticator for the signed-in user, who has one.
+pub(crate) async fn authenticator_options<B: Backend>(
+    State(service): State<Shared<B>>,
+    account: Result<Account, Problem>,
+) -> Response {
+    let result: Result<Response, Problem> = async {
+        let account = account?;
+        let stored = service
+            .credentials
+            .password(&account.user)
+            .await
+            .map_err(Problem::internal)?;
+        if stored.and_then(|stored| stored.totp).is_none() {
+            return Err(NO_AUTHENTICATOR);
+        }
+        let offered = Offer::Session(account.token.name());
+        let enrolment = enrolment(&service, &account.user, offered)?;
+        Ok(json(StatusCode::OK, &enrolment))
+    }
+    .await;
+    result.unwrap_or_else(IntoResponse::into_response)
+}
+
+/// `POST /account/authenticator`: replaces the signed-in user's authenticator and its recovery
+/// codes. The old secret and codes stop working.
+pub(crate) async fn replace_authenticator<B: Backend>(
+    State(service): State<Shared<B>>,
+    requester: Requester,
+    headers: HeaderMap,
+    request: Result<Body<Account, ReplaceRequest>, Problem>,
+) -> Response {
+    let now = service.oauth.now();
+    let mut user = None;
+    let mut audit = Audit {
+        requester: Some(&requester),
+        ..Audit::default()
+    };
+    let result: Result<Response, Failure> = async {
+        let Body(account, request) = request?;
+        audit.session = Some(account.token.name().to_owned());
+        user = Some(account.user.clone());
+        // The new code first, so a mistyped one spends nothing.
+        let offered = Offer::Session(account.token.name());
+        let (secret, step) = service.passwords.enrol(offered, &request.totp, now)?;
+        let stored =
+            confirm_authenticator(&service, &headers, &account, &request.confirm, now).await?;
+        let subject = &account.user.subject;
+        let (totp, shown) = service.passwords.store(subject, &secret, step)?;
+        let write = PasswordWrite::Replace(&stored);
+        let reason = "AuthenticatorReplaced";
+        save(&service, &account, &stored.hash, Some(&totp), write, reason, &mut audit).await?;
+        Ok(codes(&service, &headers, subject, Some(shown)))
+    }
+    .await;
+    let record = Record::account("account.authenticator_replaced", user.as_ref(), &audit);
+    record.log(result.as_ref().err().map(Failure::kind));
+    result.unwrap_or_else(Failure::respond)
+}
+
+/// `POST /account/recovery-codes`: replaces the signed-in user's recovery codes. The old codes
+/// stop working; the authenticator stays, and its codes already used stay used.
+pub(crate) async fn regenerate<B: Backend>(
+    State(service): State<Shared<B>>,
+    requester: Requester,
+    headers: HeaderMap,
+    request: Result<Body<Account, ConfirmRequest>, Problem>,
+) -> Response {
+    let now = service.oauth.now();
+    let mut user = None;
+    let mut audit = Audit {
+        requester: Some(&requester),
+        ..Audit::default()
+    };
+    let result: Result<Response, Failure> = async {
+        let Body(account, request) = request?;
+        audit.session = Some(account.token.name().to_owned());
+        user = Some(account.user.clone());
+        let stored = confirm_authenticator(&service, &headers, &account, &request, now).await?;
+        let kept = stored.totp.as_ref().ok_or(NO_AUTHENTICATOR)?;
+        let (shown, recovery) = service.passwords.recovery_codes()?;
+        let totp = StoredTotp {
+            recovery,
+            ..carried(kept, &stored.state)
+        };
+        let write = PasswordWrite::Replace(&stored);
+        let reason = "RecoveryCodesRegenerated";
+        save(&service, &account, &stored.hash, Some(&totp), write, reason, &mut audit).await?;
+        let subject = &account.user.subject;
+        Ok(codes(&service, &headers, subject, Some(shown)))
+    }
+    .await;
+    let record = Record::account("account.recovery_codes_regenerated", user.as_ref(), &audit);
     record.log(result.as_ref().err().map(Failure::kind));
     result.unwrap_or_else(Failure::respond)
 }

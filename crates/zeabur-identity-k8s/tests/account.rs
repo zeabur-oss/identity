@@ -36,7 +36,7 @@ mod tests {
     use zeabur_identity_k8s::setup::KubeSetupStore;
     use zeabur_identity_store::{
         AccountEvent, CredentialStore as _, GrantStore as _, NewExternal, PasswordRemoval,
-        PasswordState, Removal, Rename, Saved, SetupStore as _, Unlink, User, Verification,
+        PasswordState, PasswordWrite, Removal, Rename, Saved, SetupStore as _, Unlink, User, Verification,
         password_credential_name,
     };
 
@@ -799,20 +799,39 @@ mod tests {
         let read = store.password(&alice()).await.unwrap().unwrap();
         assert!(matches!(
             store
-                .set_password(&alice(), "first", None, Some(&read))
+                .set_password(&alice(), "first", None, PasswordWrite::Replace(&read))
                 .await
                 .unwrap(),
             Saved::Saved
         ));
         assert!(matches!(
             store
-                .set_password(&alice(), "second", None, Some(&read))
+                .set_password(&alice(), "second", None, PasswordWrite::Replace(&read))
                 .await
                 .unwrap(),
             Saved::Conflict
         ));
         let kept = store.password(&alice()).await.unwrap().unwrap();
         assert_eq!(kept.hash, "first");
+    }
+
+    #[tokio::test]
+    async fn adding_a_password_does_not_replace_one() {
+        let mut backend = Backend::default();
+        backend.insert(password());
+        backend.insert(alice_object());
+        let mock = mock(backend).await;
+        let store = credentials(&mock);
+        let before = store.password(&alice()).await.unwrap().unwrap();
+        assert!(matches!(
+            store
+                .set_password(&alice(), "added", None, PasswordWrite::Add)
+                .await
+                .unwrap(),
+            Saved::Conflict
+        ));
+        let kept = store.password(&alice()).await.unwrap().unwrap();
+        assert_eq!(kept.hash, before.hash);
     }
 
     #[tokio::test]

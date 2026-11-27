@@ -20,9 +20,10 @@
 //! Unlinking needs it too. It revokes every session and grant that signed in with the account,
 //! and the user's last credential cannot be unlinked (see `CredentialStore::unlink`).
 //!
-//! Changing or removing a password needs the current password instead of a fresh confirmation,
-//! checked as at sign-in (see [`crate::password`]). Both revoke every other session and grant of
-//! the user.
+//! Adding a password needs the same fresh confirmation. Changing or removing it needs the current
+//! password instead, checked as at sign-in. Replacing the authenticator or its recovery codes needs
+//! the current password and a code, or a fresh confirmation (see [`crate::password`]). Each of
+//! these revokes every other session and grant of the user.
 
 use std::time::Duration;
 
@@ -162,6 +163,23 @@ pub(crate) fn routes<B: Backend>() -> Router<Shared<B>> {
         .route("/account/sessions/revoke-others", post(revoke_others::<B>))
         .route("/account/links/remove", post(unlink::<B>))
         .route("/account/password", post(crate::password::change::<B>))
+        .route(
+            "/account/password/options",
+            post(crate::password::add_options::<B>),
+        )
+        .route("/account/password/add", post(crate::password::add::<B>))
+        .route(
+            "/account/authenticator/options",
+            post(crate::password::authenticator_options::<B>),
+        )
+        .route(
+            "/account/authenticator",
+            post(crate::password::replace_authenticator::<B>),
+        )
+        .route(
+            "/account/recovery-codes",
+            post(crate::password::regenerate::<B>),
+        )
         .route(
             "/account/password/remove",
             post(crate::password::remove::<B>),
@@ -590,6 +608,10 @@ async fn page<B: Backend>(
                 .iter()
                 .filter(|d| !linked.iter().any(|account| account.issuer == d.issuer))
                 .collect();
+            let with_code = Method::Password {
+                second_factor: true,
+            };
+            let password_allowed = allows(account.user.account_type, settings, with_code).is_ok();
             let providers: Vec<ProviderButton<'_>> = unlinked
                 .iter()
                 .filter(|d| allows(account.user.account_type, settings, d.method).is_ok())
@@ -606,6 +628,7 @@ async fn page<B: Backend>(
                     password: password.as_ref().map(|p| PasswordView {
                         authenticator: p.totp.is_some(),
                     }),
+                    password_addable: password.is_none() && password_allowed,
                     passkey_confirms: !passkeys.is_empty() || is_fresh(&account.session, now),
                     sessions: &session_rows,
                 }),

@@ -25,7 +25,7 @@ use zeabur_identity_core::clock::UnixTime;
 use zeabur_identity_core::guessing::{Count, Counts, Known};
 use zeabur_identity_store::{
     AccountEvent, CreateCredential, CredentialStore, LinkedAccount, LinkedSummary, NewExternal,
-    NewPasskey, PasskeySummary, PasswordRemoval, PasswordState, Removal, Rename, Saved, StoreError,
+    NewPasskey, PasskeySummary, PasswordRemoval, PasswordState, PasswordWrite, Removal, Rename, Saved, StoreError,
     StoredPasskey, StoredPassword, StoredTotp, Unlink, User, password_credential_name,
     retry_on_conflict,
 };
@@ -642,11 +642,15 @@ impl CredentialStore for KubeCredentialStore {
         user: &User,
         hash: &str,
         totp: Option<&StoredTotp>,
-        replacing: Option<&StoredPassword>,
+        write: PasswordWrite<'_>,
     ) -> impl Future<Output = Result<Saved, StoreError>> + Send {
         let api = self.api.clone();
         let user = user.clone();
-        let replacing = replacing.map(|p| p.version.clone());
+        let adding = matches!(write, PasswordWrite::Add);
+        let replacing = match write {
+            PasswordWrite::Replace(read) => Some(read.version.clone()),
+            PasswordWrite::Add | PasswordWrite::Overwrite => None,
+        };
         let mut object = Credential {
             metadata: ObjectMeta {
                 name: Some(password_credential_name(&user.subject)),
@@ -673,6 +677,9 @@ impl CredentialStore for KubeCredentialStore {
             let name = object.name_any();
             let current = api.get_opt(&name).await.map_err(StoreError::backend)?;
             if let Some(current) = current {
+                if adding {
+                    return Ok(Saved::Conflict);
+                }
                 let read = replacing.unwrap_or_else(|| version(&current));
                 let Some((uid, resource_version)) = read.split_once('/') else {
                     return Ok(Saved::Conflict);

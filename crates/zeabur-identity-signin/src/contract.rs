@@ -9,7 +9,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::SignInResponse;
 use crate::account::{Done, SignedIn as AccountSignedIn};
-use crate::password::{SetUp as PasswordSetUp, SetupOptions, SignedIn as PasswordSignedIn};
+use crate::password::{
+    Codes, Enrolment, SetUp as PasswordSetUp, SetupOptions, SignedIn as PasswordSignedIn,
+};
 use crate::problem::ProblemBody;
 use crate::upstream::StartResponse;
 
@@ -26,6 +28,8 @@ fn typescript() -> String {
     generator.subschema_for::<PasswordSignedIn>();
     generator.subschema_for::<PasswordSetUp<'_>>();
     generator.subschema_for::<SetupOptions>();
+    generator.subschema_for::<Enrolment>();
+    generator.subschema_for::<Codes>();
     generator.subschema_for::<StartResponse>();
     let mut definitions: Vec<(String, Node)> = generator
         .take_definitions(true)
