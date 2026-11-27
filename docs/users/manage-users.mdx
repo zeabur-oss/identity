@@ -3,7 +3,7 @@ title: Add and manage users
 description: Invite users to set up passkeys, update groups and display names, and manage passkeys and linked accounts.
 ---
 
-Use `zeabur-identityctl` to invite users to set up passkeys, then use `kubectl` to manage groups and accounts. After signing in, users can add or remove passkeys, link accounts, change or remove a password, and end sessions on their account page.
+Use `zeabur-identityctl` to invite users to set up passkeys, then use `kubectl` to manage groups and accounts. After signing in, users can add or remove passkeys, link accounts, add, change or remove a password, and end sessions on their account page.
 
 ![Setup page from a one-time link, with Create passkey and Use a password](../images/setup-light.avif)
 
@@ -166,18 +166,21 @@ Each browser where the user has signed in before keeps its own count of wrong pa
 
 To change a password, users enter the current password and a new one on the account page. To remove it, they enter the current password. A user who has no passkey and no linked account can't remove the password. After a change or a removal, all other sessions of the user end. A change keeps the authenticator app and the recovery codes that the user hasn't used. A removal also removes the authenticator app. A wrong current password counts the same as a wrong password at sign-in.
 
-To reset a forgotten password when it is the user's only way to sign in, delete its `Credential` and send a new setup link. If the user also has a passkey or a linked account, the setup link needs `--reset`, which deletes those too. See [Sign out, recover, and remove users](./offboarding.mdx).
+A user who has a passkey and no password can add a password on the account page. They confirm with the passkey first. An admin who needs an authenticator app sets one up in the same step and gets new recovery codes. After the password is added, all other sessions of the user end.
+
+To reset a forgotten password, delete its `Credential`. If the user has a passkey, they then add a new password on the account page. If the password was their only way to sign in, send a new setup link. If the user has a linked account but no passkey, the setup link needs `--reset`, which deletes the linked account too. See [Sign out, recover, and remove users](./offboarding.mdx).
 
 ## Let users manage their accounts
 
 Users can open `https://<issuer>/account` and sign in with a passkey, or with their username and password, to manage their passkeys and sessions:
 
 - Add, rename, or remove passkeys.
-- Change or remove a password.
+- Add, change, or remove a password.
+- Replace the authenticator app or get new recovery codes, for admins with a password.
 - View and end sessions.
 - Link or unlink upstream accounts for regular accounts, after you [add an upstream sign-in](./upstream-sign-in.mdx).
 
-Users must verify their identity with a passkey before adding a passkey, linking an account, or removing a passkey or linked account. To change or remove a password, users enter the current password instead. A user who has no passkey can't do the actions that need a passkey on the account page. Users can't remove their last passkey or unlink their last account available for sign-in on the account page.
+Users must verify their identity with a passkey before adding a passkey or a password, linking an account, or removing a passkey or linked account. To change or remove a password, users enter the current password instead. To replace the authenticator app or get new recovery codes, users verify with a passkey, or enter the current password and a code from the app or a recovery code. A user who has no passkey can't do the actions that need a passkey on the account page. Users can't remove their last passkey or unlink their last account available for sign-in on the account page.
 
 When a user removes a passkey or unlinks an account on the account page, Zeabur Identity also ends all sessions that used that credential to sign in. Each change produces a log entry and an event on the `User`:
 
