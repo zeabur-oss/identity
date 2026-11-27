@@ -10,8 +10,8 @@
 //! (see [`zeabur_identity_core::totp`]). A wrong code counts as a failed sign-in. The setup link
 //! asks for an authenticator when the account settings need a second factor for the user.
 //!
-//! The setup page and the account page add a password with the same code: [`offer`] gives the
-//! authenticator for a user who needs one, and [`new_password`] checks the password and the code.
+//! The setup page and the account page add a password with the same code: `offer` gives the
+//! authenticator for a user who needs one, and `new_password` checks the password and the code.
 //! The account page adds a password after a recent passkey confirmation, and only when the user has
 //! none.
 //!
