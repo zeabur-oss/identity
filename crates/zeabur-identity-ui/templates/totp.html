@@ -1,0 +1,24 @@
+{%- import "ui.html" as ui -%}
+{%- import "ds.html" as ds -%}
+{#- The authenticator steps that the setup and account pages share, for ui/src/totp.ts: the QR
+    code, key and code field of a new authenticator, and the recovery codes shown once. -#}
+{%- macro enrol(m, code_label) -%}
+<svg id="totp-qr" role="img" aria-label="{{ m.setup_totp_qr }}" class="size-44 self-center rounded-md bg-white text-black" shape-rendering="crispEdges"></svg>
+{% call ui::disclosure(m.setup_totp_key_title, center = true) %}
+<p>{{ m.setup_totp_key_body }}</p>
+<pre id="totp-secret" class="type-mono rounded-md border border-v2-border bg-v2-surface-hover px-3 py-2 break-all whitespace-pre-wrap text-main select-all"></pre>
+{% endcall %}
+{% call ui::field("totp-code", code_label) %}
+<input id="totp-code" name="totp-code" type="text" inputmode="numeric" maxlength="{{ zeabur_identity_core::totp::DIGITS }}" class="{{ ds::input() }}"
+       autocomplete="one-time-code" spellcheck="false">
+{% endcall %}
+{%- endmacro -%}
+
+{%- macro recovery(m) -%}
+<div id="recovery" hidden tabindex="-1" class="flex flex-col gap-2 text-[0.8125rem] leading-5 text-pretty text-secondary outline-none">
+  <p class="text-sm leading-5 font-medium text-main">{{ m.recovery_title }}</p>
+  <p>{{ m.recovery_body }}</p>
+  <pre id="recovery-codes" class="type-mono grid grid-cols-2 gap-x-6 gap-y-1 rounded-md border border-v2-border bg-v2-surface-hover px-3 py-2 text-main select-all"></pre>
+  {{ caller() }}
+</div>
+{%- endmacro -%}

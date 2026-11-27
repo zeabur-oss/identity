@@ -134,7 +134,9 @@ With `two-factor`, an admin who sets a password on the setup page also scans a Q
 
 When the admin signs in with the password, the sign-in page then asks for a code. Each code works once. Wrong codes count toward the same limit as wrong passwords. See [Passwords](./manage-users.mdx#passwords).
 
-An admin password set with `any` has no authenticator app, so it stops working when you change the setting to `two-factor`. To reset a password or a lost authenticator app, delete the password's `Credential` and send a new setup link. If the admin also has a passkey or a linked account, the setup link needs `--reset`, which deletes those too. The new password comes with a new authenticator and new recovery codes.
+On the account page, an admin can replace the authenticator app, for example after moving to a new phone, and get new recovery codes. They verify with a passkey, or enter the password and a code from the current app or a recovery code. A wrong password or code counts the same as at sign-in. The old app and the old recovery codes stop working, and all other sessions of the admin end. New recovery codes keep the app.
+
+An admin password set with `any` has no authenticator app, so it stops working when you change the setting to `two-factor`. To reset such a password, or a forgotten one, delete the password's `Credential`. An admin with a passkey then adds a new password with a new authenticator app on the account page. Otherwise, send a new setup link. If the admin has a linked account but no passkey, the setup link needs `--reset`, which deletes the linked account too.
 
 ## Require device-bound passkeys for admins (AAL3)
 

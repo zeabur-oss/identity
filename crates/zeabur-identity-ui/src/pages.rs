@@ -381,6 +381,8 @@ pub struct AccountView<'a> {
     pub providers_held_back: bool,
     /// The user's password, if they have one.
     pub password: Option<PasswordView>,
+    /// The user has no password, and the settings allow one for them.
+    pub password_addable: bool,
     /// The user can confirm with a passkey, which adding a passkey and linking or unlinking an
     /// account need. False for a password sign-in by a user with no passkey.
     pub passkey_confirms: bool,
@@ -456,6 +458,7 @@ struct AccountItems<'a> {
     unlinked: &'a [ProviderButton<'a>],
     providers_held_back: bool,
     password: Option<PasswordView>,
+    password_addable: bool,
     passkey_confirms: bool,
     this_session: Option<SessionItem<'a>>,
     other_sessions: Vec<SessionItem<'a>>,
@@ -517,6 +520,7 @@ pub fn account_page(lang: Lang, view: Option<AccountView<'_>>) -> Response {
         unlinked: view.providers,
         providers_held_back: view.providers_held_back,
         password: view.password,
+        password_addable: view.password_addable,
         passkey_confirms: view.passkey_confirms,
         this_session: view
             .sessions

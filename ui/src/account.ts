@@ -1,6 +1,6 @@
 // Account page: sign in with a password or a passkey, then rename, add and remove passkeys, link and unlink GitHub or Google
-// accounts, change or remove a password, and end sessions. Adding, linking and removing need a passkey confirmation from the
-// last five minutes. The server says when one is due (next step "reauth"), and the page asks for
+// accounts, add, change or remove a password, replace the authenticator or its recovery codes, and end sessions. Adding,
+// linking and removing need a passkey confirmation from the last five minutes. The server says when one is due (next step "reauth"), and the page asks for
 // it, then retries once.
 import {
   assertionJson,
@@ -21,6 +21,8 @@ import {
   write,
 } from "./webauthn"
 import { codeStep, entered, longEnough, wireOtherAccount } from "./password"
+import { showEnrolment, showRecovery, totpAnswer } from "./totp"
+import type { AccountRecoveryCodes, PasswordSetupOptions, TotpEnrolment } from "./contract"
 
 const root = document.getElementById("account")
 const text = messages(root)
@@ -65,6 +67,9 @@ const done: Record<string, string> = {
   "#notice=linked": "msgLinked",
   "#notice=password-changed": "msgPasswordChanged",
   "#notice=password-removed": "msgPasswordRemoved",
+  "#notice=password-added": "msgPasswordAdded",
+  "#notice=authenticator-replaced": "msgAuthenticatorReplaced",
+  "#notice=recovery-regenerated": "msgRecoveryRegenerated",
 }
 
 /** After a reload that follows a change that worked, or after the provider sends the person back. */
@@ -190,13 +195,15 @@ function wireDialog(
   item: HTMLElement,
   name: string,
   confirmed: (dialog: HTMLDialogElement, path: string) => void,
+  open: (dialog: HTMLDialogElement, opener: Element | null) => void = (dialog) =>
+    dialog.showModal(),
 ): void {
   const dialog = item.querySelector<HTMLDialogElement>(`dialog[data-${name}]`)
   const opener = item.querySelector(`[data-opens=${name}]`)
   if (!dialog) return
   opener?.addEventListener("click", () => {
     dialog.returnValue = ""
-    dialog.showModal()
+    open(dialog, opener)
   })
   dialog.querySelector("[data-close]")?.addEventListener("click", () => dialog.close())
   dialog.addEventListener("close", () => {
@@ -244,7 +251,111 @@ async function password(
   return reply
 }
 
+/**
+ * After a change that worked: shows the recovery codes it made, if any, until the person says they
+ * saved them; the reload then shows `notice`.
+ */
+function keepCodes(reply: Reply, notice: string, place: Place): Reply | null {
+  if (!reply.ok) return reply
+  window.location.hash = `notice=${notice}`
+  const codes = (reply.body as AccountRecoveryCodes).recovery_codes
+  if (!codes) return reply
+  write(place.status, "")
+  showRecovery(codes)
+  document.getElementById("recovery")?.focus()
+  return null
+}
+
+/** Sends a change that may make recovery codes, confirmed with a passkey when the server asks. */
+function sendForCodes(
+  place: Place,
+  path: string,
+  body: Record<string, unknown>,
+  notice: string,
+): void {
+  run(async () => keepCodes(await fresh(place, () => post(path, body)), notice, place), place)
+}
+
+/** Runs `options` and opens `dialog` with what it answers, or explains at `place` why not. */
+function openWith(
+  dialog: HTMLDialogElement,
+  place: Place,
+  options: () => Promise<Reply>,
+  shown: (body: unknown) => void,
+): void {
+  run(async () => {
+    const reply = await options()
+    if (!reply.ok) return reply
+    shown(reply.body)
+    write(place.status, "")
+    dialog.showModal()
+    return null
+  }, place)
+}
+
+/** The current password and code typed in `dialog`, or nulls to confirm with a passkey. */
+function confirmation(dialog: HTMLDialogElement): { current: string | null; code: string | null } {
+  const field = (name: string) =>
+    dialog.querySelector<HTMLInputElement>(`[name=${name}]`)?.value ?? ""
+  return { current: field("current") || null, code: field("code").trim() || null }
+}
+
+/** Adding a password: after a passkey confirmation, with an authenticator when one is needed. */
+function wireAdd(section: HTMLElement): void {
+  const place = rowPlace(section)
+  let sealed: string | null = null
+  wireDialog(
+    section,
+    "add-password",
+    (dialog, path) => {
+      const chosen = dialog.querySelector<HTMLInputElement>("[name=new]")
+      if (!longEnough(chosen)) return fail(place, text("msgTooShort"))
+      const body = { password: chosen.value, totp: totpAnswer(sealed) }
+      sendForCodes(place, path, body, "password-added")
+    },
+    (dialog, opener) =>
+      openWith(
+        dialog,
+        place,
+        () => fresh(place, () => post(endpoint(opener, "options"), {})),
+        (body) => {
+          const { totp } = body as PasswordSetupOptions
+          sealed = totp ? showEnrolment(totp) : null
+        },
+      ),
+  )
+}
+
+/** Replacing the authenticator or its recovery codes, confirmed in the dialog or with a passkey. */
+function wireAuthenticator(section: HTMLElement): void {
+  const place = rowPlace(section)
+  let sealed: string | null = null
+  wireDialog(
+    section,
+    "authenticator",
+    (dialog, path) => {
+      const body = { ...confirmation(dialog), totp: totpAnswer(sealed) }
+      sendForCodes(place, path, body, "authenticator-replaced")
+    },
+    (dialog, opener) =>
+      openWith(
+        dialog,
+        place,
+        () => post(endpoint(opener, "options"), {}),
+        (body) => {
+          sealed = showEnrolment(body as TotpEnrolment)
+        },
+      ),
+  )
+  wireDialog(section, "recovery", (dialog, path) => {
+    const body = confirmation(dialog)
+    sendForCodes(place, path, body, "recovery-regenerated")
+  })
+}
+
 function wirePassword(section: HTMLElement): void {
+  wireAdd(section)
+  wireAuthenticator(section)
   const place = rowPlace(section)
   wireDialog(section, "change", (dialog, path) => {
     const current = dialog.querySelector<HTMLInputElement>("[name=current]")?.value
@@ -275,6 +386,9 @@ if (root) {
   }
   const passwordSection = document.getElementById("password")
   if (passwordSection) wirePassword(passwordSection)
+  document
+    .getElementById("recovery-saved")
+    ?.addEventListener("click", () => window.location.reload())
   for (const item of document.querySelectorAll<HTMLElement>("[data-session]")) {
     const button = item.querySelector("[data-action=revoke]")
     button?.addEventListener("click", () => {

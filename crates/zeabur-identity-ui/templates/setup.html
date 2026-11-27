@@ -3,6 +3,7 @@
 {%- import "icons.html" as icons -%}
 {%- import "ds.html" as ds -%}
 {%- import "upstream.html" as upstream -%}
+{%- import "totp.html" as totp -%}
 {%- block title %}{{ m.setup_title }}{% endblock -%}
 {%- block head %}<script type="module" src="{{ crate::assets::url("setup.js") }}"></script>{% endblock -%}
 {%- block content %}
@@ -19,11 +20,7 @@
     <div id="new-link" hidden>{{ ui::new_link(m, setup_link_command) }}</div>
     <div id="done" hidden tabindex="-1" class="flex flex-col gap-5 outline-none">
       {#- First, so the codes are saved before anyone leaves the page. -#}
-      <div id="recovery" hidden class="flex flex-col gap-2 text-[0.8125rem] leading-5 text-pretty text-secondary">
-        <p class="text-sm leading-5 font-medium text-main">{{ m.recovery_title }}</p>
-        <p>{{ m.recovery_body }}</p>
-        <pre id="recovery-codes" class="type-mono grid grid-cols-2 gap-x-6 gap-y-1 rounded-md border border-v2-border bg-v2-surface-hover px-3 py-2 text-main select-all"></pre>
-      </div>
+      {% call totp::recovery(m) %}{% endcall %}
       {%- if let Some(client) = client %}
       {% call ui::alert(m.setup_done_title, "default", "Key", live = "") %}{{ m.setup_done_continue_body }}{% endcall %}
       <a href="/login" class="{{ ds::button("default", "lg") }} w-full">{{ icons::icon("Fingerprint") }}<span class="truncate">{{ m.login_continue_to }} {{ client }}</span></a>
@@ -66,15 +63,7 @@
           <p class="text-sm leading-5 font-medium text-main">{{ m.setup_totp_title }}</p>
           <p>{{ m.setup_totp_body }}</p>
         </div>
-        <svg id="totp-qr" role="img" aria-label="{{ m.setup_totp_qr }}" class="size-44 self-center rounded-md bg-white text-black" shape-rendering="crispEdges"></svg>
-        {% call ui::disclosure(m.setup_totp_key_title, center = true) %}
-        <p>{{ m.setup_totp_key_body }}</p>
-        <pre id="totp-secret" class="type-mono rounded-md border border-v2-border bg-v2-surface-hover px-3 py-2 break-all whitespace-pre-wrap text-main select-all"></pre>
-        {% endcall %}
-        {% call ui::field("totp-code", m.setup_totp_code) %}
-        <input id="totp-code" name="code" type="text" inputmode="numeric" maxlength="{{ zeabur_identity_core::totp::DIGITS }}" class="{{ ds::input() }}"
-               autocomplete="one-time-code" spellcheck="false">
-        {% endcall %}
+        {{ totp::enrol(m, m.setup_totp_code) }}
       </div>
       <button type="submit" class="{{ ds::button("default", "lg") }} w-full">{{ m.setup_password_set }}</button>
       <button type="button" id="other-ways" class="inline-flex min-h-6 items-center self-center rounded-md px-1.5 text-[0.8125rem] leading-5 text-secondary hover:text-main">{{ m.setup_other_ways }}</button>

@@ -14,6 +14,12 @@ export type AccountChanged = {
   accepted?: Accepted
 }
 
+/** The reply to a change on the account page that makes recovery codes. */
+export type AccountRecoveryCodes = {
+  /** Shown once; only their hashes are stored. */
+  recovery_codes?: string[]
+}
+
 export type AccountSignedIn = {
   accepted?: Accepted
 }
