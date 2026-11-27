@@ -400,26 +400,57 @@ async fn login_password(body: String) -> Response {
 async fn setup_password_options(body: String) -> Response {
     let admin = serde_json::from_str::<SetupOptions>(&body).is_ok_and(|o| o.token == "admin");
     let body = if admin {
-        let uri = "otpauth://totp/identity.example.com:admin?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP&issuer=identity.example.com&algorithm=SHA1&digits=6&period=30";
-        let (size, path) = qr(uri);
-        json!({
-            "totp": {
-                "secret": "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP",
-                "secret_display": "JBSW Y3DP EHPK 3PXP JBSW Y3DP EHPK 3PXP",
-                "uri": uri,
-                "qr": { "size": size, "path": path },
-                "sealed": "preview",
-            }
-        })
+        json!({ "totp": enrolment() })
     } else {
         json!({ "totp": null })
+    };
+    ok(&body)
+}
+
+/// A new authenticator for the admin.
+fn enrolment() -> impl serde::Serialize {
+    let uri = "otpauth://totp/identity.example.com:admin?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP&issuer=identity.example.com&algorithm=SHA1&digits=6&period=30";
+    let (size, path) = qr(uri);
+    json!({
+        "secret": "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP",
+        "secret_display": "JBSW Y3DP EHPK 3PXP JBSW Y3DP EHPK 3PXP",
+        "uri": uri,
+        "qr": { "size": size, "path": path },
+        "sealed": "preview",
+    })
+}
+
+fn ok(body: &impl serde::Serialize) -> Response {
+    let Ok(body) = serde_json::to_string(body) else {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     };
     (
         StatusCode::OK,
         [(header::CONTENT_TYPE, "application/json")],
-        body.to_string(),
+        body,
     )
         .into_response()
+}
+
+const RECOVERY_CODES: [&str; 10] = [
+    "k7qd-m2xa-p4tn",
+    "v3hc-q9ze-w6rb",
+    "f2ny-t8ks-c5mj",
+    "x4pw-d7gh-n2qe",
+    "b6rt-z3vf-j8kc",
+    "m5ea-h2wq-y7tp",
+    "s9jc-k4nd-r3xb",
+    "g8tz-p6ma-e2hw",
+    "q3wv-c7yj-t5fn",
+    "d2kb-x8re-h6sq",
+];
+
+/// The account page's changes that show recovery codes; a code of `000000` is wrong.
+async fn account_codes(body: String) -> Response {
+    if body.contains("\"000000\"") {
+        return problem(StatusCode::UNPROCESSABLE_ENTITY, "code-failed", None);
+    }
+    ok(&json!({ "recovery_codes": RECOVERY_CODES }))
 }
 
 /// A QR code as one SVG path, as the server draws it.
@@ -461,11 +492,7 @@ async fn setup_password(body: String) -> Response {
         }
         Some(totp) if totp.sealed == "preview" => json!({
             "username": "admin",
-            "recovery_codes": [
-                "k7qd-m2xa-p4tn", "v3hc-q9ze-w6rb", "f2ny-t8ks-c5mj", "x4pw-d7gh-n2qe",
-                "b6rt-z3vf-j8kc", "m5ea-h2wq-y7tp", "s9jc-k4nd-r3xb", "g8tz-p6ma-e2hw",
-                "q3wv-c7yj-t5fn", "d2kb-x8re-h6sq",
-            ],
+            "recovery_codes": RECOVERY_CODES,
         }),
         _ => json!({ "username": "alice" }),
     };
@@ -510,6 +537,17 @@ async fn main() -> std::io::Result<()> {
             get(|q: RawQuery, h: HeaderMap| account(Path("all".to_owned()), q, h)),
         )
         .route("/account/{state}", get(account))
+        .route(
+            "/account/password/options",
+            post(|| async { ok(&json!({ "totp": enrolment() })) }),
+        )
+        .route(
+            "/account/authenticator/options",
+            post(|| async { ok(&enrolment()) }),
+        )
+        .route("/account/password/add", post(account_codes))
+        .route("/account/authenticator", post(account_codes))
+        .route("/account/recovery-codes", post(account_codes))
         .route(
             "/linked",
             get(|RawQuery(q): RawQuery, h: HeaderMap| async move {
